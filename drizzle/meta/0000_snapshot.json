@@ -1,5 +1,5 @@
 {
-  "id": "f38d0b8b-b2a3-4306-b397-55d76e8722eb",
+  "id": "128a2b19-40a4-4b7f-adbf-6ed3a063af80",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -39,8 +39,14 @@
           "primaryKey": false,
           "notNull": false
         },
-        "data_url": {
-          "name": "data_url",
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "blob_pathname": {
+          "name": "blob_pathname",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -373,8 +379,14 @@
           "primaryKey": false,
           "notNull": false
         },
-        "data_url": {
-          "name": "data_url",
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "blob_pathname": {
+          "name": "blob_pathname",
           "type": "text",
           "primaryKey": false,
           "notNull": false

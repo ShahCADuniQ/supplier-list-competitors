@@ -160,11 +160,10 @@ export const supplierAttachments = pgTable(
     name: text("name").notNull(),
     size: bigint("size", { mode: "number" }).notNull().default(0),
     mimeType: text("mime_type"),
-    // For now we store the raw file as a base64 data URL. This works fine for
-    // smaller documents (PDFs, datasheets, photos) and keeps the system to a
-    // single backend (Postgres). When the AI step lands and large file workloads
-    // arrive, swap this for a Vercel Blob / S3 key instead.
-    dataUrl: text("data_url"),
+    // Public Blob URL (served via Vercel's CDN). `blobPathname` is what we pass
+    // to `del()` when the row is removed so storage doesn't leak.
+    url: text("url").notNull(),
+    blobPathname: text("blob_pathname"),
     uploader: text("uploader"),
     uploaderClerkId: text("uploader_clerk_id"),
     date: date("date").notNull().defaultNow(),
@@ -243,7 +242,8 @@ export const competitorAttachments = pgTable(
     name: text("name").notNull(),
     size: bigint("size", { mode: "number" }).notNull().default(0),
     mimeType: text("mime_type"),
-    dataUrl: text("data_url"),
+    url: text("url").notNull(),
+    blobPathname: text("blob_pathname"),
     uploaderClerkId: text("uploader_clerk_id"),
     addedAt: timestamp("added_at").defaultNow().notNull(),
   },

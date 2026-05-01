@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
+import { del } from "@vercel/blob";
 import { db } from "@/db";
 import {
   competitorCollections,
@@ -192,29 +193,31 @@ export async function deleteCompetitor(id: number) {
 // Attachments
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-
 export type CompetitorAttachmentInput = {
   competitorId: number;
   name: string;
   size: number;
   mimeType?: string | null;
-  dataUrl: string;
+  url: string;
+  blobPathname: string;
 };
 
 export async function addCompetitorAttachment(input: CompetitorAttachmentInput) {
   const profile = await requireCompetitorEditor();
   const name = cleanString(input.name);
-  const dataUrl = cleanString(input.dataUrl);
-  if (!name || !dataUrl) throw new Error("Attachment name and content are required");
-  if (input.size > MAX_ATTACHMENT_BYTES) throw new Error("File exceeds 8 MB upload limit");
+  const url = cleanString(input.url);
+  const blobPathname = cleanString(input.blobPathname);
+  if (!name || !url || !blobPathname) {
+    throw new Error("Attachment name and uploaded URL are required");
+  }
 
   await db.insert(competitorAttachments).values({
     competitorId: input.competitorId,
     name,
     size: input.size,
     mimeType: cleanString(input.mimeType),
-    dataUrl,
+    url,
+    blobPathname,
     uploaderClerkId: profile.clerkUserId,
   });
   revalidatePath("/competitors");
@@ -222,6 +225,18 @@ export async function addCompetitorAttachment(input: CompetitorAttachmentInput) 
 
 export async function deleteCompetitorAttachment(id: number) {
   await requireCompetitorEditor();
+  const [row] = await db
+    .select()
+    .from(competitorAttachments)
+    .where(eq(competitorAttachments.id, id))
+    .limit(1);
+  if (row?.blobPathname) {
+    try {
+      await del(row.url);
+    } catch (e) {
+      console.error("Failed to remove blob", row.blobPathname, e);
+    }
+  }
   await db.delete(competitorAttachments).where(eq(competitorAttachments.id, id));
   revalidatePath("/competitors");
 }

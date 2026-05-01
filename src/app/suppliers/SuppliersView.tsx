@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { upload } from "@vercel/blob/client";
 import {
   createSupplier,
   updateSupplier,
@@ -13,8 +14,8 @@ import {
   addSupplierAttachment,
   deleteSupplierAttachment,
   type ProjectEntryInput,
-  type AttachmentInput,
 } from "./actions";
+import { CategoryChart, OriginChart } from "./SupplierCharts";
 import type {
   Supplier,
   SupplierProjectEntry,
@@ -242,13 +243,8 @@ function formatSize(b: number) {
   return (b / 1048576).toFixed(2) + " MB";
 }
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((res, rej) => {
-    const fr = new FileReader();
-    fr.onload = () => res(fr.result as string);
-    fr.onerror = () => rej(fr.error);
-    fr.readAsDataURL(file);
-  });
+function safeFileName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "file";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -526,26 +522,37 @@ export default function SuppliersView({
 
   async function uploadFiles(files: FileList | File[], catId: string) {
     if (!active) return;
+    let successCount = 0;
     for (const f of Array.from(files)) {
       try {
-        const dataUrl = await fileToDataUrl(f);
-        const att: AttachmentInput = {
-          catId, name: f.name, size: f.size, mimeType: f.type, dataUrl,
-        };
-        await addSupplierAttachment(active.id, att);
+        const pathname = `suppliers/${active.id}/${catId}/${safeFileName(f.name)}`;
+        const blob = await upload(pathname, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: f.type || undefined,
+        });
+        await addSupplierAttachment(active.id, {
+          catId, name: f.name, size: f.size, mimeType: f.type,
+          url: blob.url, blobPathname: blob.pathname,
+        });
+        successCount++;
       } catch (e) {
         toast(e instanceof Error ? e.message : "Upload failed", true);
       }
     }
     router.refresh();
-    toast("Files uploaded");
+    if (successCount > 0) toast(`${successCount} file${successCount > 1 ? "s" : ""} uploaded`);
   }
 
   function downloadAttachment(a: SupplierAttachment) {
-    if (!a.dataUrl) return;
+    if (!a.url) return;
     const link = document.createElement("a");
-    link.href = a.dataUrl;
+    link.href = a.url;
     link.download = a.name;
+    // Some browsers ignore download with cross-origin URLs — opening in new tab
+    // is a safe fallback.
+    link.target = "_blank";
+    link.rel = "noopener";
     link.click();
   }
 
@@ -657,6 +664,28 @@ export default function SuppliersView({
           <div className="kpi"><div className="kpi-label">Fill Rate</div><div className="kpi-val">{aggregates.fill != null ? `${aggregates.fill.toFixed(0)}%` : "—"}</div><div className="kpi-sub">delivered/ordered</div></div>
           <div className="kpi"><div className="kpi-label">Avg Lead Time</div><div className="kpi-val">{aggregates.lead != null ? `${Math.round(aggregates.lead)}d` : "—"}</div><div className="kpi-sub">days actual</div></div>
           <div className="kpi"><div className="kpi-label">Total Spend</div><div className="kpi-val">{aggregates.totalSpend > 0 ? `$${(aggregates.totalSpend / 1000).toFixed(0)}K` : "—"}</div><div className="kpi-sub">closed POs</div></div>
+        </div>
+
+        {/* Charts */}
+        <div className="chart-row">
+          <div className="chart-card">
+            <h3>Suppliers by Category <span className="hint">Click a bar to filter</span></h3>
+            <div className="chart-canvas-wrap">
+              <CategoryChart
+                data={filtered}
+                onSelect={(cat) => { setFCat(cat); setPageNum(1); }}
+              />
+            </div>
+          </div>
+          <div className="chart-card">
+            <h3>Suppliers by Origin <span className="hint">Click a slice to filter</span></h3>
+            <div className="chart-canvas-wrap">
+              <OriginChart
+                data={filtered}
+                onSelect={(origin) => { setFOrigin(origin); setPageNum(1); }}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Table */}
@@ -1289,6 +1318,12 @@ const SUPPLIER_CSS = `
 .sm-app .kpi-label{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;font-weight:500}
 .sm-app .kpi-val{font-size:28px;font-weight:700;color:var(--t1);margin:2px 0;letter-spacing:-1px}
 .sm-app .kpi-sub{font-size:11px;color:var(--t3)}
+.sm-app .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.sm-app .chart-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:18px 22px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.sm-app .chart-card h3{font-size:13px;font-weight:600;color:var(--t2);margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+.sm-app .chart-card h3 .hint{font-size:11px;color:var(--t3);font-weight:400}
+.sm-app .chart-canvas-wrap{position:relative;height:260px}
+@media(max-width:900px){.sm-app .chart-row{grid-template-columns:1fr}}
 .sm-app .tbl-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .sm-app .tbl-hdr{padding:14px 22px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px}
 .sm-app .tbl-hdr h3{font-size:14px;font-weight:600;color:var(--t1);margin:0}

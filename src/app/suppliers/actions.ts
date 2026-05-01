@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
+import { del } from "@vercel/blob";
 import { db } from "@/db";
 import {
   suppliers,
@@ -286,10 +287,9 @@ export type AttachmentInput = {
   name: string;
   size: number;
   mimeType?: string | null;
-  dataUrl: string; // base64 data URL of the file content
+  url: string;          // public Blob URL
+  blobPathname: string; // returned from upload(), used for del() later
 };
-
-const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8 MB upload cap
 
 export async function addSupplierAttachment(
   supplierId: number,
@@ -298,12 +298,10 @@ export async function addSupplierAttachment(
   const profile = await requireSupplierEditor();
   const name = cleanString(attachment.name);
   const catId = cleanString(attachment.catId);
-  const dataUrl = cleanString(attachment.dataUrl);
-  if (!name || !catId || !dataUrl) {
-    throw new Error("Attachment name, category, and content are required");
-  }
-  if (attachment.size > MAX_ATTACHMENT_BYTES) {
-    throw new Error("File exceeds 8 MB upload limit");
+  const url = cleanString(attachment.url);
+  const blobPathname = cleanString(attachment.blobPathname);
+  if (!name || !catId || !url || !blobPathname) {
+    throw new Error("Attachment name, category, and uploaded URL are required");
   }
 
   await db.insert(supplierAttachments).values({
@@ -312,7 +310,8 @@ export async function addSupplierAttachment(
     name,
     size: attachment.size,
     mimeType: cleanString(attachment.mimeType),
-    dataUrl,
+    url,
+    blobPathname,
     uploader: profile.displayName ?? profile.email,
     uploaderClerkId: profile.clerkUserId,
     date: new Date().toISOString().slice(0, 10),
@@ -322,6 +321,21 @@ export async function addSupplierAttachment(
 
 export async function deleteSupplierAttachment(id: number) {
   await requireSupplierEditor();
+  const [row] = await db
+    .select()
+    .from(supplierAttachments)
+    .where(eq(supplierAttachments.id, id))
+    .limit(1);
+  if (row?.blobPathname) {
+    try {
+      // `del` accepts a pathname or full URL.
+      await del(row.url);
+    } catch (e) {
+      // Don't block the DB delete if Blob cleanup fails — log and continue so
+      // the user isn't stuck with a row they can't remove.
+      console.error("Failed to remove blob", row.blobPathname, e);
+    }
+  }
   await db.delete(supplierAttachments).where(eq(supplierAttachments.id, id));
   revalidatePath("/suppliers");
 }

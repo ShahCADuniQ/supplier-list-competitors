@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { upload } from "@vercel/blob/client";
 import {
   createCollection,
   renameCollection,
@@ -50,13 +51,8 @@ function fileExt(name: string) {
   const m = /\.([a-z0-9]+)$/i.exec(name || "");
   return m ? m[1].toUpperCase() : "FILE";
 }
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((res, rej) => {
-    const fr = new FileReader();
-    fr.onload = () => res(fr.result as string);
-    fr.onerror = () => rej(fr.error);
-    fr.readAsDataURL(file);
-  });
+function safeFileName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "file";
 }
 
 export default function CompetitorsView({
@@ -262,28 +258,38 @@ export default function CompetitorsView({
   // ── Attachments ──
   async function uploadFiles(files: FileList | File[]) {
     if (!selected) return;
+    let successCount = 0;
     for (const f of Array.from(files)) {
       try {
-        const dataUrl = await fileToDataUrl(f);
+        const pathname = `competitors/${selected.id}/${safeFileName(f.name)}`;
+        const blob = await upload(pathname, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: f.type || undefined,
+        });
         await addCompetitorAttachment({
           competitorId: selected.id,
           name: f.name,
           size: f.size,
           mimeType: f.type,
-          dataUrl,
+          url: blob.url,
+          blobPathname: blob.pathname,
         });
+        successCount++;
       } catch (e) {
         toast(e instanceof Error ? e.message : "Upload failed", true);
       }
     }
     router.refresh();
-    toast("Files uploaded");
+    if (successCount > 0) toast(`${successCount} file${successCount > 1 ? "s" : ""} uploaded`);
   }
   function handleDownloadAttachment(a: CompetitorAttachment) {
-    if (!a.dataUrl) return;
+    if (!a.url) return;
     const link = document.createElement("a");
-    link.href = a.dataUrl;
+    link.href = a.url;
     link.download = a.name;
+    link.target = "_blank";
+    link.rel = "noopener";
     link.click();
   }
 

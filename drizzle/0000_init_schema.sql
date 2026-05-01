@@ -8,7 +8,8 @@ CREATE TABLE "competitor_attachments" (
 	"name" text NOT NULL,
 	"size" bigint DEFAULT 0 NOT NULL,
 	"mime_type" text,
-	"data_url" text,
+	"url" text NOT NULL,
+	"blob_pathname" text,
 	"uploader_clerk_id" text,
 	"added_at" timestamp DEFAULT now() NOT NULL
 );
@@ -47,7 +48,8 @@ CREATE TABLE "supplier_attachments" (
 	"name" text NOT NULL,
 	"size" bigint DEFAULT 0 NOT NULL,
 	"mime_type" text,
-	"data_url" text,
+	"url" text NOT NULL,
+	"blob_pathname" text,
 	"uploader" text,
 	"uploader_clerk_id" text,
 	"date" date DEFAULT now() NOT NULL,
