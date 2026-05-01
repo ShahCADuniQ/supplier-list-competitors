@@ -8,6 +8,8 @@ import {
   competitorCollections,
   competitors,
   competitorAttachments,
+  competitorProducts,
+  competitorProductAttachments,
 } from "@/db/schema";
 import { requireCompetitorEditor } from "@/lib/permissions";
 
@@ -238,5 +240,114 @@ export async function deleteCompetitorAttachment(id: number) {
     }
   }
   await db.delete(competitorAttachments).where(eq(competitorAttachments.id, id));
+  revalidatePath("/competitors");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Products (per-competitor catalog SKUs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ProductInput = {
+  id?: number;
+  competitorId: number;
+  name: string;
+  productCode?: string | null;
+  productCategory?: string | null;
+  description?: string | null;
+  imageUrls?: string[];
+  sourceUrl?: string | null;
+  specs?: Record<string, string | string[]>;
+};
+
+function cleanStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter((s) => s.length > 0);
+}
+
+export async function upsertProduct(input: ProductInput) {
+  await requireCompetitorEditor();
+  const name = cleanString(input.name);
+  if (!name) throw new Error("Product name is required");
+
+  const values = {
+    competitorId: input.competitorId,
+    name,
+    productCode: cleanString(input.productCode),
+    productCategory: cleanString(input.productCategory),
+    description: cleanString(input.description),
+    imageUrls: cleanStringArray(input.imageUrls),
+    sourceUrl: cleanString(input.sourceUrl),
+    specs: input.specs ?? {},
+    updatedAt: new Date(),
+  };
+
+  if (input.id) {
+    await db.update(competitorProducts).set(values).where(eq(competitorProducts.id, input.id));
+    revalidatePath("/competitors");
+  } else {
+    const [row] = await db.insert(competitorProducts).values(values).returning();
+    revalidatePath("/competitors");
+    return row;
+  }
+}
+
+export async function deleteProduct(id: number) {
+  await requireCompetitorEditor();
+  // Best-effort blob cleanup for the product's attachments.
+  const atts = await db
+    .select()
+    .from(competitorProductAttachments)
+    .where(eq(competitorProductAttachments.productId, id));
+  for (const a of atts) {
+    if (a.blobPathname) {
+      try { await del(a.url); } catch (e) { console.error("Blob del failed", a.url, e); }
+    }
+  }
+  await db.delete(competitorProducts).where(eq(competitorProducts.id, id));
+  revalidatePath("/competitors");
+}
+
+export type ProductAttachmentInput = {
+  productId: number;
+  name: string;
+  size: number;
+  mimeType?: string | null;
+  kind?: string | null;
+  url: string;
+  blobPathname: string;
+};
+
+export async function addProductAttachment(input: ProductAttachmentInput) {
+  await requireCompetitorEditor();
+  const name = cleanString(input.name);
+  const url = cleanString(input.url);
+  const blobPathname = cleanString(input.blobPathname);
+  if (!name || !url || !blobPathname) throw new Error("Attachment name and URL are required");
+
+  await db.insert(competitorProductAttachments).values({
+    productId: input.productId,
+    name,
+    size: input.size,
+    mimeType: cleanString(input.mimeType),
+    kind: cleanString(input.kind),
+    url,
+    blobPathname,
+  });
+  revalidatePath("/competitors");
+}
+
+export async function deleteProductAttachment(id: number) {
+  await requireCompetitorEditor();
+  const [row] = await db
+    .select()
+    .from(competitorProductAttachments)
+    .where(eq(competitorProductAttachments.id, id))
+    .limit(1);
+  if (row?.blobPathname) {
+    try { await del(row.url); } catch (e) { console.error("Blob del failed", row.blobPathname, e); }
+  }
+  await db.delete(competitorProductAttachments).where(eq(competitorProductAttachments.id, id));
   revalidatePath("/competitors");
 }

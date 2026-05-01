@@ -39,8 +39,10 @@ export async function POST(request: NextRequest) {
           throw new Error("Unauthorized");
         }
         // Lock down which paths are allowed so a hostile client can't write
-        // outside the supplier/competitor scopes.
-        if (!/^(suppliers|competitors)\//.test(pathname)) {
+        // outside the expected scopes. `ai-temp/` is for files uploaded by the
+        // AI-generation flow before a supplier/competitor exists; they're
+        // reattached under the proper scope on save.
+        if (!/^(suppliers|competitors|ai-temp)\//.test(pathname)) {
           throw new Error("Invalid upload path");
         }
         return {

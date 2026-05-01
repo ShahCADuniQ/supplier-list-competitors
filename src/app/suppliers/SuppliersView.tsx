@@ -15,6 +15,13 @@ import {
   deleteSupplierAttachment,
   type ProjectEntryInput,
 } from "./actions";
+import {
+  aiGenerateSupplier,
+  aiGenerateProjectEntry,
+  aiRefineSupplier,
+  aiResearchSupplier,
+  type AiSourceUpload,
+} from "./ai-actions";
 import { CategoryChart, OriginChart } from "./SupplierCharts";
 import type {
   Supplier,
@@ -381,12 +388,161 @@ export default function SuppliersView({
   // ── Side panel state (controlled-form fields) ──
   const [panelDetails, setPanelDetails] = useState<Partial<Supplier>>({});
   const [panelKpis, setPanelKpis] = useState<Record<string, string>>({});
+  const [panelMfgTypes, setPanelMfgTypes] = useState<string[]>([]);
+  const [panelMaterials, setPanelMaterials] = useState<string[]>([]);
+
+  // ── AI refine / research state ──
+  const [refineUrl, setRefineUrl] = useState("");
+  const [refineUploads, setRefineUploads] = useState<AiSourceUpload[]>([]);
+  const [refining, setRefining] = useState(false);
+  const [researching, setResearching] = useState(false);
+  type AiBackup = {
+    details: Partial<Supplier>;
+    kpis: Record<string, string>;
+    mfgTypes: string[];
+    materials: string[];
+    label: string; // "AI Refine" or "Web Research" — shown in revert banner
+  };
+  const [aiBackup, setAiBackup] = useState<AiBackup | null>(null);
+
   useEffect(() => {
     if (active) {
       setPanelDetails({ ...active });
       setPanelKpis({ ...(active.kpis ?? {}) });
+      setPanelMfgTypes([...(active.manufacturingTypes ?? [])]);
+      setPanelMaterials([...(active.materials ?? [])]);
+      setRefineUrl("");
+      setRefineUploads([]);
+      setAiBackup(null);
     }
   }, [active]);
+
+  function snapshotForAi(label: string) {
+    setAiBackup({
+      details: { ...panelDetails },
+      kpis: { ...panelKpis },
+      mfgTypes: [...panelMfgTypes],
+      materials: [...panelMaterials],
+      label,
+    });
+  }
+  function handleRevertAi() {
+    if (!aiBackup) return;
+    setPanelDetails(aiBackup.details);
+    setPanelKpis(aiBackup.kpis);
+    setPanelMfgTypes(aiBackup.mfgTypes);
+    setPanelMaterials(aiBackup.materials);
+    setAiBackup(null);
+    toast("Reverted — attachments and saves are kept");
+  }
+
+  async function handleRefineUpload(files: FileList | File[]) {
+    if (!active) return;
+    for (const f of Array.from(files)) {
+      try {
+        const pathname = `suppliers/${active.id}/refine/${safeFileName(f.name)}`;
+        const blob = await upload(pathname, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: f.type || undefined,
+        });
+        setRefineUploads((s) => [
+          ...s,
+          { url: blob.url, name: f.name, mime: f.type, size: f.size, blobPathname: blob.pathname },
+        ]);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Upload failed", true);
+      }
+    }
+  }
+
+  async function handleAiRefine() {
+    if (!active) return;
+    if (!refineUploads.length && !refineUrl.trim()) {
+      return toast("Add a file or URL first", true);
+    }
+    snapshotForAi("AI Refine");
+    setRefining(true);
+    try {
+      const result = await aiRefineSupplier({
+        supplierId: active.id,
+        uploads: refineUploads,
+        url: refineUrl,
+      });
+      const e = result.extraction;
+      setPanelDetails((d) => ({
+        ...d,
+        name: e.name || d.name,
+        category: e.category || d.category,
+        subCategory: e.subCategory || d.subCategory,
+        origin: e.origin || d.origin,
+        status: (e.status as "Active" | "Historical") || d.status,
+        website: e.website || d.website,
+        email: e.email || d.email,
+        phone: e.phone || d.phone,
+        contactName: e.contactName || d.contactName,
+        products: e.products || d.products,
+        notes: e.notes || d.notes,
+      }));
+      // Attach the source files immediately so they show up in the
+      // Attachments tab regardless of whether the user reverts the fields.
+      for (const u of refineUploads) {
+        const cat = e.fileCategorizations.find((fc) => fc.filename === u.name)?.attachmentCategory ?? "specs";
+        try {
+          await addSupplierAttachment(active.id, {
+            catId: cat, name: u.name, size: u.size, mimeType: u.mime,
+            url: u.url, blobPathname: u.blobPathname,
+          });
+        } catch (err) {
+          console.error("Failed to attach refined file", u.name, err);
+        }
+      }
+      setRefineUploads([]);
+      setRefineUrl("");
+      router.refresh();
+      toast("Fields refined — review or revert");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Refine failed", true);
+    } finally {
+      setRefining(false);
+    }
+  }
+
+  async function handleAiResearch() {
+    if (!active) return;
+    snapshotForAi("Web Research");
+    setResearching(true);
+    try {
+      const result = await aiResearchSupplier(active.id);
+      const dedupe = (a: string[], b: string[]) =>
+        Array.from(new Set([...a, ...b].map((s) => s.trim()).filter(Boolean)));
+      if (result.website) {
+        setPanelDetails((d) => ({ ...d, website: d.website?.trim() ? d.website : result.website }));
+      }
+      if (result.manufacturingTypes.length) {
+        setPanelMfgTypes((s) => dedupe(s, result.manufacturingTypes));
+      }
+      if (result.materials.length) {
+        setPanelMaterials((s) => dedupe(s, result.materials));
+      }
+      if (result.notes) {
+        setPanelDetails((d) => ({ ...d, notes: d.notes?.trim() ? d.notes : result.notes }));
+      }
+      const found =
+        (result.website ? 1 : 0) + result.manufacturingTypes.length + result.materials.length;
+      if (found === 0) {
+        toast("Web search couldn't confirm anything new", true);
+        setAiBackup(null);
+      } else {
+        toast(`Web search added ${found} fact${found > 1 ? "s" : ""} — review or revert`);
+      }
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Web research failed", true);
+      setAiBackup(null);
+    } finally {
+      setResearching(false);
+    }
+  }
 
   function openPanel(id: number) {
     setActiveId(id);
@@ -412,9 +568,16 @@ export default function SuppliersView({
   function handleSavePanel() {
     if (!active) return;
     runAction(
-      () => updateSupplier(active.id, { ...panelDetails, kpis: panelKpis }),
+      () =>
+        updateSupplier(active.id, {
+          ...panelDetails,
+          kpis: panelKpis,
+          manufacturingTypes: panelMfgTypes,
+          materials: panelMaterials,
+        }),
       `Saved ${panelDetails.name ?? active.name}`,
     );
+    setAiBackup(null);
   }
   function handleDeletePanel() {
     if (!active) return;
@@ -426,18 +589,174 @@ export default function SuppliersView({
   }
 
   // ── Add modal state ──
-  const [addForm, setAddForm] = useState({
+  const blankAddForm = () => ({
     name: "", category: "", subCategory: "", origin: "", status: "Active",
-    email: "", website: "", phone: "", products: "",
+    email: "", website: "", phone: "", products: "", contactName: "", notes: "",
   });
+  const [addForm, setAddForm] = useState(blankAddForm());
+
+  // ── Add modal AI state ──
+  const [aiUrl, setAiUrl] = useState("");
+  const [aiUploads, setAiUploads] = useState<AiSourceUpload[]>([]);
+  const [aiCategorizations, setAiCategorizations] = useState<Record<string, string>>({});
+  const [aiGenerating, setAiGenerating] = useState(false);
+
+  function resetAddModal() {
+    setAddForm(blankAddForm());
+    setAiUrl("");
+    setAiUploads([]);
+    setAiCategorizations({});
+    setAiGenerating(false);
+  }
+
+  async function handleAiUploadFiles(files: FileList | File[]) {
+    for (const f of Array.from(files)) {
+      try {
+        const pathname = `ai-temp/${crypto.randomUUID()}/${safeFileName(f.name)}`;
+        const blob = await upload(pathname, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: f.type || undefined,
+        });
+        setAiUploads((s) => [
+          ...s,
+          { url: blob.url, name: f.name, mime: f.type, size: f.size, blobPathname: blob.pathname },
+        ]);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Upload failed", true);
+      }
+    }
+  }
+
+  async function handleAiGenerateSupplier() {
+    if (!aiUploads.length && !aiUrl.trim()) {
+      return toast("Add a file or URL first", true);
+    }
+    setAiGenerating(true);
+    try {
+      const result = await aiGenerateSupplier({ uploads: aiUploads, url: aiUrl });
+      const e = result.extraction;
+      setAddForm((f) => ({
+        ...f,
+        name: e.name || f.name,
+        category: e.category || f.category,
+        subCategory: e.subCategory || f.subCategory,
+        origin: e.origin || f.origin,
+        status: e.status || f.status,
+        email: e.email || f.email,
+        website: e.website || f.website,
+        phone: e.phone || f.phone,
+        products: e.products || f.products,
+        contactName: e.contactName || f.contactName,
+        notes: e.notes || f.notes,
+      }));
+      const map: Record<string, string> = {};
+      e.fileCategorizations.forEach((fc) => { map[fc.filename] = fc.attachmentCategory; });
+      setAiCategorizations(map);
+      toast("AI extracted supplier — review and save");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "AI generation failed", true);
+    } finally {
+      setAiGenerating(false);
+    }
+  }
+
   function handleSaveNew() {
     if (!addForm.name.trim()) return toast("Name is required", true);
     runAction(async () => {
-      const s = await createSupplier({ ...addForm, onboarded: new Date().toISOString().slice(0, 10) });
+      const s = await createSupplier({
+        ...addForm,
+        onboarded: new Date().toISOString().slice(0, 10),
+      });
+      // Carry AI-uploaded source files over as attachments under the
+      // category the model classified them into.
+      if (s && aiUploads.length) {
+        for (const u of aiUploads) {
+          const catId = aiCategorizations[u.name] || "specs";
+          try {
+            await addSupplierAttachment(s.id, {
+              catId,
+              name: u.name,
+              size: u.size,
+              mimeType: u.mime,
+              url: u.url,
+              blobPathname: u.blobPathname,
+            });
+          } catch (err) {
+            console.error("Failed to attach", u.name, err);
+          }
+        }
+      }
       setShowAddModal(false);
-      setAddForm({ name: "", category: "", subCategory: "", origin: "", status: "Active", email: "", website: "", phone: "", products: "" });
+      resetAddModal();
       if (s) setTimeout(() => setActiveId(s.id), 300);
     }, "Added supplier");
+  }
+
+  // ── Project entry: AI from PO upload ──
+  const [poExtracting, setPoExtracting] = useState(false);
+
+  async function handleUploadPO(file: File) {
+    if (!active) return;
+    setPoExtracting(true);
+    try {
+      // 1. Upload to Blob under suppliers/{id}/invoices/...
+      const pathname = `suppliers/${active.id}/invoices/${safeFileName(file.name)}`;
+      const blob = await upload(pathname, file, {
+        access: "public",
+        handleUploadUrl: "/api/blob/upload",
+        contentType: file.type || undefined,
+      });
+
+      // 2. Save attachment immediately so the PO is in the Invoices section
+      //    even if the user cancels the project-entry form.
+      await addSupplierAttachment(active.id, {
+        catId: "invoices",
+        name: file.name,
+        size: file.size,
+        mimeType: file.type,
+        url: blob.url,
+        blobPathname: blob.pathname,
+      });
+
+      // 3. Run AI extraction on the file content
+      const result = await aiGenerateProjectEntry({
+        upload: {
+          url: blob.url, name: file.name, mime: file.type,
+          size: file.size, blobPathname: blob.pathname,
+        },
+      });
+
+      // 4. Pre-fill the project entry form
+      const e = result.extraction;
+      setPeForm({
+        projectNum: e.projectNum,
+        poNumber: e.poNumber,
+        status: e.status,
+        quoteDate: e.quoteDate,
+        poDate: e.poDate,
+        expectedDelivery: e.expectedDelivery,
+        actualDelivery: e.actualDelivery,
+        quotedLeadTime: 0,
+        actualLeadTime: 0,
+        orderedQuantity: e.orderedQuantity,
+        deliveredQuantity: e.deliveredQuantity,
+        defectiveQuantity: e.defectiveQuantity,
+        returnedQuantity: e.returnedQuantity,
+        quotedAmount: e.quotedAmount,
+        actualAmount: e.actualAmount,
+        currency: e.currency || "USD",
+        incoterms: e.incoterms,
+        paymentTerms: e.paymentTerms,
+        notes: e.notes,
+      });
+      router.refresh();
+      toast("PO extracted — review and save");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to process PO", true);
+    } finally {
+      setPoExtracting(false);
+    }
   }
 
   // ── Project entry modal ──
@@ -556,18 +875,6 @@ export default function SuppliersView({
     link.click();
   }
 
-  // ── Export ──
-  function handleExport() {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `suppliers_${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast("Exported JSON");
-  }
-
   // ── Render ──
   const score = active ? computeSupplierScore(active) : null;
 
@@ -583,7 +890,6 @@ export default function SuppliersView({
           <div className="hdr-actions">
             <div className="badge"><span className="dot"></span><span>{data.length} Suppliers</span></div>
             {canEdit && <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>+ Add Supplier</button>}
-            <button className="btn" onClick={handleExport}>Export JSON</button>
           </div>
         </div>
 
@@ -778,7 +1084,26 @@ export default function SuppliersView({
             </div>
             <div className="panel-body">
               {activeTab === "details" && (
-                <DetailsTab details={panelDetails} setDetails={setPanelDetails} canEdit={canEdit} />
+                <DetailsTab
+                  details={panelDetails}
+                  setDetails={setPanelDetails}
+                  canEdit={canEdit}
+                  mfgTypes={panelMfgTypes}
+                  setMfgTypes={setPanelMfgTypes}
+                  materials={panelMaterials}
+                  setMaterials={setPanelMaterials}
+                  refineUrl={refineUrl}
+                  setRefineUrl={setRefineUrl}
+                  refineUploads={refineUploads}
+                  setRefineUploads={setRefineUploads}
+                  refining={refining}
+                  researching={researching}
+                  onUpload={handleRefineUpload}
+                  onRefine={handleAiRefine}
+                  onResearch={handleAiResearch}
+                  aiBackupLabel={aiBackup?.label ?? null}
+                  onRevertAi={handleRevertAi}
+                />
               )}
               {activeTab === "kpis" && (
                 <PerformanceTab supplier={active} score={score!} kpis={panelKpis} setKpis={setPanelKpis} canEdit={canEdit} />
@@ -832,6 +1157,54 @@ export default function SuppliersView({
           <div className="modal">
             <div className="modal-head"><h2>Add New Supplier</h2></div>
             <div className="modal-body">
+              {/* AI generation panel */}
+              <div className="ai-panel">
+                <div className="ai-panel-head">
+                  <span className="ai-badge">✨ AI</span>
+                  <strong>Generate from files or website</strong>
+                  <span className="ai-hint">Drop catalogs, datasheets, or paste a URL — fields below will fill in.</span>
+                </div>
+                <div className="ai-panel-body">
+                  <input
+                    className="form-input"
+                    placeholder="https://supplier-website.com (optional)"
+                    value={aiUrl}
+                    onChange={(e) => setAiUrl(e.target.value)}
+                  />
+                  <label className="ai-drop">
+                    {aiUploads.length === 0
+                      ? "📎 Click to add PDFs, datasheets, photos…"
+                      : `${aiUploads.length} file${aiUploads.length > 1 ? "s" : ""} attached`}
+                    <input
+                      type="file"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        if (e.target.files) handleAiUploadFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {aiUploads.length > 0 && (
+                    <ul className="ai-file-list">
+                      {aiUploads.map((u, i) => (
+                        <li key={i}>
+                          <span>{u.name}</span>
+                          <button className="ai-rm" onClick={() => setAiUploads((s) => s.filter((_, j) => j !== i))}>×</button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleAiGenerateSupplier}
+                    disabled={aiGenerating || (!aiUploads.length && !aiUrl.trim())}
+                  >
+                    {aiGenerating ? "Generating…" : "✨ Generate supplier"}
+                  </button>
+                </div>
+              </div>
+
               <div className="form-grid">
                 <div className="form-group"><label>Supplier Name *</label><input className="form-input" value={addForm.name} onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))} /></div>
                 <div className="form-group"><label>Category *</label><select className="form-input" value={addForm.category} onChange={(e) => setAddForm((f) => ({ ...f, category: e.target.value }))}>
@@ -846,14 +1219,16 @@ export default function SuppliersView({
                 <div className="form-group"><label>Status</label><select className="form-input" value={addForm.status} onChange={(e) => setAddForm((f) => ({ ...f, status: e.target.value }))}>
                   <option value="Active">Active</option><option value="Historical">Historical</option>
                 </select></div>
+                <div className="form-group"><label>Contact Name</label><input className="form-input" value={addForm.contactName} onChange={(e) => setAddForm((f) => ({ ...f, contactName: e.target.value }))} /></div>
                 <div className="form-group"><label>Email</label><input className="form-input" value={addForm.email} onChange={(e) => setAddForm((f) => ({ ...f, email: e.target.value }))} /></div>
                 <div className="form-group"><label>Website</label><input className="form-input" value={addForm.website} onChange={(e) => setAddForm((f) => ({ ...f, website: e.target.value }))} /></div>
                 <div className="form-group"><label>Phone</label><input className="form-input" value={addForm.phone} onChange={(e) => setAddForm((f) => ({ ...f, phone: e.target.value }))} /></div>
                 <div className="form-group full"><label>Products</label><textarea className="form-input" value={addForm.products} onChange={(e) => setAddForm((f) => ({ ...f, products: e.target.value }))} /></div>
+                <div className="form-group full"><label>Internal Notes</label><textarea className="form-input" value={addForm.notes} onChange={(e) => setAddForm((f) => ({ ...f, notes: e.target.value }))} /></div>
               </div>
             </div>
             <div className="modal-foot">
-              <button className="btn" onClick={() => setShowAddModal(false)}>Cancel</button>
+              <button className="btn" onClick={() => { setShowAddModal(false); resetAddModal(); }}>Cancel</button>
               <button className="btn btn-primary" onClick={handleSaveNew}>+ Add Supplier</button>
             </div>
           </div>
@@ -866,6 +1241,31 @@ export default function SuppliersView({
           <div className="modal">
             <div className="modal-head"><h2>{editingProjId ? `Edit Project Entry · ${peForm.projectNum}` : "Add Project Entry"}</h2></div>
             <div className="modal-body">
+              {!editingProjId && (
+                <div className="ai-panel">
+                  <div className="ai-panel-head">
+                    <span className="ai-badge">✨ AI</span>
+                    <strong>Upload PO / invoice</strong>
+                    <span className="ai-hint">PDF or Excel — fields auto-fill and the file is filed under Invoices.</span>
+                  </div>
+                  <div className="ai-panel-body">
+                    <label className="ai-drop">
+                      {poExtracting ? "Extracting…" : "📎 Click to upload a PO PDF or Excel"}
+                      <input
+                        type="file"
+                        accept=".pdf,.xlsx,.xls,.csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                        style={{ display: "none" }}
+                        disabled={poExtracting}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleUploadPO(f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
               <ProjectEntryFields form={peForm} setForm={setPeForm} live={livePE} />
             </div>
             <div className="modal-foot">
@@ -888,30 +1288,194 @@ export default function SuppliersView({
 
 function DetailsTab({
   details, setDetails, canEdit,
+  mfgTypes, setMfgTypes, materials, setMaterials,
+  refineUrl, setRefineUrl, refineUploads, setRefineUploads,
+  refining, researching, onUpload, onRefine, onResearch,
+  aiBackupLabel, onRevertAi,
 }: {
   details: Partial<Supplier>;
   setDetails: React.Dispatch<React.SetStateAction<Partial<Supplier>>>;
   canEdit: boolean;
+  mfgTypes: string[];
+  setMfgTypes: React.Dispatch<React.SetStateAction<string[]>>;
+  materials: string[];
+  setMaterials: React.Dispatch<React.SetStateAction<string[]>>;
+  refineUrl: string;
+  setRefineUrl: (v: string) => void;
+  refineUploads: AiSourceUpload[];
+  setRefineUploads: React.Dispatch<React.SetStateAction<AiSourceUpload[]>>;
+  refining: boolean;
+  researching: boolean;
+  onUpload: (files: FileList | File[]) => void;
+  onRefine: () => void;
+  onResearch: () => void;
+  aiBackupLabel: string | null;
+  onRevertAi: () => void;
 }) {
   const set = (k: keyof Supplier) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setDetails((d) => ({ ...d, [k]: e.target.value }));
   const ro = !canEdit;
+  const isManufacturer = (details.category ?? "").includes("Manufacturing");
+  const showResearchBtn = canEdit && (
+    !details.website?.trim() || (isManufacturer && (mfgTypes.length === 0 || materials.length === 0))
+  );
+
   return (
-    <div className="form-grid">
-      <div className="form-group"><label>Supplier Name</label><input className="form-input" value={details.name ?? ""} onChange={set("name")} disabled={ro} /></div>
-      <div className="form-group"><label>Category</label><select className="form-input" value={details.category ?? ""} onChange={set("category")} disabled={ro}><option value="">—</option>{CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
-      <div className="form-group"><label>Sub-Category</label><input className="form-input" value={details.subCategory ?? ""} onChange={set("subCategory")} disabled={ro} /></div>
-      <div className="form-group"><label>Origin</label><select className="form-input" value={details.origin ?? ""} onChange={set("origin")} disabled={ro}><option value="">—</option>{ORIGINS.map((o) => <option key={o} value={o}>{o}</option>)}</select></div>
-      <div className="form-group"><label>Status</label><select className="form-input" value={details.status ?? "Active"} onChange={set("status")} disabled={ro}><option value="Active">Active</option><option value="Historical">Historical</option></select></div>
-      <div className="form-group"><label>Contact Name</label><input className="form-input" value={details.contactName ?? ""} onChange={set("contactName")} disabled={ro} /></div>
-      <div className="form-group"><label>Email</label><input className="form-input" value={details.email ?? ""} onChange={set("email")} disabled={ro} /></div>
-      <div className="form-group"><label>Website</label><input className="form-input" value={details.website ?? ""} onChange={set("website")} disabled={ro} /></div>
-      <div className="form-group"><label>Phone</label><input className="form-input" value={details.phone ?? ""} onChange={set("phone")} disabled={ro} /></div>
-      <div className="form-group"><label>Tested</label><select className="form-input" value={details.tested ?? ""} onChange={set("tested")} disabled={ro}><option value="">—</option><option>Yes</option><option>No</option></select></div>
-      <div className="form-group"><label>Source</label><input className="form-input" value={details.source ?? ""} onChange={set("source")} disabled={ro} /></div>
-      <div className="form-group"><label>Onboarded Date</label><input className="form-input" type="date" value={details.onboarded ?? ""} onChange={set("onboarded")} disabled={ro} /></div>
-      <div className="form-group full"><label>Products</label><textarea className="form-input" value={details.products ?? ""} onChange={set("products")} disabled={ro} /></div>
-      <div className="form-group full"><label>Internal Notes</label><textarea className="form-input" value={details.notes ?? ""} onChange={set("notes")} disabled={ro} placeholder="Strategic notes..." /></div>
+    <>
+      {canEdit && (
+        <div className="ai-panel">
+          <div className="ai-panel-head">
+            <span className="ai-badge">✨ AI</span>
+            <strong>Refine this supplier</strong>
+            <span className="ai-hint">Drop new datasheets, photos, or paste a website URL — fields below update.</span>
+          </div>
+          <div className="ai-panel-body">
+            <input
+              className="form-input"
+              placeholder="https://supplier-website.com (optional)"
+              value={refineUrl}
+              onChange={(e) => setRefineUrl(e.target.value)}
+            />
+            <label className="ai-drop">
+              {refineUploads.length === 0
+                ? "📎 Click to add new files (PDFs, images, datasheets…)"
+                : `${refineUploads.length} new file${refineUploads.length > 1 ? "s" : ""} ready`}
+              <input
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  if (e.target.files) onUpload(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            {refineUploads.length > 0 && (
+              <ul className="ai-file-list">
+                {refineUploads.map((u, i) => (
+                  <li key={i}>
+                    <span>{u.name}</span>
+                    <button className="ai-rm" onClick={() => setRefineUploads((s) => s.filter((_, j) => j !== i))}>×</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="ai-actions">
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={onRefine}
+                disabled={refining || (!refineUploads.length && !refineUrl.trim())}
+              >
+                {refining ? "Refining…" : "✨ Refine fields"}
+              </button>
+              {showResearchBtn && (
+                <button
+                  className="btn btn-sm"
+                  onClick={onResearch}
+                  disabled={researching}
+                  title="Use web search to find website + manufacturing details"
+                >
+                  {researching ? "Searching…" : "🌐 Web search"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {aiBackupLabel && (
+        <div className="ai-revert-banner">
+          <span>↩ {aiBackupLabel} just changed fields below.</span>
+          <button className="btn btn-sm" onClick={onRevertAi}>Revert AI changes</button>
+        </div>
+      )}
+
+      <div className="form-grid">
+        <div className="form-group"><label>Supplier Name</label><input className="form-input" value={details.name ?? ""} onChange={set("name")} disabled={ro} /></div>
+        <div className="form-group"><label>Category</label><select className="form-input" value={details.category ?? ""} onChange={set("category")} disabled={ro}><option value="">—</option>{CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
+        <div className="form-group"><label>Sub-Category</label><input className="form-input" value={details.subCategory ?? ""} onChange={set("subCategory")} disabled={ro} /></div>
+        <div className="form-group"><label>Origin</label><select className="form-input" value={details.origin ?? ""} onChange={set("origin")} disabled={ro}><option value="">—</option>{ORIGINS.map((o) => <option key={o} value={o}>{o}</option>)}</select></div>
+        <div className="form-group"><label>Status</label><select className="form-input" value={details.status ?? "Active"} onChange={set("status")} disabled={ro}><option value="Active">Active</option><option value="Historical">Historical</option></select></div>
+        <div className="form-group"><label>Contact Name</label><input className="form-input" value={details.contactName ?? ""} onChange={set("contactName")} disabled={ro} /></div>
+        <div className="form-group"><label>Email</label><input className="form-input" value={details.email ?? ""} onChange={set("email")} disabled={ro} /></div>
+        <div className="form-group"><label>Website</label><input className="form-input" value={details.website ?? ""} onChange={set("website")} disabled={ro} /></div>
+        <div className="form-group"><label>Phone</label><input className="form-input" value={details.phone ?? ""} onChange={set("phone")} disabled={ro} /></div>
+        <div className="form-group"><label>Tested</label><select className="form-input" value={details.tested ?? ""} onChange={set("tested")} disabled={ro}><option value="">—</option><option>Yes</option><option>No</option></select></div>
+        <div className="form-group"><label>Source</label><input className="form-input" value={details.source ?? ""} onChange={set("source")} disabled={ro} /></div>
+        <div className="form-group"><label>Onboarded Date</label><input className="form-input" type="date" value={details.onboarded ?? ""} onChange={set("onboarded")} disabled={ro} /></div>
+        <div className="form-group full"><label>Products</label><textarea className="form-input" value={details.products ?? ""} onChange={set("products")} disabled={ro} /></div>
+        <div className="form-group full"><label>Internal Notes</label><textarea className="form-input" value={details.notes ?? ""} onChange={set("notes")} disabled={ro} placeholder="Strategic notes..." /></div>
+      </div>
+
+      {isManufacturer && (
+        <>
+          <div className="section-title">🔧 Manufacturing Capabilities <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 400 }}>Click 🌐 Web search above to auto-populate</span></div>
+          <ChipEditor
+            label="Types of manufacturing"
+            placeholder="e.g. CNC machining, sheet-metal fabrication, anodizing"
+            chips={mfgTypes}
+            setChips={setMfgTypes}
+            disabled={ro}
+          />
+          <ChipEditor
+            label="Materials"
+            placeholder="e.g. Aluminum 6061, Stainless 304, ABS plastic"
+            chips={materials}
+            setChips={setMaterials}
+            disabled={ro}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+function ChipEditor({
+  label, placeholder, chips, setChips, disabled,
+}: {
+  label: string;
+  placeholder: string;
+  chips: string[];
+  setChips: React.Dispatch<React.SetStateAction<string[]>>;
+  disabled?: boolean;
+}) {
+  const [draft, setDraft] = useState("");
+  function add(value: string) {
+    const v = value.trim();
+    if (!v) return;
+    if (chips.some((c) => c.toLowerCase() === v.toLowerCase())) return;
+    setChips((s) => [...s, v]);
+    setDraft("");
+  }
+  return (
+    <div className="chip-editor">
+      <div className="chip-editor-label">{label}</div>
+      <div className="chip-editor-list">
+        {chips.length === 0 && <span className="chip-empty">— none yet —</span>}
+        {chips.map((c, i) => (
+          <span key={i} className="chip-tag">
+            {c}
+            {!disabled && (
+              <button className="chip-rm" onClick={() => setChips((s) => s.filter((_, j) => j !== i))}>×</button>
+            )}
+          </span>
+        ))}
+      </div>
+      {!disabled && (
+        <div className="chip-add-row">
+          <input
+            className="form-input"
+            placeholder={placeholder}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); add(draft); }
+              if (e.key === "," ) { e.preventDefault(); add(draft); }
+            }}
+          />
+          <button className="btn btn-sm" onClick={() => add(draft)}>+ Add</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1407,6 +1971,28 @@ const SUPPLIER_CSS = `
 .panel .section-title{font-size:13px;font-weight:600;color:var(--t1);padding:16px 0 8px;border-bottom:1px solid var(--border);margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
 .panel .section-title.first{padding-top:0}
 .panel .att-empty{font-size:12px;color:var(--t3);padding:8px 0;font-style:italic}
+.panel .ai-panel{background:linear-gradient(135deg,#eef4fc,#f9faff);border:1px solid #c8dafc;border-radius:10px;padding:14px 16px;margin-bottom:18px}
+.panel .ai-panel-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.panel .ai-badge{background:linear-gradient(135deg,#6c4ed8,#2a5c9e);color:#fff;font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 8px;border-radius:10px}
+.panel .ai-panel strong{font-size:13px;color:var(--t1);font-weight:600}
+.panel .ai-hint{font-size:11px;color:var(--t3);font-weight:400;flex-basis:100%}
+.panel .ai-panel-body{display:flex;flex-direction:column;gap:8px}
+.panel .ai-drop{display:block;padding:14px;border:1.5px dashed #b4c4dc;border-radius:8px;text-align:center;font-size:12px;color:var(--t3);cursor:pointer;background:#fff}
+.panel .ai-drop:hover{border-color:var(--accent);color:var(--accent);background:#f4f8ff}
+.panel .ai-file-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px}
+.panel .ai-file-list li{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#fff;border:1px solid var(--border);border-radius:5px;font-size:12px;color:var(--t2)}
+.panel .ai-rm{background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;line-height:1;padding:0 4px;font-family:inherit}
+.panel .ai-rm:hover{color:var(--red)}
+.panel .ai-actions{display:flex;gap:8px;flex-wrap:wrap}
+.panel .ai-revert-banner{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px;background:linear-gradient(135deg,#fff8e6,#fef6d4);border:1px solid #f0d896;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#8a6500;font-weight:500}
+.panel .chip-editor{margin-bottom:14px;padding:12px 14px;background:var(--card);border:1px solid var(--border);border-radius:8px}
+.panel .chip-editor-label{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px}
+.panel .chip-editor-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;min-height:24px}
+.panel .chip-empty{font-size:11px;color:var(--t3);font-style:italic}
+.panel .chip-tag{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:var(--accent-g);color:var(--accent);border:1px solid rgba(42,92,158,.2);border-radius:14px;font-size:12px;font-weight:500}
+.panel .chip-rm{background:none;border:none;color:var(--accent);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;font-family:inherit;opacity:.6}
+.panel .chip-rm:hover{opacity:1;color:var(--red)}
+.panel .chip-add-row{display:flex;gap:6px}
 .panel .score-hero{background:linear-gradient(135deg,#2a4a7a,#3a6aaa);color:#fff;border-radius:12px;padding:22px 24px;margin-bottom:18px;display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center}
 .panel .score-hero .grade-big{font-size:56px;font-weight:800;line-height:1;letter-spacing:-2px;background:rgba(255,255,255,.15);padding:14px 22px;border-radius:14px;min-width:130px;text-align:center}
 .panel .score-hero .score-num{font-size:32px;font-weight:700;letter-spacing:-1px}
@@ -1522,6 +2108,21 @@ const SUPPLIER_CSS = `
 .modal .live-preview .lp-val.green{color:var(--green)}
 .modal .live-preview .lp-val.amber{color:var(--amber)}
 .modal .live-preview .lp-val.red{color:var(--red)}
+
+.modal .ai-panel{background:linear-gradient(135deg,#eef4fc,#f9faff);border:1px solid #c8dafc;border-radius:10px;padding:14px 16px;margin-bottom:18px}
+.modal .ai-panel-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.modal .ai-badge{background:linear-gradient(135deg,#6c4ed8,#2a5c9e);color:#fff;font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 8px;border-radius:10px}
+.modal .ai-panel strong{font-size:13px;color:#1e2a3a}
+.modal .ai-hint{font-size:11px;color:#5a6a7e;font-weight:400;flex-basis:100%}
+.modal .ai-panel-body{display:flex;flex-direction:column;gap:8px}
+.modal .ai-panel-body .form-input{font-size:12px}
+.modal .ai-drop{display:block;padding:14px;border:1.5px dashed #b4c4dc;border-radius:8px;text-align:center;font-size:12px;color:#5a6a7e;cursor:pointer;background:#fff;transition:all .15s}
+.modal .ai-drop:hover{border-color:#2a5c9e;color:#2a5c9e;background:#f4f8ff}
+.modal .ai-file-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px}
+.modal .ai-file-list li{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#fff;border:1px solid #d5dbe5;border-radius:5px;font-size:12px;color:#3a4a5e}
+.modal .ai-rm{background:none;border:none;color:#7a8a9e;cursor:pointer;font-size:16px;line-height:1;padding:0 4px}
+.modal .ai-rm:hover{color:#c03030}
+.modal .ai-panel .btn{align-self:flex-start}
 
 .toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;background:#1a8a4a;color:#fff;border-radius:8px;font-size:13px;font-weight:500;z-index:2000;transition:all .3s ease;box-shadow:0 4px 16px rgba(0,0,0,.15)}
 .toast.error{background:#c03030}

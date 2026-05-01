@@ -13,15 +13,32 @@ import {
   deleteCompetitor,
   addCompetitorAttachment,
   deleteCompetitorAttachment,
+  deleteProduct,
+  addProductAttachment,
   type CompetitorInput,
 } from "./actions";
+import {
+  aiGenerateCompetitor,
+  aiRefineCompetitor,
+  aiPersistProducts,
+  type AiSourceUpload,
+} from "./ai-actions";
 import type {
   Competitor,
   CompetitorCollection,
   CompetitorAttachment,
+  CompetitorProduct,
+  CompetitorProductAttachment,
 } from "@/db/schema";
 
-type FullCompetitor = Competitor & { attachments: CompetitorAttachment[] };
+type FullCompetitorProduct = CompetitorProduct & {
+  attachments: CompetitorProductAttachment[];
+};
+
+type FullCompetitor = Competitor & {
+  attachments: CompetitorAttachment[];
+  products: FullCompetitorProduct[];
+};
 
 const CAPABILITIES = [
   "Utility Strip/Shop", "Wraparound", "Vapor-Tight (IP65+)", "Linear High-Bay",
@@ -198,6 +215,121 @@ export default function CompetitorsView({
     }, "Collection deleted");
   }
 
+  // ── AI generation/refine state ──
+  const [aiUrl, setAiUrl] = useState("");
+  const [aiUploads, setAiUploads] = useState<AiSourceUpload[]>([]);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiBackup, setAiBackup] = useState<CompetitorInput | null>(null);
+  // Products extracted by AI for a brand-NEW competitor (no id yet); persist
+  // them after `upsertCompetitor` returns the new id on save.
+  const [pendingProducts, setPendingProducts] = useState<
+    Awaited<ReturnType<typeof aiGenerateCompetitor>>["extraction"]["products"]
+  >([]);
+
+  function resetAiState() {
+    setAiUrl(""); setAiUploads([]); setAiGenerating(false);
+    setAiBackup(null); setPendingProducts([]);
+  }
+
+  function handleRevertAi() {
+    if (!aiBackup) return;
+    setDraft({ ...aiBackup });
+    setAiBackup(null);
+    toast("Reverted — attachments and saves are kept");
+  }
+
+  async function handleAiUploadFiles(files: FileList | File[]) {
+    for (const f of Array.from(files)) {
+      try {
+        const pathname = `ai-temp/${crypto.randomUUID()}/${safeFileName(f.name)}`;
+        const blob = await upload(pathname, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: f.type || undefined,
+        });
+        setAiUploads((s) => [
+          ...s,
+          { url: blob.url, name: f.name, mime: f.type, size: f.size, blobPathname: blob.pathname },
+        ]);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Upload failed", true);
+      }
+    }
+  }
+
+  function applyExtraction(
+    e: Awaited<ReturnType<typeof aiGenerateCompetitor>>["extraction"],
+  ) {
+    setDraft((d) =>
+      d
+        ? {
+            ...d,
+            name: e.name || d.name,
+            website: e.website || d.website,
+            parent: e.parent || d.parent,
+            tierKey: (e.tierKey as CompetitorInput["tierKey"]) || d.tierKey,
+            tier: e.tier || d.tier,
+            segment: e.segment || d.segment,
+            country: e.country || d.country,
+            productLines: e.productLines || d.productLines,
+            channel: e.channel || d.channel,
+            notes: e.notes || d.notes,
+            capabilities: e.capabilities.length ? e.capabilities : d.capabilities,
+          }
+        : d,
+    );
+  }
+
+  async function handleAiGenerateCompetitor() {
+    if (!draft) return;
+    if (!aiUploads.length && !aiUrl.trim()) {
+      return toast("Add a file or URL first", true);
+    }
+    setAiGenerating(true);
+    try {
+      if (draft.id) {
+        // Editing an existing competitor → refine + persist new files now.
+        setAiBackup({ ...draft });
+        const result = await aiRefineCompetitor({
+          competitorId: draft.id,
+          uploads: aiUploads,
+          url: aiUrl,
+        });
+        applyExtraction(result.extraction);
+        for (const u of aiUploads) {
+          try {
+            await addCompetitorAttachment({
+              competitorId: draft.id,
+              name: u.name, size: u.size, mimeType: u.mime,
+              url: u.url, blobPathname: u.blobPathname,
+            });
+          } catch (err) {
+            console.error("Failed to attach", u.name, err);
+          }
+        }
+        setAiUploads([]);
+        setAiUrl("");
+        router.refresh();
+        toast("Refined — review or revert");
+      } else {
+        // Brand-new competitor: just extract; uploads + products persist on save.
+        const result = await aiGenerateCompetitor({ uploads: aiUploads, url: aiUrl });
+        applyExtraction(result.extraction);
+        setPendingProducts(result.extraction.products ?? []);
+        const n = result.extraction.products?.length ?? 0;
+        toast(
+          n > 0
+            ? `AI extracted competitor + ${n} product${n > 1 ? "s" : ""} — review and save`
+            : "AI extracted competitor — review and save",
+        );
+      }
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "AI generation failed", true);
+    } finally {
+      setAiGenerating(false);
+    }
+  }
+
   // ── Brand actions ──
   function startNew() {
     if (!activeCollectionId) return;
@@ -209,6 +341,7 @@ export default function CompetitorsView({
     });
     setEditing("new");
     setSelectedId(null);
+    resetAiState();
   }
   function startEdit(id: number) {
     const b = brands.find((x) => x.id === id);
@@ -232,11 +365,37 @@ export default function CompetitorsView({
   }
   function saveDraft() {
     if (!draft || !draft.name.trim()) return toast("Name is required", true);
+    const isNew = !draft.id;
     runAction(async () => {
       const r = await upsertCompetitor(draft);
+      if (isNew && r) {
+        // Carry AI-uploaded source files over as attachments.
+        if (aiUploads.length) {
+          for (const u of aiUploads) {
+            try {
+              await addCompetitorAttachment({
+                competitorId: r.id,
+                name: u.name, size: u.size, mimeType: u.mime,
+                url: u.url, blobPathname: u.blobPathname,
+              });
+            } catch (err) {
+              console.error("Failed to attach", u.name, err);
+            }
+          }
+        }
+        // Persist the AI-extracted products under the new competitor.
+        if (pendingProducts.length) {
+          try {
+            await aiPersistProducts({ competitorId: r.id, products: pendingProducts });
+          } catch (err) {
+            console.error("Failed to persist products", err);
+          }
+        }
+      }
       if (r) setSelectedId(r.id);
       setEditing(false);
       setDraft(null);
+      resetAiState();
     }, draft.id ? "Saved" : "Competitor added");
   }
   function handleDuplicateBrand(id: number) {
@@ -291,6 +450,38 @@ export default function CompetitorsView({
     link.target = "_blank";
     link.rel = "noopener";
     link.click();
+  }
+
+  async function handleUploadProductFile(productId: number, files: FileList | File[]) {
+    let success = 0;
+    for (const f of Array.from(files)) {
+      try {
+        const pathname = `competitors/products/${productId}/${safeFileName(f.name)}`;
+        const blob = await upload(pathname, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: f.type || undefined,
+        });
+        await addProductAttachment({
+          productId, name: f.name, size: f.size, mimeType: f.type,
+          url: blob.url, blobPathname: blob.pathname,
+          kind: f.name.toLowerCase().endsWith(".ies") ? "ies"
+            : f.name.toLowerCase().endsWith(".pdf") ? "drawing"
+            : f.type.startsWith("image/") ? "image" : null,
+        });
+        success++;
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Upload failed", true);
+      }
+    }
+    if (success > 0) {
+      router.refresh();
+      toast(`Attached ${success} file${success > 1 ? "s" : ""} to product`);
+    }
+  }
+
+  function handleDeleteProduct(id: number) {
+    runAction(() => deleteProduct(id), "Product deleted");
   }
 
   function toggleTier(k: string) {
@@ -439,8 +630,17 @@ export default function CompetitorsView({
                 setDraft={setDraft}
                 isNew={editing === "new"}
                 collectionName={activeCollection?.name ?? ""}
-                onCancel={() => { setEditing(false); setDraft(null); }}
+                onCancel={() => { setEditing(false); setDraft(null); resetAiState(); }}
                 onSave={saveDraft}
+                aiUrl={aiUrl}
+                setAiUrl={setAiUrl}
+                aiUploads={aiUploads}
+                setAiUploads={setAiUploads}
+                aiGenerating={aiGenerating}
+                onAiUpload={handleAiUploadFiles}
+                onAiGenerate={handleAiGenerateCompetitor}
+                aiBackupActive={!!aiBackup}
+                onRevertAi={handleRevertAi}
               />
             ) : selected ? (
               <DetailView
@@ -452,6 +652,8 @@ export default function CompetitorsView({
                 onUpload={uploadFiles}
                 onDownload={handleDownloadAttachment}
                 onDeleteAttachment={(id) => runAction(() => deleteCompetitorAttachment(id), "Deleted")}
+                onDeleteProduct={handleDeleteProduct}
+                onUploadProductFile={handleUploadProductFile}
               />
             ) : (
               <EmptyView collection={activeCollection} brandCount={collBrands.length} canEdit={canEdit} onAdd={startNew} />
@@ -501,12 +703,15 @@ function EmptyView({ collection, brandCount, canEdit, onAdd }: {
 
 function DetailView({
   brand, canEdit, onEdit, onDuplicate, onDelete, onUpload, onDownload, onDeleteAttachment,
+  onDeleteProduct, onUploadProductFile,
 }: {
   brand: FullCompetitor; canEdit: boolean;
   onEdit: () => void; onDuplicate: () => void; onDelete: () => void;
   onUpload: (files: FileList | File[]) => void;
   onDownload: (a: CompetitorAttachment) => void;
   onDeleteAttachment: (id: number) => void;
+  onDeleteProduct: (id: number) => void;
+  onUploadProductFile: (productId: number, files: FileList | File[]) => void;
 }) {
   const ws = (brand.website || "").trim();
   const wsHref = ws && !/^https?:\/\//i.test(ws) ? `https://${ws}` : ws;
@@ -555,6 +760,34 @@ function DetailView({
       )}
 
       <div className="d-card">
+        <h4>
+          Products{" "}
+          <span style={{ color: "var(--muted)", fontWeight: 500 }}>
+            {brand.products.length || "—"}
+          </span>
+        </h4>
+        {brand.products.length === 0 ? (
+          <div style={{ fontSize: 13, color: "var(--muted)", padding: "10px 0" }}>
+            {canEdit
+              ? "No products yet. Use the AI panel in Edit to extract products from a website or PDF catalog."
+              : "No products yet."}
+          </div>
+        ) : (
+          <div className="products-grid">
+            {brand.products.map((p) => (
+              <ProductCard
+                key={p.id}
+                product={p}
+                canEdit={canEdit}
+                onDelete={() => onDeleteProduct(p.id)}
+                onUploadFiles={(files) => onUploadProductFile(p.id, files)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="d-card">
         <h4>Attachments {canEdit && (
           <label className="h-act">
             + Add file
@@ -598,13 +831,186 @@ function DetailView({
   );
 }
 
+function ProductCard({
+  product, canEdit, onDelete, onUploadFiles,
+}: {
+  product: FullCompetitorProduct;
+  canEdit: boolean;
+  onDelete: () => void;
+  onUploadFiles: (files: FileList | File[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const firstImage = product.imageUrls?.[0];
+  const specs = product.specs ?? {};
+  const specEntries: [string, string | string[]][] = Object.entries(specs).filter(
+    ([, v]) => (Array.isArray(v) ? v.length > 0 : typeof v === "string" && v.trim().length > 0),
+  );
+  const specOrder = [
+    "dimensions", "wattage", "lumens", "cct", "cri", "voltage",
+    "beamAngle", "ipRating", "colors", "finishes", "certifications", "notes",
+  ];
+  const sortedEntries = specEntries.sort(([a], [b]) => {
+    const ai = specOrder.indexOf(a); const bi = specOrder.indexOf(b);
+    if (ai === -1 && bi === -1) return a.localeCompare(b);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+  const previewKeys = ["dimensions", "wattage", "lumens", "cct"];
+  const preview = sortedEntries.filter(([k]) => previewKeys.includes(k)).slice(0, 3);
+
+  return (
+    <div className={`product-card ${open ? "open" : ""}`}>
+      <button className="product-card-head" onClick={() => setOpen((o) => !o)} type="button">
+        <div className="product-thumb">
+          {firstImage ? (
+            // Plain <img> — competitor sites won't be in next.config.images.domains
+            // and we want graceful failure if the URL is bad.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={firstImage} alt={product.name} loading="lazy" onError={(e) => { (e.currentTarget.style.display = "none"); }} />
+          ) : (
+            <div className="product-thumb-empty">📷</div>
+          )}
+        </div>
+        <div className="product-info">
+          <div className="product-name">{product.name}</div>
+          {product.productCode && <div className="product-code">{product.productCode}</div>}
+          {product.productCategory && (
+            <div className="product-cat">{product.productCategory}</div>
+          )}
+          {preview.length > 0 && (
+            <div className="product-preview">
+              {preview.map(([k, v]) => (
+                <span key={k} className="product-spec-mini">
+                  <strong>{labelFor(k)}:</strong>{" "}
+                  {Array.isArray(v) ? v.slice(0, 2).join(", ") : v}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <span className="product-chev">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="product-card-body">
+          {product.description && (
+            <p className="product-desc">{product.description}</p>
+          )}
+          {product.imageUrls && product.imageUrls.length > 1 && (
+            <div className="product-image-strip">
+              {product.imageUrls.slice(0, 6).map((src, i) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <a key={i} href={src} target="_blank" rel="noopener noreferrer">
+                  <img src={src} alt={`${product.name} ${i}`} loading="lazy" onError={(e) => { (e.currentTarget.style.display = "none"); }} />
+                </a>
+              ))}
+            </div>
+          )}
+          {sortedEntries.length > 0 && (
+            <dl className="product-specs">
+              {sortedEntries.map(([k, v]) => (
+                <div key={k} className="product-spec-row">
+                  <dt>{labelFor(k)}</dt>
+                  <dd>
+                    {Array.isArray(v) ? (
+                      <div className="spec-chips">
+                        {v.map((x, i) => <span key={i} className="spec-chip">{x}</span>)}
+                      </div>
+                    ) : v}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {(product.attachments.length > 0 || canEdit) && (
+            <div className="product-att-section">
+              <div className="product-att-head">
+                <strong>Attachments / drawings</strong>
+                {canEdit && (
+                  <label className="att-btn">
+                    + Add
+                    <input
+                      type="file"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        if (e.target.files) onUploadFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+              {product.attachments.length === 0 ? (
+                <div className="att-empty-mini">No drawings yet.</div>
+              ) : (
+                <div className="att-list">
+                  {product.attachments.map((a) => (
+                    <div key={a.id} className="att-item">
+                      <div className="att-icon">{(a.name.split(".").pop() ?? "FILE").toUpperCase()}</div>
+                      <div className="att-info">
+                        <div className="att-name">{a.name}</div>
+                        <div className="att-meta">{fmtBytes(a.size)} · {new Date(a.addedAt).toLocaleDateString()}</div>
+                      </div>
+                      <a className="att-btn" href={a.url} target="_blank" rel="noopener noreferrer">Open</a>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {product.sourceUrl && (
+            <a className="product-source" href={product.sourceUrl} target="_blank" rel="noopener noreferrer">
+              View on competitor's site ↗
+            </a>
+          )}
+          {canEdit && (
+            <div className="product-actions">
+              <button className="att-btn danger" onClick={() => confirm(`Delete "${product.name}"?`) && onDelete()}>Delete product</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function labelFor(key: string): string {
+  const map: Record<string, string> = {
+    dimensions: "Dimensions",
+    colors: "Colors",
+    finishes: "Finishes",
+    certifications: "Certifications",
+    cct: "CCT",
+    lumens: "Lumens",
+    wattage: "Wattage",
+    cri: "CRI",
+    beamAngle: "Beam angle",
+    voltage: "Voltage",
+    ipRating: "IP rating",
+    notes: "Notes",
+  };
+  return map[key] ?? key;
+}
+
 function FormView({
   draft, setDraft, isNew, collectionName, onCancel, onSave,
+  aiUrl, setAiUrl, aiUploads, setAiUploads, aiGenerating, onAiUpload, onAiGenerate,
+  aiBackupActive, onRevertAi,
 }: {
   draft: CompetitorInput;
   setDraft: React.Dispatch<React.SetStateAction<CompetitorInput | null>>;
   isNew: boolean; collectionName: string;
   onCancel: () => void; onSave: () => void;
+  aiUrl: string;
+  setAiUrl: (v: string) => void;
+  aiUploads: AiSourceUpload[];
+  setAiUploads: React.Dispatch<React.SetStateAction<AiSourceUpload[]>>;
+  aiGenerating: boolean;
+  onAiUpload: (files: FileList | File[]) => void;
+  onAiGenerate: () => void;
+  aiBackupActive: boolean;
+  onRevertAi: () => void;
 }) {
   const set = <K extends keyof CompetitorInput>(k: K) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setDraft((d) => d ? { ...d, [k]: e.target.value as CompetitorInput[K] } : d);
@@ -625,6 +1031,61 @@ function FormView({
           <p className="d-sub">Will be saved to <strong>{collectionName}</strong>. Required: <strong>Name</strong>.</p>
         </div>
       </div>
+
+      <div className="d-card ai-card">
+        <h4>
+          <span className="ai-badge">✨ AI</span>&nbsp;
+          {isNew ? "Generate from files or website" : "Refine this competitor"}
+        </h4>
+        <div className="ai-body">
+          <input
+            type="text"
+            placeholder="https://competitor-website.com (optional)"
+            value={aiUrl}
+            onChange={(e) => setAiUrl(e.target.value)}
+          />
+          <label className="ai-drop">
+            {aiUploads.length === 0
+              ? "📎 Click to add PDFs, brochures, screenshots…"
+              : `${aiUploads.length} file${aiUploads.length > 1 ? "s" : ""} attached`}
+            <input
+              type="file"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => {
+                if (e.target.files) onAiUpload(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {aiUploads.length > 0 && (
+            <ul className="ai-file-list">
+              {aiUploads.map((u, i) => (
+                <li key={i}>
+                  <span>{u.name}</span>
+                  <button className="ai-rm" onClick={() => setAiUploads((s) => s.filter((_, j) => j !== i))}>×</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button
+            className="btn primary sm"
+            onClick={onAiGenerate}
+            disabled={aiGenerating || (!aiUploads.length && !aiUrl.trim())}
+          >
+            {aiGenerating
+              ? (isNew ? "Generating…" : "Refining…")
+              : (isNew ? "✨ Generate competitor" : "✨ Refine fields")}
+          </button>
+        </div>
+      </div>
+
+      {aiBackupActive && (
+        <div className="ai-revert-banner">
+          <span>↩ AI just changed fields below.</span>
+          <button className="btn sm" onClick={onRevertAi}>Revert AI changes</button>
+        </div>
+      )}
 
       <div className="d-card">
         <h4>Profile</h4>
@@ -810,4 +1271,53 @@ const COMPETITOR_CSS = `
 .cm-app .strip-cell .sub{font-size:11px;color:var(--muted);margin-top:1px}
 .cm-app .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--text);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:500;box-shadow:0 10px 25px rgba(17,24,39,.10);z-index:200}
 .cm-app .toast.error{background:var(--danger)}
+.cm-app .ai-card{background:linear-gradient(135deg,var(--accent-bg),#fff);border:1px solid var(--accent-border)}
+.cm-app .ai-card h4{color:var(--accent-strong);display:flex;align-items:center;gap:6px}
+.cm-app .ai-badge{background:linear-gradient(135deg,#b45309,#92400e);color:#fff;font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 8px;border-radius:10px;text-transform:uppercase}
+.cm-app .ai-body{display:flex;flex-direction:column;gap:8px}
+.cm-app .ai-body .field-input,.cm-app .ai-body input[type=text],.cm-app .ai-body input:not([type=file]){padding:8px 11px;border:1px solid var(--border);border-radius:8px;background:#fff;font-size:13.5px;color:var(--text);width:100%;font-family:inherit}
+.cm-app .ai-body input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+.cm-app .ai-drop{display:block;padding:14px;border:1.5px dashed var(--border-strong);border-radius:8px;text-align:center;font-size:12.5px;color:var(--muted);cursor:pointer;background:#fff;transition:all .15s}
+.cm-app .ai-drop:hover{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-bg)}
+.cm-app .ai-file-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px}
+.cm-app .ai-file-list li{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#fff;border:1px solid var(--border);border-radius:5px;font-size:12.5px;color:var(--text-2)}
+.cm-app .ai-rm{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;padding:0 4px;font-family:inherit}
+.cm-app .ai-rm:hover{color:var(--danger)}
+.cm-app .ai-card .btn{align-self:flex-start}
+.cm-app .ai-revert-banner{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px;background:linear-gradient(135deg,#fff8e6,#fef6d4);border:1px solid #f0d896;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#8a6500;font-weight:500}
+.cm-app .products-grid{display:flex;flex-direction:column;gap:8px}
+.cm-app .product-card{border:1px solid var(--border);border-radius:10px;background:#fff;overflow:hidden;transition:border-color .15s}
+.cm-app .product-card:hover{border-color:var(--border-strong)}
+.cm-app .product-card.open{border-color:var(--accent-border)}
+.cm-app .product-card-head{display:flex;align-items:center;gap:12px;padding:10px 14px;width:100%;background:none;border:0;cursor:pointer;font-family:inherit;text-align:left}
+.cm-app .product-card-head:hover{background:var(--surface-2)}
+.cm-app .product-thumb{width:64px;height:64px;flex:none;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);overflow:hidden;display:flex;align-items:center;justify-content:center}
+.cm-app .product-thumb img{width:100%;height:100%;object-fit:cover}
+.cm-app .product-thumb-empty{font-size:24px;color:var(--dim)}
+.cm-app .product-info{flex:1;min-width:0}
+.cm-app .product-name{font-size:14px;font-weight:600;color:var(--text);line-height:1.25}
+.cm-app .product-code{font-size:11.5px;color:var(--muted);font-family:ui-monospace,Consolas,monospace;margin-top:2px}
+.cm-app .product-cat{font-size:11px;color:var(--accent-strong);background:var(--accent-bg);display:inline-block;padding:1px 7px;border-radius:10px;margin-top:4px;font-weight:500}
+.cm-app .product-preview{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:6px}
+.cm-app .product-spec-mini{font-size:11.5px;color:var(--text-2)}
+.cm-app .product-spec-mini strong{color:var(--muted);font-weight:500}
+.cm-app .product-chev{color:var(--muted);font-size:14px;flex:none}
+.cm-app .product-card-body{padding:0 14px 14px;border-top:1px solid var(--border);background:linear-gradient(180deg,var(--surface-2),#fff)}
+.cm-app .product-desc{font-size:13px;color:var(--text-2);margin:12px 0;line-height:1.5}
+.cm-app .product-image-strip{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.cm-app .product-image-strip a{display:block;width:80px;height:80px;border-radius:6px;overflow:hidden;border:1px solid var(--border)}
+.cm-app .product-image-strip img{width:100%;height:100%;object-fit:cover}
+.cm-app .product-specs{display:grid;grid-template-columns:120px 1fr;gap:6px 14px;margin:12px 0;font-size:13px}
+.cm-app .product-spec-row{display:contents}
+.cm-app .product-spec-row dt{color:var(--muted);font-weight:500;padding-top:1px}
+.cm-app .product-spec-row dd{margin:0;color:var(--text);word-break:break-word}
+.cm-app .spec-chips{display:flex;flex-wrap:wrap;gap:4px}
+.cm-app .spec-chip{font-size:11.5px;padding:2px 8px;background:var(--accent-bg);color:var(--accent-strong);border-radius:10px;border:1px solid var(--accent-border)}
+.cm-app .product-att-section{border-top:1px dashed var(--border);padding-top:12px;margin-top:12px}
+.cm-app .product-att-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.cm-app .product-att-head strong{font-size:12px;color:var(--text-2);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.cm-app .att-empty-mini{font-size:12px;color:var(--muted);font-style:italic;padding:6px 0}
+.cm-app .product-source{display:inline-block;font-size:12.5px;color:var(--accent);margin-top:8px}
+.cm-app .product-actions{margin-top:14px;display:flex;justify-content:flex-end}
+@media(max-width:600px){.cm-app .product-specs{grid-template-columns:1fr;gap:2px}.cm-app .product-spec-row dt{padding-top:6px}.cm-app .product-spec-row dd{padding-bottom:4px}}
 `;

@@ -51,6 +51,8 @@ type SupplierInput = {
   [K in (typeof SUPPLIER_BASE_KEYS)[number]]?: string | null;
 } & {
   kpis?: Record<string, string>;
+  manufacturingTypes?: string[];
+  materials?: string[];
 };
 
 function cleanString(v: unknown): string | null {
@@ -69,6 +71,13 @@ function cleanDate(v: unknown): string | null {
 // ─────────────────────────────────────────────────────────────────────────────
 // Suppliers
 // ─────────────────────────────────────────────────────────────────────────────
+
+function cleanStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter((s) => s.length > 0);
+}
 
 export async function createSupplier(input: SupplierInput) {
   await requireSupplierEditor();
@@ -102,6 +111,8 @@ export async function createSupplier(input: SupplierInput) {
       onboarded: cleanDate(input.onboarded),
       notes: cleanString(input.notes),
       kpis,
+      manufacturingTypes: cleanStringArray(input.manufacturingTypes),
+      materials: cleanStringArray(input.materials),
     })
     .returning();
 
@@ -129,6 +140,12 @@ export async function updateSupplier(id: number, input: SupplierInput) {
       if (typeof v === "string" && v.trim()) kpis[k] = v.trim();
     }
     updates.kpis = kpis;
+  }
+  if ("manufacturingTypes" in input) {
+    updates.manufacturingTypes = cleanStringArray(input.manufacturingTypes);
+  }
+  if ("materials" in input) {
+    updates.materials = cleanStringArray(input.materials);
   }
 
   await db.update(suppliers).set(updates).where(eq(suppliers.id, id));

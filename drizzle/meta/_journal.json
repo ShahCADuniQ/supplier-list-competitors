@@ -8,6 +8,20 @@
       "when": 1777646201662,
       "tag": "0000_init_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777653293400,
+      "tag": "0001_manufacturing_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777655935463,
+      "tag": "0002_competitor_products",
+      "breakpoints": true
     }
   ]
 }

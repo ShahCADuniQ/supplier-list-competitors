@@ -1,0 +1,2 @@
+ALTER TABLE "suppliers" ADD COLUMN "manufacturing_types" text[] DEFAULT ARRAY[]::text[] NOT NULL;--> statement-breakpoint
+ALTER TABLE "suppliers" ADD COLUMN "materials" text[] DEFAULT ARRAY[]::text[] NOT NULL;

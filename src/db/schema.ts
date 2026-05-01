@@ -71,6 +71,17 @@ export const suppliers = pgTable(
     // Shape: { leadTime, moq, capacity, paymentTerms, currency, incoterms, risk,
     //          backup, insurance, iso, ul, ce, rohs, nda, msa }
     kpis: jsonb("kpis").$type<Record<string, string>>().notNull().default({}),
+    // Manufacturing-specific tags. Empty for non-Manufacturing suppliers; an
+    // AI web-search action populates these on demand when the user clicks
+    // "Auto-fill from web" inside the supplier panel.
+    manufacturingTypes: text("manufacturing_types")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
+    materials: text("materials")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -253,6 +264,62 @@ export const competitorAttachments = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// COMPETITOR PRODUCTS — individual SKUs/products under a competitor brand,
+// with their photos, dimensions, colors, certs, etc. Populated automatically
+// by the AI extractor when the user drops a catalog or the brand's website.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const competitorProducts = pgTable(
+  "competitor_products",
+  {
+    id: serial("id").primaryKey(),
+    competitorId: integer("competitor_id")
+      .notNull()
+      .references(() => competitors.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    productCode: text("product_code"),
+    productCategory: text("product_category"), // e.g. "Linear Pendant", "High-Bay"
+    description: text("description"),
+    // Image URLs scraped from the competitor's site or catalog. Stored as raw
+    // remote URLs — they may break if the source site is restructured.
+    imageUrls: text("image_urls")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
+    // Loose, flexible spec bag — see `ProductSpecs` shape in extract.ts.
+    specs: jsonb("specs").$type<Record<string, string | string[]>>().notNull().default({}),
+    sourceUrl: text("source_url"), // deep link to the product page if known
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    competitorIdx: index("competitor_products_competitor_idx").on(t.competitorId),
+    nameIdx: index("competitor_products_name_idx").on(t.name),
+  }),
+);
+
+export const competitorProductAttachments = pgTable(
+  "competitor_product_attachments",
+  {
+    id: serial("id").primaryKey(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => competitorProducts.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    size: bigint("size", { mode: "number" }).notNull().default(0),
+    mimeType: text("mime_type"),
+    kind: text("kind"), // "drawing", "datasheet", "ies", "image", etc.
+    url: text("url").notNull(),
+    blobPathname: text("blob_pathname"),
+    uploaderClerkId: text("uploader_clerk_id"),
+    addedAt: timestamp("added_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    productIdx: index("competitor_product_attachments_product_idx").on(t.productId),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RELATIONS (for typed joins)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -302,6 +369,7 @@ export const competitorsRelations = relations(competitors, ({ one, many }) => ({
     references: [competitorCollections.id],
   }),
   attachments: many(competitorAttachments),
+  products: many(competitorProducts),
 }));
 
 export const competitorAttachmentsRelations = relations(
@@ -310,6 +378,27 @@ export const competitorAttachmentsRelations = relations(
     competitor: one(competitors, {
       fields: [competitorAttachments.competitorId],
       references: [competitors.id],
+    }),
+  }),
+);
+
+export const competitorProductsRelations = relations(
+  competitorProducts,
+  ({ one, many }) => ({
+    competitor: one(competitors, {
+      fields: [competitorProducts.competitorId],
+      references: [competitors.id],
+    }),
+    attachments: many(competitorProductAttachments),
+  }),
+);
+
+export const competitorProductAttachmentsRelations = relations(
+  competitorProductAttachments,
+  ({ one }) => ({
+    product: one(competitorProducts, {
+      fields: [competitorProductAttachments.productId],
+      references: [competitorProducts.id],
     }),
   }),
 );
@@ -329,3 +418,6 @@ export type CompetitorCollection = typeof competitorCollections.$inferSelect;
 export type Competitor = typeof competitors.$inferSelect;
 export type NewCompetitor = typeof competitors.$inferInsert;
 export type CompetitorAttachment = typeof competitorAttachments.$inferSelect;
+export type CompetitorProduct = typeof competitorProducts.$inferSelect;
+export type NewCompetitorProduct = typeof competitorProducts.$inferInsert;
+export type CompetitorProductAttachment = typeof competitorProductAttachments.$inferSelect;

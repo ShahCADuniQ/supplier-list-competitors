@@ -5,6 +5,8 @@ import {
   competitorCollections,
   competitors,
   competitorAttachments,
+  competitorProducts,
+  competitorProductAttachments,
 } from "@/db/schema";
 import {
   getOrCreateProfile,
@@ -35,9 +37,11 @@ export default async function CompetitorsPage() {
       .orderBy(asc(competitorCollections.name));
   }
 
-  const [comps, atts] = await Promise.all([
+  const [comps, atts, prods, prodAtts] = await Promise.all([
     db.select().from(competitors).orderBy(asc(competitors.name)),
     db.select().from(competitorAttachments).orderBy(desc(competitorAttachments.addedAt)),
+    db.select().from(competitorProducts).orderBy(asc(competitorProducts.name)),
+    db.select().from(competitorProductAttachments).orderBy(desc(competitorProductAttachments.addedAt)),
   ]);
 
   const attsByComp = new Map<number, typeof atts>();
@@ -46,10 +50,23 @@ export default async function CompetitorsPage() {
     list.push(a);
     attsByComp.set(a.competitorId, list);
   });
+  const prodAttsByProd = new Map<number, typeof prodAtts>();
+  prodAtts.forEach((a) => {
+    const list = prodAttsByProd.get(a.productId) ?? [];
+    list.push(a);
+    prodAttsByProd.set(a.productId, list);
+  });
+  const productsByComp = new Map<number, Array<typeof prods[number] & { attachments: typeof prodAtts }>>();
+  prods.forEach((p) => {
+    const list = productsByComp.get(p.competitorId) ?? [];
+    list.push({ ...p, attachments: prodAttsByProd.get(p.id) ?? [] });
+    productsByComp.set(p.competitorId, list);
+  });
 
   const compsWithAtts = comps.map((c) => ({
     ...c,
     attachments: attsByComp.get(c.id) ?? [],
+    products: productsByComp.get(c.id) ?? [],
   }));
 
   return (
