@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { handbookRevisions } from "@/db/schema";
-import { getOrCreateProfile } from "@/lib/permissions";
+import { getOrCreateProfile, isAdmin } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +26,7 @@ async function load(id: number, clerkUserId: string) {
 export async function GET(_req: NextRequest, ctx: RouteCtx) {
   const profile = await getOrCreateProfile();
   if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isAdmin(profile)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const { id } = await ctx.params;
   const numId = Number(id);
@@ -44,6 +45,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx) {
 export async function PATCH(request: NextRequest, ctx: RouteCtx) {
   const profile = await getOrCreateProfile();
   if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isAdmin(profile)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const { id } = await ctx.params;
   const numId = Number(id);
@@ -92,6 +94,7 @@ export async function PATCH(request: NextRequest, ctx: RouteCtx) {
 export async function DELETE(_req: NextRequest, ctx: RouteCtx) {
   const profile = await getOrCreateProfile();
   if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isAdmin(profile)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const { id } = await ctx.params;
   const numId = Number(id);

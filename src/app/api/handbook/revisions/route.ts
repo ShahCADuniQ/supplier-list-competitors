@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { handbookRevisions } from "@/db/schema";
-import { getOrCreateProfile } from "@/lib/permissions";
+import { getOrCreateProfile, isAdmin } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const profile = await getOrCreateProfile();
   if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isAdmin(profile)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const rows = await db
     .select({
@@ -32,6 +33,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const profile = await getOrCreateProfile();
   if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isAdmin(profile)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   let body: { name?: string; content?: unknown; status?: "draft" | "final" };
   try {
