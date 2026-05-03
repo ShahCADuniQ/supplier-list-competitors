@@ -30,6 +30,8 @@ export const userProfiles = pgTable(
     role: userRole("role").notNull().default("pending"),
     canViewSuppliers: boolean("can_view_suppliers").notNull().default(false),
     canViewCompetitors: boolean("can_view_competitors").notNull().default(false),
+    canViewHandbook: boolean("can_view_handbook").notNull().default(false),
+    canViewEngineering: boolean("can_view_engineering").notNull().default(false),
     canEdit: boolean("can_edit").notNull().default(false),
     notes: text("notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

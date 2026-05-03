@@ -1,0 +1,2 @@
+ALTER TABLE "user_profiles" ADD COLUMN "can_view_handbook" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "user_profiles" ADD COLUMN "can_view_engineering" boolean DEFAULT false NOT NULL;

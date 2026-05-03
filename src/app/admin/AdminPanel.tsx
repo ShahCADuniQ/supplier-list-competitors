@@ -80,13 +80,15 @@ export default function AdminPanel({
                 <th className="text-left px-4 py-3 font-medium">Role</th>
                 <th className="text-center px-4 py-3 font-medium">Suppliers</th>
                 <th className="text-center px-4 py-3 font-medium">Competitors</th>
+                <th className="text-center px-4 py-3 font-medium">Process</th>
+                <th className="text-center px-4 py-3 font-medium">Engineering</th>
                 <th className="text-center px-4 py-3 font-medium">Edit</th>
                 <th className="text-right px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-12 text-center text-zinc-500">No users in this filter.</td></tr>
+                <tr><td colSpan={8} className="px-4 py-12 text-center text-zinc-500">No users in this filter.</td></tr>
               ) : filtered.map((u) => {
                 const isSelf = u.clerkUserId === currentClerkId;
                 const isPrimary = u.email === adminEmail.toLowerCase();
@@ -117,6 +119,20 @@ export default function AdminPanel({
                         checked={u.role === "admin" || u.canViewCompetitors}
                         disabled={isPending || u.role === "admin" || busy === u.clerkUserId}
                         onChange={(v) => action(u.clerkUserId, () => updateUserAccess({ clerkUserId: u.clerkUserId, canViewCompetitors: v }), "Updated")}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <Toggle
+                        checked={u.role === "admin" || u.canViewHandbook}
+                        disabled={isPending || u.role === "admin" || busy === u.clerkUserId}
+                        onChange={(v) => action(u.clerkUserId, () => updateUserAccess({ clerkUserId: u.clerkUserId, canViewHandbook: v }), "Updated")}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <Toggle
+                        checked={u.role === "admin" || u.canViewEngineering}
+                        disabled={isPending || u.role === "admin" || busy === u.clerkUserId}
+                        onChange={(v) => action(u.clerkUserId, () => updateUserAccess({ clerkUserId: u.clerkUserId, canViewEngineering: v }), "Updated")}
                       />
                     </td>
                     <td className="px-4 py-3 text-center">

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getOrCreateProfile, isAdmin } from "@/lib/permissions";
+import { getOrCreateProfile, canViewHandbook } from "@/lib/permissions";
 
 export const metadata = {
   title: "Handbook — Lightbase",
@@ -8,7 +8,7 @@ export const metadata = {
 export default async function HandbookPage() {
   const profile = await getOrCreateProfile();
   if (!profile) redirect("/sign-in");
-  if (!isAdmin(profile)) redirect("/");
+  if (!canViewHandbook(profile)) redirect("/");
 
   return (
     <iframe

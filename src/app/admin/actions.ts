@@ -11,6 +11,8 @@ export type AccessUpdate = {
   role?: "admin" | "member" | "pending";
   canViewSuppliers?: boolean;
   canViewCompetitors?: boolean;
+  canViewHandbook?: boolean;
+  canViewEngineering?: boolean;
   canEdit?: boolean;
 };
 
@@ -40,6 +42,10 @@ export async function updateUserAccess(update: AccessUpdate) {
     updates.canViewSuppliers = update.canViewSuppliers;
   if (update.canViewCompetitors !== undefined)
     updates.canViewCompetitors = update.canViewCompetitors;
+  if (update.canViewHandbook !== undefined)
+    updates.canViewHandbook = update.canViewHandbook;
+  if (update.canViewEngineering !== undefined)
+    updates.canViewEngineering = update.canViewEngineering;
   if (update.canEdit !== undefined) updates.canEdit = update.canEdit;
 
   if (wasPending && becomingActive && !target.approvedAt) {
@@ -51,6 +57,8 @@ export async function updateUserAccess(update: AccessUpdate) {
   if (update.role === "admin") {
     updates.canViewSuppliers = true;
     updates.canViewCompetitors = true;
+    updates.canViewHandbook = true;
+    updates.canViewEngineering = true;
     updates.canEdit = true;
   }
 
@@ -65,7 +73,13 @@ export async function updateUserAccess(update: AccessUpdate) {
 
 export async function approveUser(
   clerkUserId: string,
-  access: { canViewSuppliers: boolean; canViewCompetitors: boolean; canEdit: boolean },
+  access: {
+    canViewSuppliers: boolean;
+    canViewCompetitors: boolean;
+    canViewHandbook?: boolean;
+    canViewEngineering?: boolean;
+    canEdit: boolean;
+  },
 ) {
   await updateUserAccess({
     clerkUserId,
@@ -80,6 +94,8 @@ export async function revokeUser(clerkUserId: string) {
     role: "pending",
     canViewSuppliers: false,
     canViewCompetitors: false,
+    canViewHandbook: false,
+    canViewEngineering: false,
     canEdit: false,
   });
 }

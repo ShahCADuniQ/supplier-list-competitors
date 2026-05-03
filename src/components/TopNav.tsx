@@ -6,10 +6,18 @@ import { usePathname } from "next/navigation";
 type Props = {
   canViewSuppliers: boolean;
   canViewCompetitors: boolean;
+  canViewHandbook: boolean;
+  canViewEngineering: boolean;
   isAdmin: boolean;
 };
 
-export default function TopNav({ canViewSuppliers, canViewCompetitors, isAdmin }: Props) {
+export default function TopNav({
+  canViewSuppliers,
+  canViewCompetitors,
+  canViewHandbook,
+  canViewEngineering,
+  isAdmin,
+}: Props) {
   const pathname = usePathname() ?? "/";
   const tab = (href: string, label: string) => {
     const active = pathname === href || pathname.startsWith(href + "/");
@@ -32,8 +40,8 @@ export default function TopNav({ canViewSuppliers, canViewCompetitors, isAdmin }
     <nav className="flex items-center gap-1">
       {canViewSuppliers && tab("/suppliers", "Suppliers")}
       {canViewCompetitors && tab("/competitors", "Competitors")}
-      {isAdmin && tab("/handbook", "Process")}
-      {isAdmin && tab("/engineering", "Engineering")}
+      {canViewHandbook && tab("/handbook", "Process")}
+      {canViewEngineering && tab("/engineering", "Engineering")}
       {isAdmin && tab("/admin", "Admin")}
     </nav>
   );

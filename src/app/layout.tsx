@@ -14,6 +14,8 @@ import {
   isAdmin,
   canViewSuppliers,
   canViewCompetitors,
+  canViewHandbook,
+  canViewEngineering,
 } from "@/lib/permissions";
 import "./globals.css";
 
@@ -57,6 +59,8 @@ export default async function RootLayout({
                 <TopNav
                   canViewSuppliers={canViewSuppliers(profile)}
                   canViewCompetitors={canViewCompetitors(profile)}
+                  canViewHandbook={canViewHandbook(profile)}
+                  canViewEngineering={canViewEngineering(profile)}
                   isAdmin={isAdmin(profile)}
                 />
               )}

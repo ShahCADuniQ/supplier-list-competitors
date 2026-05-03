@@ -39,6 +39,8 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
       role: isAdmin ? "admin" : "pending",
       canViewSuppliers: isAdmin,
       canViewCompetitors: isAdmin,
+      canViewHandbook: isAdmin,
+      canViewEngineering: isAdmin,
       canEdit: isAdmin,
       approvedAt: isAdmin ? new Date() : null,
       approvedBy: isAdmin ? "system:bootstrap" : null,
@@ -71,6 +73,20 @@ export function canViewCompetitors(
 ): boolean {
   if (!profile) return false;
   return profile.role === "admin" || profile.canViewCompetitors;
+}
+
+export function canViewHandbook(
+  profile: UserProfile | null | undefined,
+): boolean {
+  if (!profile) return false;
+  return profile.role === "admin" || profile.canViewHandbook;
+}
+
+export function canViewEngineering(
+  profile: UserProfile | null | undefined,
+): boolean {
+  if (!profile) return false;
+  return profile.role === "admin" || profile.canViewEngineering;
 }
 
 export function canEdit(profile: UserProfile | null | undefined): boolean {
