@@ -1,0 +1,1880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lightbase Process Handbook v3.0 &mdash; Interactive</title>
+<style>
+:root {
+  --dark-blue: #1B3A5C;
+  --accent-blue: #2E75B6;
+  --light-gray: #F2F2F2;
+  --border: #BFBFBF;
+  --red: #CC0000; --red-bg: #FFF0F0;
+  --orange: #E67E22; --orange-bg: #FFF8F0;
+  --green: #27AE60; --green-bg: #F0FFF0;
+  --font: 'Segoe UI', Arial, sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { font-family: var(--font); font-size: 14px; color: #222; margin: 0; padding: 0; background: #E8ECF0; }
+
+/* === TOOLBAR === */
+.toolbar {
+  position: sticky; top: 0; z-index: 1000;
+  background: var(--dark-blue); color: #fff; padding: 10px 24px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.toolbar .logo { font-size: 20px; font-weight: 700; letter-spacing: 1px; margin-right: 16px; }
+.toolbar .subtitle { font-size: 13px; opacity: 0.8; margin-right: auto; }
+.toolbar button {
+  background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
+  color: #fff; padding: 7px 16px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; font-weight: 600; transition: all 0.2s;
+}
+.toolbar button:hover { background: rgba(255,255,255,0.25); }
+.toolbar button.danger { background: rgba(204,0,0,0.3); border-color: rgba(204,0,0,0.5); }
+.toolbar button.danger:hover { background: rgba(204,0,0,0.5); }
+.toolbar button.primary { background: var(--accent-blue); border-color: var(--accent-blue); }
+.toolbar button.primary:hover { background: #3A8AD4; }
+.toolbar .progress-box { display: flex; align-items: center; gap: 8px; margin-left: 8px; }
+.toolbar .progress-bar { width: 120px; height: 8px; background: rgba(255,255,255,0.2); border-radius: 4px; overflow: hidden; }
+.toolbar .progress-fill { height: 100%; background: #4CAF50; transition: width 0.3s; border-radius: 4px; }
+.toolbar .progress-text { font-size: 12px; opacity: 0.9; min-width: 36px; }
+.toolbar input[type="file"] { display: none; }
+.toolbar .rev-indicator {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
+  color: #fff; padding: 5px 12px; border-radius: 14px; font-size: 12px;
+  max-width: 280px; overflow: hidden;
+}
+.toolbar .rev-indicator .rev-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolbar .rev-indicator .rev-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 8px; text-transform: uppercase;
+  letter-spacing: 0.5px; flex-shrink: 0;
+}
+.toolbar .rev-indicator .rev-badge.draft { background: rgba(230,126,34,0.3); border: 1px solid rgba(230,126,34,0.5); }
+.toolbar .rev-indicator .rev-badge.final { background: rgba(39,174,96,0.4); border: 1px solid rgba(39,174,96,0.6); }
+.toolbar .rev-indicator .rev-badge.unsaved { background: rgba(204,0,0,0.3); border: 1px solid rgba(204,0,0,0.5); }
+.toolbar button.success { background: rgba(39,174,96,0.4); border-color: rgba(39,174,96,0.6); }
+.toolbar button.success:hover { background: rgba(39,174,96,0.6); }
+.rev-list { list-style: none; padding: 0; margin: 0; max-height: 50vh; overflow-y: auto; }
+.rev-list-item {
+  border: 1px solid #e0e4e8; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 10px; background: #fafbfc;
+}
+.rev-list-item:hover { background: #f0f4f8; border-color: var(--accent-blue); }
+.rev-list-item.is-current { background: #E3EEF9; border-color: var(--accent-blue); }
+.rev-list-item .rev-info { flex: 1; min-width: 0; }
+.rev-list-item .rev-title { font-weight: 600; color: var(--dark-blue); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rev-list-item .rev-meta { font-size: 11px; color: #888; margin-top: 2px; }
+.rev-list-item .rev-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.rev-list-item .rev-actions button {
+  background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 4px 10px;
+  font-size: 11px; cursor: pointer; color: #555;
+}
+.rev-list-item .rev-actions button:hover { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+.rev-list-item .rev-actions button.del:hover { background: var(--red); border-color: var(--red); }
+.rev-status-pill {
+  display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-left: 6px; vertical-align: middle;
+}
+.rev-status-pill.draft { background: #FFF8F0; border: 1px solid var(--orange); color: var(--orange); }
+.rev-status-pill.final { background: #F0FFF0; border: 1px solid var(--green); color: var(--green); }
+.rev-empty { text-align: center; color: #999; padding: 30px 12px; font-size: 13px; font-style: italic; }
+
+/* === SIDEBAR NAV === */
+.layout { display: flex; min-height: calc(100vh - 52px); }
+.sidebar {
+  width: 280px; min-width: 280px; background: #fff; border-right: 1px solid #ddd;
+  overflow-y: auto; padding: 16px 0; position: sticky; top: 52px; height: calc(100vh - 52px);
+}
+.nav-part {
+  padding: 8px 12px 8px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--accent-blue); background: #F7F9FB;
+  display: flex; align-items: center; gap: 4px; position: relative;
+}
+.nav-part .nav-label { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-part .nav-acts { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; }
+.nav-part:hover .nav-acts { opacity: 1; }
+.drag-handle {
+  cursor: grab; font-size: 14px; color: #bbb; padding: 2px 4px; user-select: none;
+  display: flex; align-items: center; transition: color 0.15s;
+}
+.drag-handle:hover { color: var(--accent-blue); }
+.drag-handle:active { cursor: grabbing; }
+.nav-part-group { transition: transform 0.15s; }
+.nav-part-group.dragging { opacity: 0.5; background: #e8f0fe; }
+.nav-part-group.drag-over-top { border-top: 3px solid var(--accent-blue); }
+.nav-part-group.drag-over-bottom { border-bottom: 3px solid var(--accent-blue); }
+.nav-item-wrap { transition: transform 0.15s; }
+.nav-item-wrap.dragging { opacity: 0.5; }
+.nav-item-wrap.drag-over-top { border-top: 2px solid var(--accent-blue); }
+.nav-item-wrap.drag-over-bottom { border-bottom: 2px solid var(--accent-blue); }
+.nav-acts button {
+  background: none; border: none; cursor: pointer; font-size: 12px; padding: 2px 4px;
+  border-radius: 3px; color: #888; line-height: 1;
+}
+.nav-acts button:hover { background: rgba(0,0,0,0.08); color: var(--dark-blue); }
+.nav-acts button.del:hover { color: var(--red); background: rgba(204,0,0,0.08); }
+.nav-item {
+  padding: 5px 12px 5px 14px; font-size: 13px; color: #444; cursor: pointer;
+  border-left: 3px solid transparent; transition: all 0.15s;
+  display: flex; align-items: center; gap: 4px; position: relative;
+}
+.nav-item .drag-handle { font-size: 11px; color: #ccc; }
+.nav-item:hover { background: #F0F4F8; color: var(--dark-blue); }
+.nav-item .nav-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-item .nav-acts { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; }
+.nav-item:hover .nav-acts { opacity: 1; }
+.nav-item .nav-check { font-size: 11px; opacity: 0.6; white-space: nowrap; }
+.nav-item .nav-check.done { color: var(--green); opacity: 1; }
+.nav-item-wrap.active .nav-item {
+  background: #E3EEF9; color: var(--dark-blue); font-weight: 600;
+  border-left: 3px solid var(--accent-blue);
+}
+.nav-part-group.active-part > .nav-part {
+  background: #D6E5F5; color: var(--dark-blue);
+  border-left: 3px solid var(--dark-blue);
+}
+.nav-add {
+  padding: 4px 16px 4px 24px; display: block; width: 100%;
+  background: none; border: none; border-left: 3px solid transparent;
+  font-size: 12px; color: #aaa; cursor: pointer; text-align: left; transition: 0.15s;
+}
+.nav-add:hover { color: var(--accent-blue); background: #F0F4F8; }
+.nav-add-part {
+  padding: 8px 16px; display: block; width: 100%;
+  background: #F7F9FB; border: none; border-top: 1px solid #eee;
+  font-size: 11px; font-weight: 700; color: #aaa; cursor: pointer; text-align: left;
+  text-transform: uppercase; letter-spacing: 0.5px; transition: 0.15s;
+}
+.nav-add-part:hover { color: var(--accent-blue); background: #eef3f8; }
+
+/* === MAIN CONTENT === */
+.main { flex: 1; padding: 32px 40px; max-width: 960px; }
+.main h1 {
+  font-size: 26px; color: var(--dark-blue); margin: 40px 0 16px 0;
+  padding-bottom: 8px; border-bottom: 3px solid var(--accent-blue);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  scroll-margin-top: 70px;
+}
+.main .part-divider { scroll-margin-top: 70px; }
+.main h1:first-child { margin-top: 0; }
+.main h2 { font-size: 20px; color: var(--accent-blue); margin: 28px 0 12px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.main h3 { font-size: 16px; color: var(--dark-blue); margin: 20px 0 8px 0; display: flex; align-items: center; gap: 8px; }
+.main p.desc { line-height: 1.6; margin: 0 0 12px 0; color: #333; font-size: 13px; }
+
+/* === CALLOUT BOXES === */
+.callout {
+  border-radius: 6px; padding: 14px 18px; margin: 12px 0 16px 0;
+  border-left: 5px solid; font-size: 13px; position: relative;
+}
+.callout.critical { background: var(--red-bg); border-color: var(--red); }
+.callout.tip { background: var(--orange-bg); border-color: var(--orange); }
+.callout.standard { background: var(--green-bg); border-color: var(--green); }
+.callout .callout-title { font-weight: 700; margin-bottom: 6px; }
+.callout.critical .callout-title { color: var(--red); }
+.callout.tip .callout-title { color: var(--orange); }
+.callout.standard .callout-title { color: var(--green); }
+.callout .callout-line { margin: 2px 0; line-height: 1.5; }
+
+/* === CHECKLIST TABLE === */
+.checklist-table { width: 100%; border-collapse: collapse; margin: 8px 0 16px 0; }
+.checklist-table th {
+  background: var(--dark-blue); color: #fff; padding: 8px 10px;
+  font-size: 12px; font-weight: 600; text-align: left;
+}
+.checklist-table th:first-child { width: 40px; text-align: center; }
+.checklist-table th:nth-child(3) { width: 130px; }
+.checklist-table th:nth-child(4) { width: 110px; }
+.checklist-table th:nth-child(5) { width: 50px; text-align: center; }
+.checklist-table td { padding: 6px 10px; border-bottom: 1px solid #E0E0E0; vertical-align: top; }
+.checklist-table tr:hover td { background: #F8FAFC; }
+.checklist-table tr.checked td { background: #F0FAF0; }
+.checklist-table td:first-child { text-align: center; }
+.checklist-table input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue); }
+.checklist-table .task-text { font-size: 13px; line-height: 1.4; }
+.checklist-table .task-text.done { text-decoration: line-through; opacity: 0.6; }
+.checklist-table input[type="text"], .checklist-table input[type="date"] {
+  width: 100%; border: 1px solid #ddd; border-radius: 4px; padding: 4px 6px;
+  font-size: 12px; font-family: var(--font);
+}
+.checklist-table input[type="text"]:focus, .checklist-table input[type="date"]:focus {
+  border-color: var(--accent-blue); outline: none; box-shadow: 0 0 0 2px rgba(46,117,182,0.15);
+}
+.comment-btn {
+  background: none; border: none; cursor: pointer; font-size: 16px; opacity: 0.4;
+  padding: 2px; transition: opacity 0.15s;
+}
+.comment-btn:hover, .comment-btn.has-comment { opacity: 1; }
+.comment-row td { padding: 4px 10px 10px 50px !important; border-bottom: 1px solid #E0E0E0; }
+.comment-row textarea {
+  width: 100%; border: 1px solid #ddd; border-radius: 4px; padding: 6px 8px;
+  font-size: 12px; font-family: var(--font); resize: none; overflow: hidden;
+  min-height: 32px; line-height: 1.5;
+}
+.comment-row textarea:focus { border-color: var(--accent-blue); outline: none; box-shadow: 0 0 0 2px rgba(46,117,182,0.15); }
+.comment-print { display: none; font-size: 11px; color: #333; line-height: 1.5; white-space: pre-wrap; padding: 4px 0; font-style: italic; }
+
+/* === SECTION PROGRESS === */
+.section-progress {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--light-gray); border-radius: 12px; padding: 3px 10px;
+  font-size: 12px; color: #666;
+}
+.section-progress .sp-bar { width: 60px; height: 5px; background: #ddd; border-radius: 3px; overflow: hidden; }
+.section-progress .sp-fill { height: 100%; background: var(--green); border-radius: 3px; transition: width 0.3s; }
+
+/* === COVER === */
+.cover {
+  text-align: center; padding: 80px 20px 60px;
+  background: linear-gradient(160deg, #fff 0%, #F0F4F8 100%);
+  border-radius: 10px; margin-bottom: 32px;
+}
+.cover .brand { font-size: 52px; font-weight: 800; color: var(--dark-blue); letter-spacing: 4px; }
+.cover .title { font-size: 28px; color: var(--accent-blue); margin: 12px 0; }
+.cover .version { font-size: 18px; color: #888; }
+.cover .sub { font-size: 14px; color: #999; margin: 6px 0; }
+.cover .conf { font-size: 12px; color: #bbb; font-style: italic; margin-top: 40px; }
+
+/* === PART DIVIDER === */
+.part-divider {
+  text-align: center; padding: 48px 20px; margin: 40px 0;
+  background: linear-gradient(135deg, var(--dark-blue), var(--accent-blue));
+  border-radius: 10px; color: #fff; position: relative;
+}
+.part-divider h2 { color: #fff !important; border: none !important; font-size: 28px; margin: 0 0 6px 0; justify-content: center; }
+.part-divider p { color: rgba(255,255,255,0.8); margin: 0; font-size: 13px; }
+
+/* === EDIT ACTION BUTTONS === */
+.acts { display: inline-flex; gap: 2px; margin-left: 8px; opacity: 0; transition: opacity 0.15s; }
+*:hover > .acts, .acts:focus-within, .checklist-wrap:hover > .acts { opacity: 1; }
+.checklist-wrap { display: block; }
+.checklist-wrap > .acts { position: absolute; top: 0; right: 0; z-index: 5; background: rgba(255,255,255,0.9); border-radius: 4px; padding: 2px 4px; }
+.abtn {
+  background: none; border: none; cursor: pointer; font-size: 14px; padding: 2px 5px;
+  border-radius: 4px; opacity: 0.5; transition: 0.15s; line-height: 1;
+}
+.abtn:hover { opacity: 1; background: rgba(0,0,0,0.06); }
+.abtn.del:hover { background: rgba(204,0,0,0.1); color: var(--red); }
+.add-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: #f8f9fb; border: 2px dashed #b0bec5; color: #546e7a;
+  padding: 8px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;
+  margin: 2px; transition: 0.2s;
+}
+.add-btn:hover { border-color: var(--accent-blue); color: #fff; background: var(--accent-blue); }
+.add-strip { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 10px 0 16px; padding: 10px 14px; background: #f4f6f8; border-radius: 8px; border: 1px solid #e0e4e8; }
+.add-strip-label { font-size: 11px; font-weight: 700; color: #90a4ae; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; white-space: nowrap; }
+.insert-bar { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin: 4px 0; padding: 4px 10px; opacity: 0; transition: opacity 0.2s; }
+.insert-bar:hover, .insert-bar:focus-within { opacity: 1; }
+.insert-bar .add-btn { padding: 3px 10px; font-size: 11px; border-width: 1px; margin: 1px; }
+.insert-bar-label { font-size: 10px; color: #aaa; margin-right: 4px; }
+
+/* === MODAL === */
+.modal-overlay {
+  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5); z-index: 2000; align-items: center; justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: #fff; border-radius: 12px; padding: 28px; max-width: 520px; width: 92%;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-height: 85vh; overflow-y: auto;
+}
+.modal h3 { margin: 0 0 14px 0; color: var(--dark-blue); font-size: 18px; }
+.modal p { color: #555; font-size: 13px; margin: 0 0 8px; }
+.modal label { display: block; font-size: 12px; font-weight: 600; color: #555; margin: 12px 0 4px; }
+.modal input, .modal textarea, .modal select {
+  width: 100%; border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px;
+  font: 13px var(--font); margin-bottom: 4px;
+}
+.modal textarea { min-height: 80px; resize: vertical; }
+.modal input:focus, .modal textarea:focus, .modal select:focus {
+  border-color: var(--accent-blue); outline: none; box-shadow: 0 0 0 2px rgba(46,117,182,0.15);
+}
+.modal-actions { display: flex; gap: 10px; margin-top: 18px; justify-content: flex-end; }
+.modal-actions button { padding: 8px 20px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.btn-cancel { background: #f0f0f0; border: 1px solid #ddd; color: #555; }
+.btn-cancel:hover { background: #e4e4e4; }
+.btn-confirm { background: var(--accent-blue); border: none; color: #fff; }
+.btn-confirm:hover { background: #3A8AD4; }
+.btn-danger { background: var(--red); border: none; color: #fff; }
+.btn-danger:hover { background: #a00; }
+
+/* === TOAST === */
+.toast {
+  position: fixed; bottom: 24px; right: 24px; background: #333; color: #fff;
+  padding: 12px 20px; border-radius: 8px; font-size: 13px; z-index: 3000;
+  opacity: 0; transition: opacity 0.3s; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+
+/* === PRINT === */
+@media print {
+  body { background: #fff; font-size: 11px; color: #000; }
+  .toolbar, .sidebar, .acts, .add-btn, .add-strip, .insert-bar, .comment-btn, .nav-acts, .nav-add, .nav-add-part { display: none !important; }
+  .layout { display: block; }
+  .main { max-width: 100%; padding: 20px; }
+  .main h1 { font-size: 18px; page-break-after: avoid; color: #1B3A5C; margin: 24px 0 10px 0; }
+  .main h2 { font-size: 15px; page-break-after: avoid; color: #2E75B6; }
+  .main h3 { font-size: 13px; page-break-after: avoid; }
+
+  /* Tables */
+  .checklist-table { page-break-inside: auto; font-size: 10px; }
+  .checklist-table th { padding: 5px 6px; font-size: 10px; }
+  .checklist-table td { padding: 4px 6px; }
+  .checklist-table tr { page-break-inside: avoid; }
+  .checklist-table input[type="checkbox"] { width: 14px; height: 14px; }
+  .checklist-table .task-text { font-size: 11px; }
+
+  /* Owner and date fields: show as plain text */
+  .checklist-table input[type="text"], .checklist-table input[type="date"] {
+    border: none !important; background: transparent !important; padding: 0 !important;
+    font-size: 10px; box-shadow: none !important;
+  }
+
+  /* Comments: hide textarea, show print version */
+  .comment-row { display: none !important; }
+  .comment-row.has-content { display: table-row !important; }
+  .comment-row textarea { display: none !important; }
+  .comment-print { display: block !important; font-size: 10px; color: #444; }
+
+  /* Checklist wrapper */
+  .checklist-wrap > .acts { display: none !important; }
+
+  /* Part dividers */
+  .part-divider { page-break-before: always; margin: 0; padding: 24px 0 8px 0; }
+  .part-divider h2 { font-size: 20px; color: #1B3A5C; }
+
+  /* Cover */
+  .cover { page-break-after: always; text-align: center; padding: 120px 40px; }
+  .cover .brand { font-size: 36px; }
+  .cover .title { font-size: 24px; }
+
+  /* Callouts */
+  .callout { break-inside: avoid; page-break-inside: avoid; padding: 10px 14px; margin: 8px 0; font-size: 11px; }
+  .callout .callout-title { font-size: 12px; }
+  .callout .callout-line { font-size: 11px; }
+
+  /* Progress bars hidden in print */
+  .section-progress { display: none !important; }
+  .progress-box { display: none !important; }
+}
+
+/* === MOBILE MENU TOGGLE (hidden on desktop) === */
+.menu-toggle {
+  display: none;
+  background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
+  color: #fff; padding: 7px 12px; border-radius: 6px; cursor: pointer;
+  font-size: 18px; font-weight: 700; line-height: 1;
+}
+.sidebar-backdrop {
+  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5); z-index: 998;
+}
+.sidebar-backdrop.show { display: block; }
+
+/* === RESPONSIVE / MOBILE === */
+@media (max-width: 900px) {
+  body { font-size: 13px; }
+  .toolbar { padding: 8px 12px; gap: 6px; }
+  .toolbar .logo { font-size: 16px; margin-right: 6px; letter-spacing: 0.5px; }
+  .toolbar .subtitle { display: none; }
+  .toolbar .progress-box { order: 99; margin: 0; }
+  .toolbar .progress-bar { width: 80px; }
+  .toolbar button { padding: 6px 10px; font-size: 12px; }
+  .menu-toggle { display: inline-block; }
+
+  .layout { display: block; min-height: auto; }
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; height: 100vh;
+    width: 84%; max-width: 320px; z-index: 999;
+    transform: translateX(-100%); transition: transform 0.3s ease;
+    box-shadow: 4px 0 20px rgba(0,0,0,0.2);
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  .main {
+    padding: 16px 14px; max-width: 100%;
+  }
+  .main h1 { font-size: 20px; margin: 24px 0 10px 0; }
+  .main h2 { font-size: 17px; margin: 20px 0 8px 0; }
+  .main h3 { font-size: 14px; }
+  .main h1, .main h2 { gap: 6px; }
+  .section-progress { padding: 2px 8px; font-size: 11px; }
+  .section-progress .sp-bar { width: 40px; }
+
+  /* Cover / part dividers scale down */
+  .cover { padding: 40px 16px 30px; }
+  .cover .brand { font-size: 34px; letter-spacing: 2px; }
+  .cover .title { font-size: 20px; }
+  .cover .version { font-size: 15px; }
+  .part-divider { padding: 28px 16px; margin: 24px 0; }
+  .part-divider h2 { font-size: 22px; }
+
+  /* Checklist tables: convert to card layout on phones */
+  .checklist-wrap { overflow-x: visible; }
+  .checklist-table, .checklist-table thead, .checklist-table tbody,
+  .checklist-table tr, .checklist-table td, .checklist-table th { display: block; width: 100%; }
+  .checklist-table thead { display: none; }
+  .checklist-table tr {
+    border: 1px solid #ddd; border-radius: 8px; margin: 10px 0;
+    padding: 10px 12px; background: #fff;
+  }
+  .checklist-table tr.checked { background: #F0FAF0; }
+  .checklist-table td {
+    border: none; padding: 4px 0; display: flex; align-items: center; gap: 8px;
+  }
+  .checklist-table td:first-child { justify-content: flex-start; }
+  .checklist-table td::before {
+    content: attr(data-label);
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    color: #90a4ae; letter-spacing: 0.5px; min-width: 60px;
+  }
+  .checklist-table td:first-child::before,
+  .checklist-table td:nth-child(2)::before,
+  .checklist-table td:last-child::before { display: none; }
+  .checklist-table td:nth-child(2) { padding: 6px 0 10px 0; }
+  .checklist-table .task-text { font-size: 14px; font-weight: 500; }
+  .checklist-table input[type="text"], .checklist-table input[type="date"] {
+    font-size: 13px; padding: 6px 8px;
+  }
+  .comment-row td { padding: 6px 0 !important; border: none; }
+  .comment-row td::before { display: none; }
+
+  /* Action buttons: always visible on touch (no hover) */
+  .acts, .nav-acts, .insert-bar { opacity: 1 !important; }
+  .abtn { font-size: 16px; padding: 4px 8px; opacity: 0.7; }
+  .nav-acts button { font-size: 14px; padding: 4px 6px; }
+  .nav-item { padding: 10px 12px 10px 14px; font-size: 14px; }
+  .nav-part { padding: 10px 12px; font-size: 11px; }
+  .nav-add { padding: 8px 16px 8px 24px; font-size: 13px; }
+  .drag-handle { font-size: 16px; padding: 4px 6px; }
+
+  /* Add strips */
+  .add-strip { padding: 8px 10px; }
+  .add-btn { padding: 7px 12px; font-size: 12px; }
+  .add-strip-label { font-size: 10px; margin-right: 4px; }
+
+  /* Callouts */
+  .callout { padding: 12px 14px; font-size: 13px; }
+
+  /* Modals full-width */
+  .modal { padding: 20px; width: 94%; max-height: 90vh; }
+  .modal h3 { font-size: 16px; }
+  .modal-actions { flex-wrap: wrap; }
+  .modal-actions button { flex: 1; min-width: 100px; padding: 10px 16px; }
+}
+
+@media (max-width: 480px) {
+  .toolbar .logo { font-size: 14px; }
+  .toolbar button { padding: 5px 8px; font-size: 11px; }
+  .toolbar .progress-bar { width: 60px; }
+  .cover .brand { font-size: 28px; }
+  .cover .title { font-size: 17px; }
+  .part-divider h2 { font-size: 18px; }
+  .main h1 { font-size: 18px; }
+}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <button class="menu-toggle" onclick="toggleSidebar()" title="Toggle menu" aria-label="Toggle menu">&#9776;</button>
+  <span class="logo">LIGHTBASE</span>
+  <span class="subtitle">Process Handbook v3.0 &mdash; Interactive</span>
+  <div class="rev-indicator" id="revIndicator" title="Current revision">
+    <span class="rev-name" id="revIndicatorName">No revision loaded</span>
+    <span class="rev-badge unsaved" id="revIndicatorBadge">unsaved</span>
+  </div>
+  <div class="progress-box">
+    <div class="progress-bar"><div class="progress-fill" id="globalProgress"></div></div>
+    <span class="progress-text" id="globalProgressText">0%</span>
+  </div>
+  <button class="primary" onclick="saveProgress()" title="Save the current state to the database">&#128190; Save</button>
+  <button onclick="showModal('openList')" title="Open one of your saved revisions">&#128194; Open</button>
+  <button class="success" onclick="showModal('confirmFinal')" title="Mark this revision as Final (still editable later)">&#127937; Submit as Final</button>
+  <button onclick="window.print()">&#128424; Print / PDF</button>
+  <button class="danger" onclick="showModal('reset')">&#8635; Reset</button>
+</div>
+
+<div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main" id="main"></div>
+</div>
+
+<div class="modal-overlay" id="modalOverlay"><div class="modal" id="modalContent"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ===============================================================
+// UTILITY
+// ===============================================================
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function escA(s){return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');}
+let _uid=0; function nid(){return ++_uid;}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
+
+// ===============================================================
+// DATA MODEL
+// ===============================================================
+// data.parts[pi].sections[si].blocks[bi]
+// block: {id, type:'checklist'|'heading'|'text'|'callout', ...}
+let data = { title:'LIGHTBASE', subtitle:'Process Handbook', version:'Version 3.0 — Interactive Edition', parts:[] };
+// itemState: "pi_si_bi_ii" => {checked,owner,date,comment}
+let itemState = {};
+function sKey(pi,si,bi,ii){return pi+'_'+si+'_'+bi+'_'+ii;}
+function gS(k){if(!itemState[k])itemState[k]={checked:false,owner:'',date:'',comment:''};return itemState[k];}
+
+// ===============================================================
+// DEFAULT SEED DATA
+// ===============================================================
+function seedData(){
+data.parts=[
+
+// ===================================================================
+// PART A1 — CLIENT INTAKE & SCOPE DEFINITION
+// Phase 0. Drives everything downstream.
+// Content: Design Brief (CDC) template from scope of work.pdf.
+// All original A1 checklists REPLACED with the Scope of Work content.
+// ===================================================================
+{id:nid(),name:'PART A1 — Client Intake & Scope Definition',desc:'Phase 0 Qualification. Fill the Design Brief (CDC) with the client before any design work begins. Output: signed Scope of Work.',sections:[
+
+{id:nid(),name:'A1.1: Project Overview & Context',blocks:[
+ {id:nid(),type:'text',text:'The Design Brief is the foundational document for every new project. It is produced during Phase 0 (Qualification) and must be signed off by both LightBase and the client before moving to Phase 1.'},
+ {id:nid(),type:'callout',style:'standard',title:'Document Identity',lines:['Document ID: CDC-[YEAR]-[001]','Version 0.9 Preliminary','Title format: Design Brief — [Opportunity No. - Client Name - Project Name]']},
+ {id:nid(),type:'heading',text:'A1.1.1 Project Context — Intake Questions (Q1–Q12)'},
+ {id:nid(),type:'checklist',items:['Q1. What is the project type? (Custom / Buy-and-Sell / Collection product)','Q2. Which collection is this project attached to, if any?','Q3. Is the application interior or exterior?','Q4. What is the target application? (Architectural / Residential / Commercial / Industrial / Horticultural / Hazardous)','Q5. Do you have reference images or a mood board?','Q6. What is the target budget per fixture and total project budget?','Q7. What is the expected volume? (Prototype qty + production qty)','Q8. What driver / control platform is required? (DALI-2, 0–10V, DMX512, Casambi, phase-cut…)','Q9. What are the installation constraints? (Mounting surface, access, voltage on site)','Q10. Which certifications are required? (CSA, UL, CE, UKCA, DLC, RoHS)','Q11. Are there existing Lightbase luminaires this should match or replace?','Q12. What is the delivery timeline and installation date?']},
+ {id:nid(),type:'callout',style:'tip',title:'Intake Tip',lines:['Print Q1–Q48 and bring it to every first meeting.','Capture answers directly into CDC-[YEAR]-[xxx] while the client is still in the room.']},
+ {id:nid(),type:'heading',text:'A1.1.2 Milestone Table (to be agreed with client)'},
+ {id:nid(),type:'checklist',items:['Initial Scope of Work — target date: ____','Preliminary Shop Drawing — target date: ____','Prototype / Samples — target date: ____','Final Shop Drawing for Approval — target date: ____','Mass Production — target date: ____']},
+]},
+
+{id:nid(),name:'A1.2: Scope of Design',blocks:[
+ {id:nid(),type:'heading',text:'A1.2.1 Mounting & Fixation (Q14–Q18)'},
+ {id:nid(),type:'checklist',items:['Q14. Mounting type? (Surface / Recessed / Pendant / Track / Wall / Pole / Ceiling)','Q15. Mounting surface material? (Concrete / Drywall / Wood / Metal / Stone)','Q16. Is the fixture accessible for maintenance after install?','Q17. Any seismic or wind-load requirement? (NBC 2020 zone)','Q18. Required fixing hardware and safety factor?']},
+ {id:nid(),type:'heading',text:'A1.2.2 Driver & Control (Q19–Q23)'},
+ {id:nid(),type:'checklist',items:['Q19. Input voltage? (120V / 277V / 347V / universal / 24VDC / 48VDC)','Q20. Driver location? (Integral / Remote)','Q21. Dimming protocol? (DALI-2 / 0–10V / DMX512 / Casambi / phase-cut / non-dim)','Q22. Emergency battery required?','Q23. Surge protection rating required? (min 4 kV per IEEE C62.41)']},
+ {id:nid(),type:'heading',text:'A1.2.3 LED Source (Q24–Q33)'},
+ {id:nid(),type:'checklist',items:['Q24. CCT target? (2700K / 3000K / 3500K / 4000K…)','Q25. CRI target? (80 / 90 / 95+)','Q26. R9 requirement?','Q27. MacAdam binning tolerance? (3-step / 5-step)','Q28. Target lumen output per fixture?','Q29. Target system efficacy (lm/W)?','Q30. Target L80 @ 50,000 h minimum?','Q31. Tunable white required?','Q32. RGBW / full-colour required?','Q33. LED package preference? (Nichia / Samsung / Luminus / Cree / Osram)']},
+ {id:nid(),type:'callout',style:'critical',title:'Binning & Colour Consistency',lines:['Always specify tight binning. Nichia recommends 3-step MacAdam minimum.','Request binning certificates with every LED shipment. Mix bins across fixtures, not within.']},
+ {id:nid(),type:'heading',text:'A1.2.4 Cable Specifications (Q34–Q42)'},
+ {id:nid(),type:'checklist',items:['Q34. Cable type? (SJOW / SOOW / MC / Romex / FEP)','Q35. Cable gauge?','Q36. Number of conductors (dimming + power)?','Q37. Cable length fixture → junction box?','Q38. Cable gland type and IP rating?','Q39. Strain relief method?','Q40. In-line connector required?','Q41. Cable colour coding (black L / white N / green GND)?','Q42. Temperature rating of cable (105°C near LEDs)?']},
+ {id:nid(),type:'heading',text:'A1.2.5 Optic & Beam Angle (Q43–Q45)'},
+ {id:nid(),type:'checklist',items:['Q43. Target beam angle? (Spot ≤15° / Narrow 15–30° / Medium 30–60° / Wide 60–90° / Very Wide 90°+)','Q44. Beam distribution? (Symmetric / Asymmetric / Wall-wash / Wall-graze)','Q45. Optic technology? (TIR / Reflector / Diffuser / Free-form / COB + reflector)']},
+ {id:nid(),type:'heading',text:'A1.2.6 Ingress Protection (Q46–Q47)'},
+ {id:nid(),type:'checklist',items:['Q46. IP rating? (IP20 indoor / IP44 damp / IP65 outdoor / IP67 wet / IP68 submersible)','Q47. IK impact rating? (IK07 / IK08 / IK10)']},
+ {id:nid(),type:'heading',text:'A1.2.7 Housing (Q48)'},
+ {id:nid(),type:'checklist',items:['Q48. Housing material and finish? (Extruded aluminium 6063-T5 / Die-cast A380 / Sheet metal / RAL colour / Powder coat / Anodize)']},
+]},
+
+{id:nid(),name:'A1.3: Components Specification',blocks:[
+ {id:nid(),type:'heading',text:'A1.3.1 Mechanical'},
+ {id:nid(),type:'checklist',items:['Housing material, grade, finish confirmed','Gasket material and profile confirmed','Fastener types, grades, torque values documented','Mounting brackets, stand-offs, captive hardware listed']},
+ {id:nid(),type:'heading',text:'A1.3.2 LED Sources & Electronic'},
+ {id:nid(),type:'checklist',items:['LED P/N, bin, Vf range, drive current documented','MCPCB stack-up (aluminium / copper) confirmed','Driver P/N, Vin, Iout, dimming, Tc max confirmed','Sensor / control module P/N confirmed']},
+ {id:nid(),type:'heading',text:'A1.3.3 Electrical'},
+ {id:nid(),type:'checklist',items:['Wire gauge, type, temperature rating confirmed','Cable gland IP rating confirmed','Fuse / circuit protection specified','Surge protection (≥4 kV) specified']},
+ {id:nid(),type:'heading',text:'A1.3.4 Accessories'},
+ {id:nid(),type:'checklist',items:['Trim rings, louvres, snoots, barn-doors, colour filters','Remote driver enclosures if applicable','Ceiling / wall / junction boxes if applicable','Spare parts list for maintenance']},
+]},
+
+{id:nid(),name:'A1.4: Budget, Timeline & Project History',blocks:[
+ {id:nid(),type:'heading',text:'A1.4.1 Budget'},
+ {id:nid(),type:'checklist',items:['Target unit cost (BOM + labour + margin) agreed','NRE (non-recurring engineering) cost agreed','Prototype cost carried by: ____','Tooling amortization schedule agreed']},
+ {id:nid(),type:'heading',text:'A1.4.2 Timeline — Phase Gates'},
+ {id:nid(),type:'checklist',items:['Phase 0 — Qualification (Scope of Work signed) — date: ____','Phase 1 — Design Brief (Preliminary specsheet v1.0) — date: ____','Phase 2 — Concept (Shop drawing for approval) — date: ____','Phase 3 — Technical Development (Manufacturing drawing, assembly + install manual) — date: ____','Phase 4 — Prototyping (Approved prototype + test report) — date: ____','Phase 5 — Production Launch (Product in production, final product sheet) — date: ____']},
+ {id:nid(),type:'heading',text:'A1.4.3 Project History'},
+ {id:nid(),type:'checklist',items:['Related previous LightBase projects identified','Existing products this fixture must replace or match','Known compatibility constraints carried forward']},
+]},
+
+{id:nid(),name:'A1.5: Q&A, Open Questions & Sign-Off',blocks:[
+ {id:nid(),type:'heading',text:'A1.5.1 Open Questions Log'},
+ {id:nid(),type:'checklist',items:['Q#: ____  Asked by: ____  Status: Open / Answered  Owner: ____','Q#: ____  Asked by: ____  Status: Open / Answered  Owner: ____','All open questions must be Answered before Phase 1 sign-off']},
+ {id:nid(),type:'heading',text:'A1.5.2 Change Control Clause'},
+ {id:nid(),type:'text',text:'Once the Design Brief is signed, any change to scope, performance, budget, or timeline must be raised as a Change Request (CR) and re-approved by both parties before implementation.'},
+ {id:nid(),type:'heading',text:'A1.5.3 Approval Signatures'},
+ {id:nid(),type:'checklist',items:['LightBase Industrial Designer — Name / Signature / Date','LightBase Project Lead — Name / Signature / Date','Client Project Lead — Name / Signature / Date']},
+ {id:nid(),type:'callout',style:'critical',title:'Phase 0 Gate',lines:['No design work begins until the Design Brief (Scope of Work) is signed by both parties.','File the signed brief under CLIENT INFO / CDC-[YEAR]-[xxx] / v1.0-signed.pdf']},
+]},
+
+]},
+
+// ===================================================================
+// PART A2 — CONCEPT DESIGN & APPROVAL
+// Includes Procedure Notebook v2 reference at start of design phase (high-level only).
+// ===================================================================
+{id:nid(),name:'PART A2 — Concept Design & Approval',desc:'Phase 1. Translate the approved Design Brief into 2–3 concept directions and secure client sign-off.',sections:[
+
+{id:nid(),name:'A2.1: Procedure Notebook v2 — Design Kick-Off Reference',blocks:[
+ {id:nid(),type:'text',text:'Before opening SolidWorks, open PROCEDURE NOTEBOOK - V2.docx and confirm the project has been set up correctly in all operational systems. This ensures Finance, Admin, Operations, Procurement and Logistics are aligned before engineering begins.'},
+ {id:nid(),type:'callout',style:'standard',title:'PN v2 — High-Level Kick-Off Checklist',lines:['Admin: Pre-boarding & on-boarding complete for team members assigned.','Operation: Project created in CRM with a unique project code.','Operation: Survey plan & site-survey tools assigned (if site visit required).','Operation: Proposition type registered — Residential / Commercial / Industrial / Horticole.','Accounting: PI registered in the system (see PN v2 checklist).','Procurement: Long-lead items flagged to purchasing.','Logistics: Delivery target and shipping method drafted.']},
+ {id:nid(),type:'callout',style:'tip',title:'Reference Only',lines:['For operational detail (weekly / monthly / quarterly cycles, fiscal year, PO reception, ROI Hydro-Québec, etc.) consult PROCEDURE NOTEBOOK - V2.docx in OneDrive.','This Process Handbook covers the engineering / design side. PN v2 covers operations, finance and admin.','For deep engineering detail see the Lightbase Engineering Handbook.']},
+]},
+
+{id:nid(),name:'A2.2: Concept Development',blocks:[
+ {id:nid(),type:'heading',text:'A2.2.1 Design Directions'},
+ {id:nid(),type:'checklist',items:['Create initial sketches exploring 2–3 design directions','Research existing products for inspiration and differentiation','Select candidate LED packages based on performance requirements','Develop rough optical concept: direct, indirect, mixed, edge-lit, COB','Consider thermal strategy early: passive vs. active, heat-sink type','Evaluate housing material options: extruded aluminium, die-cast, sheet metal','Establish preliminary dimensions and weight estimates','Prepare concept presentation with renders or quick mockups']},
+]},
+
+{id:nid(),name:'A2.3: Client Concept Review',blocks:[
+ {id:nid(),type:'checklist',items:['Present 2–3 concept options with pros, cons, and costs','Gather client feedback on aesthetics, size, light output, and finish','Confirm or revise CCT, CRI, beam angle, dimming requirements','Agree on design direction to proceed with','Document all decisions and capture sign-off from client','Update project timeline','Issue preliminary quotation or estimate']},
+ {id:nid(),type:'callout',style:'tip',title:'Client Presentations',lines:['Use SolidWorks visualizations or PhotoView 360 renders.','Include a 1:1 scale 3D-printed mockup when possible.']},
+]},
+
+]},
+
+// ===================================================================
+// PART A3 — DETAILED DESIGN
+// Absorbs Part B content: B1 Optical, B2 Electrical, B3 Thermal,
+// B4 Mechanical, B7 Controls, B8 Materials, B9 Reliability, B10 Special
+// ===================================================================
+{id:nid(),name:'PART A3 — Detailed Design',desc:'Phase 2–3. Full CAD, optical, electrical, thermal, mechanical, controls, materials and reliability engineering.',sections:[
+
+{id:nid(),name:'A3.1: CAD Modeling',blocks:[
+ {id:nid(),type:'checklist',items:['Create SolidWorks part files using Lightbase PRTDOT template','Create assemblies using Lightbase ASMDOT template','Name files per convention: PROJECT-PART_NAME-REV','Apply correct material properties for analysis','Model all components: housing, heat sink, PCB, lens, driver cavity, endcaps, gaskets','Ensure minimum wall thickness per manufacturing method','Design cable entry and gland provisions','Include mounting hardware and bracket geometry','Create exploded-view configuration','Run interference detection on full assembly','Apply GD&T to critical dimensions','Generate drawings using Lightbase DRWDOT templates']},
+]},
+
+{id:nid(),name:'A3.2: Optical Engineering',blocks:[
+ {id:nid(),type:'heading',text:'A3.2.1 LED Selection'},
+ {id:nid(),type:'checklist',items:['Compare packages: efficacy, CRI, lifetime, cost','Verify LM-80 data available','Check MacAdam step (3-step min architectural)','Confirm non-sulfur-sensitive or compatible materials','Verify Vf range at rated current','Check thermal resistance Rth j-sp','Confirm availability and MOQ','Request samples','Evaluate SPD for application']},
+ {id:nid(),type:'callout',style:'standard',title:'LED Manufacturer Tips',lines:['Nichia: Rsp3 or tighter. Platinum-cured silicone only.','Cree: XLamp selector for latest efficacy.','Samsung: LM301 for linear. Ts ≤ 85°C.']},
+ {id:nid(),type:'heading',text:'A3.2.2 Optical System Design'},
+ {id:nid(),type:'checklist',items:['Define target distribution','Select optical method: TIR, reflector, diffuser, free-form','Run TracePro simulation','Verify distribution matches IES Type (I–V)','Calculate optical efficiency (≥85%)','Check for artifacts: hot spots, rings, fringing','Evaluate UGR (≤19 for offices)','Design for uniform illuminance','Specify lens material','Consider UV stability for outdoor','Design baffle / louver if needed','Create IES file','Verify beam angle meets spec (±10% tolerance)','Evaluate TM-30 Rf/Rg for colour-critical applications','Specify LED arrangement: spacing, orientation, strings']},
+ {id:nid(),type:'callout',style:'critical',title:'LED Binning & Colour Consistency',lines:['Always specify tight binning. Nichia recommends 3-step MacAdam minimum.','Request binning certificates with every LED shipment. Mix bins across fixtures, not within.']},
+]},
+
+{id:nid(),name:'A3.3: Electrical Engineering',blocks:[
+ {id:nid(),type:'heading',text:'A3.3.1 LED String Configuration'},
+ {id:nid(),type:'checklist',items:['Calculate Vf per string','Choose parallel strings for target output','Verify current matches driver','Check Vf mismatch < 0.2V','Calculate total LED power','Confirm PCB trace width per IPC-2221','Design current-limiting if CV driver']},
+ {id:nid(),type:'heading',text:'A3.3.2 Driver Selection'},
+ {id:nid(),type:'checklist',items:['Match type: CC for COB, CV for strips','Verify output voltage covers Vf range','Verify output current','Confirm input voltage compatibility (120V / 277V / 347V / universal)','Specify dimming protocol: DALI-2, 0–10V, PWM, DMX512, phase-cut','Check efficiency (≥88%)','Verify temp range vs. fixture','Check PF ≥ 0.90','Verify THD ≤ 20%','Confirm UL/CSA certification','Check flicker per IEEE 1789','Review lifetime at Tc_max','Verify inrush current']},
+ {id:nid(),type:'callout',style:'critical',title:'347V Canadian Power Systems',lines:['347V is standard in Canadian commercial buildings. Not all drivers support it.','Verify driver 347V rating. Consider auto-transformer if needed.']},
+ {id:nid(),type:'heading',text:'A3.3.3 Wiring & Protection'},
+ {id:nid(),type:'checklist',items:['Wire gauge per NEC/CEC','Voltage drop max 3%','High-temp wire near LEDs (105°C)','Select connectors','Surge protection min 4 kV','Grounding per CEC/NEC','Polarity protection if DC','Wire management','Label all wires both ends','Calculate fuse / circuit-breaker rating','Calculate inrush current for multi-fixture circuits','Design emergency-battery circuit if required','Plan wire routing to avoid thermal zones']},
+]},
+
+{id:nid(),name:'A3.4: Thermal Engineering',blocks:[
+ {id:nid(),type:'heading',text:'A3.4.1 Thermal Budget'},
+ {id:nid(),type:'checklist',items:['Document Ta worst-case','Calculate Pd per LED','Obtain Rth j-sp from datasheet','Specify TIM < 0.5°C·cm²/W','Calculate MCPCB Rth','Calculate / simulate heat-sink Rth','Sum chain and calculate Tj','Redesign if Tj > 85°C','Verify via FEA for complex geometry','Plan Tc-point measurement','Verify Tj below LED max (typically 105–125°C)','Select MCPCB: aluminium (1–3 W/mK) or copper (>300 W/mK)','Consider capacitor derating: 10°C = 50% life reduction','Ensure air circulation for enclosed fixtures','Account for thermal expansion of dissimilar materials']},
+ {id:nid(),type:'callout',style:'critical',title:'Thermal Design is Non-Negotiable',lines:['10°C Tj increase can halve L70 lifetime.','Design to lowest practical Tj, not just below max.']},
+ {id:nid(),type:'callout',style:'standard',title:'LM-80 and TM-21 Lumen Maintenance',lines:['Use TM-21 calculator to project lumen maintenance at design Tj.','Design for 50,000-hour L80 minimum. Samsung: Ts below 85°C.']},
+]},
+
+{id:nid(),name:'A3.5: Mechanical Engineering',blocks:[
+ {id:nid(),type:'heading',text:'A3.5.1 Housing Design'},
+ {id:nid(),type:'checklist',items:['Select material: extrusion, die-cast, sheet metal','Verify thermal conductivity','Wall thickness per process','Mounting provisions','Internal ribs for stiffness','Driver cavity with ventilation','Wire routing channels','Surface treatment','Drain holes for outdoor','Lens retention design','Specify all fastener types, grades, and torque values','Design strain relief for cable entries','Ensure UL/CSA screw-boss dimensions meet standards','Verify weight and CG for mounting hardware','Design field access for driver / LED replacement','Specify surface finish and RAL colour']},
+ {id:nid(),type:'heading',text:'A3.5.2 Sealing & IP'},
+ {id:nid(),type:'checklist',items:['Define target IP rating','Select gasket profile','Calculate compression 15–25%','Verify groove dimensions','Gasket compatible with LEDs','Cable glands rated to IP','Consider Gore vent','Verify lens seal','Plan IP test']},
+ {id:nid(),type:'heading',text:'A3.5.3 Structural & Environmental'},
+ {id:nid(),type:'checklist',items:['Weight and mounting SF ≥3×','Wind load per NBC 2020','Seismic restraint per code','Fastener grades','IK impact resistance','UV resistance of plastics','Salt-spray if coastal','Thermal cycling fatigue']},
+ {id:nid(),type:'callout',style:'critical',title:'Material Compatibility — Sulfur & VOC',lines:['Sulfur-containing materials corrode LED silver reflectors.','NEVER use sulfur-vulcanized rubber near LEDs. Use platinum-cured silicone or EPDM.']},
+]},
+
+{id:nid(),name:'A3.6: Controls & Smart Lighting',blocks:[
+ {id:nid(),type:'heading',text:'A3.6.1 Wired Controls'},
+ {id:nid(),type:'checklist',items:['DALI-2: verify driver certified','0–10V: verify analog input','Forward phase: verify compatibility','DMX512: specify decoder','1–10V: distinguish from 0–10V','Switched / relay: inrush rating']},
+ {id:nid(),type:'heading',text:'A3.6.2 Wireless Controls'},
+ {id:nid(),type:'checklist',items:['Bluetooth Mesh: Casambi, Silvair','Zigbee 3.0 with gateway','Wi-Fi direct-to-cloud','Commissioning method','OTA firmware update','BMS interoperability']},
+]},
+
+{id:nid(),name:'A3.7: Materials & Finishes',blocks:[
+ {id:nid(),type:'heading',text:'A3.7.1 Material Selection'},
+ {id:nid(),type:'checklist',items:['Thermal conductivity','Weight vs. mounting limits','Corrosion resistance','UV resistance verified','Flame rating UL 94','Cost vs. volume','Lead time / availability','Recyclability']},
+ {id:nid(),type:'heading',text:'A3.7.2 Surface Finishes'},
+ {id:nid(),type:'checklist',items:['Anodize Type II: 5–25µm interior','Anodize Type III: 25–75µm outdoor','Powder coat AAMA 2603 / 2604 / 2605','Adhesion ASTM D3359 (5B)','Salt spray ASTM B117 500+ hrs','UV weathering ASTM G154 2000+ hrs','No VOC outgassing in sealed cavities']},
+]},
+
+{id:nid(),name:'A3.8: Reliability & Lifetime',blocks:[
+ {id:nid(),type:'checklist',items:['Identify weakest-link component','LED L70/L80/L90 via TM-21','Driver capacitor life calculation','System life = min(LED, driver)','Target 50,000 hrs L80 minimum','Document claims with data','10°C safety margin']},
+]},
+
+{id:nid(),name:'A3.9: Special Considerations',blocks:[
+ {id:nid(),type:'heading',text:'A3.9.1 Horticultural'},
+ {id:nid(),type:'checklist',items:['PPF and PPFD specified','SPD: red 630–660nm, blue 440–460nm','Far-red 730nm considered','PPE ≥2.5 µmol/J','IP65+ for humidity','Corrosion-resistant hardware']},
+ {id:nid(),type:'heading',text:'A3.9.2 Hazardous Location'},
+ {id:nid(),type:'checklist',items:['Classify: Class I/II/III, Div/Zone','UL 844 / CSA 137','Explosion-proof rating','T-code verification']},
+ {id:nid(),type:'heading',text:'A3.9.3 Emergency'},
+ {id:nid(),type:'checklist',items:['Maintained or non-maintained','Battery: 30 min (CA) / 90 min (US)','Reduced lumen output calculated','Self-test per code','CSA 141 / UL 924 compliance']},
+]},
+
+]},
+
+// ===================================================================
+// PART A4 — DESIGN REVIEW & APPROVAL
+// ===================================================================
+{id:nid(),name:'PART A4 — Design Review & Approval',desc:'Phase 3 gate. Peer review, client design sign-off before prototyping begins.',sections:[
+
+{id:nid(),name:'A4.1: Internal Design Review',blocks:[
+ {id:nid(),type:'checklist',items:['Conduct peer review with another engineer','Review CAD models for manufacturing feasibility','Verify BOM accuracy and availability','Check all calculations: thermal, electrical, optical, structural','Review compliance against target certifications','Evaluate cost vs. budget','Identify risks and mitigations','Document findings and action items','Obtain internal sign-off']},
+]},
+
+{id:nid(),name:'A4.2: Client Design Approval',blocks:[
+ {id:nid(),type:'checklist',items:['Prepare presentation with renders, drawings, specs','Present photometric summary (simulated IES)','Review material / finish / colour with client','Confirm mounting and installation approach','Obtain written design approval','Issue updated quotation','Establish prototype timeline']},
+ {id:nid(),type:'callout',style:'critical',title:'Phase 3 Gate',lines:['Prototype tooling / machining orders are issued only after client design approval is filed.']},
+]},
+
+]},
+
+// ===================================================================
+// PART A5 — PROTOTYPING & VALIDATION
+// Includes full Master Test Plan Lens (MTP-LENS-2025-03-Rev M) content.
+// ===================================================================
+{id:nid(),name:'PART A5 — Prototyping & Validation',desc:'Phase 4. Build, test and score prototypes against the Master Test Plan Lens scoring matrix.',sections:[
+
+{id:nid(),name:'A5.1: Prototype Build',blocks:[
+ {id:nid(),type:'checklist',items:['Order prototype components','3D print housings for fit-check','CNC / extrude housing if form critical','Assemble per draft instructions','Document assembly with photos','Record assembly difficulties','Create prototype BOM with costs']},
+]},
+
+{id:nid(),name:'A5.2: In-House Test Protocol',blocks:[
+ {id:nid(),type:'checklist',items:['Electrical safety: hipot, ground continuity, leakage','Measure power, PF, THD','Photometric: lumens, CCT, CRI, beam angle','Generate measured IES file if possible','Thermal: Tc at steady state (≥3 hours)','Dimming across full range','Inrush current test','IP test per target rating','Mechanical stress test','Burn-in: 72 hours minimum','EMC pre-compliance','Compare results vs. targets — document pass/fail','Photograph prototype from all angles','Record in test template']},
+ {id:nid(),type:'callout',style:'standard',title:'IES Testing Standards',lines:['LM-79: System-level photometric / electrical measurement.','LM-80: LED lumen maintenance (6,000+ hours).','TM-21: Lumen maintenance projection from LM-80 data.']},
+]},
+
+{id:nid(),name:'A5.3: Master Test Plan Lens — Overview (MTP-LENS-2025-03-Rev M)',blocks:[
+ {id:nid(),type:'text',text:'The Master Test Plan Lens (MTP) is the formal lens-selection and validation protocol for LightBase wall-wash / wall-graze luminaires. Every candidate lens is scored on a weighted matrix of eight performance criteria. Reference doc: Master Test Plan Lens.docx, author Hasaan Shah — Mechanical Engineering.'},
+ {id:nid(),type:'callout',style:'standard',title:'Wall Washer vs Wall Grazer — Definitions',lines:['Wall Washer: broad, even vertical illumination from a distance; smooth gradient top→bottom.','Wall Grazer: close-offset fixture producing strong downward beam that emphasises surface texture and shadows.','These two archetypes drive completely different beam/uniformity targets — confirm which one the project needs before scoring lenses.']},
+ {id:nid(),type:'heading',text:'A5.3.1 Input Constraints'},
+ {id:nid(),type:'checklist',items:['LED chip: Samsung LM301B','Candidate lenses: Asahi AF21D12H1060G, Asahi AF21D12H80G, KingBrite KB-H22-1060F-XP','PCB pitches tested: 25 mm and 30 mm','Distances from wall tested: 0.5 m and 1.0 m','Test panel: 1.8 m × 1.2 m with a 15-point measurement grid']},
+]},
+
+{id:nid(),name:'A5.4: MTP Scoring Matrix (weights)',blocks:[
+ {id:nid(),type:'text',text:'Every candidate lens is scored 1–5 on each of eight criteria. Weighted score = Σ(score × weight). Highest weighted total wins.'},
+ {id:nid(),type:'checklist',items:['Beam Uniformity — 30%','Colour Uniformity (CV of CCT) — 10%','TM-30 (Rf / Rg) — 10%','Duv — 5%','Beam Angle Accuracy — 5%','Mechanical Fit — 10%','Unit Cost — 20%','Lead Time — 10%','Total weights must sum to 100%']},
+]},
+
+{id:nid(),name:'A5.5: MTP Procedures & Scoring Rubrics',blocks:[
+ {id:nid(),type:'heading',text:'A5.5.1 Beam Uniformity (weight 30%)'},
+ {id:nid(),type:'text',text:'Compute Coefficient of Variation (CV) of illuminance at the 15-point grid. Split into horizontal sub-score and vertical sub-score. Final Beam Uniformity = 0.30 × linear (horizontal) + 0.70 × vertical. Lower CV = better score.'},
+ {id:nid(),type:'checklist',items:['Measure lux at each of the 15 grid points at each tested distance','Compute CV_horizontal across rows','Compute CV_vertical across columns','Score: CV ≤10% → 5 pts; 10–15% → 4; 15–20% → 3; 20–25% → 2; >25% → 1']},
+ {id:nid(),type:'heading',text:'A5.5.2 Colour Uniformity — CV of CCT (weight 10%)'},
+ {id:nid(),type:'checklist',items:['Measure CCT at each of the 15 grid points','Compute CV of CCT across all points','Score: CV ≤2% → 5; 2–3% → 4; 3–4% → 3; 4–5% → 2; >5% → 1']},
+ {id:nid(),type:'heading',text:'A5.5.3 TM-30 Rf/Rg (weight 10%)'},
+ {id:nid(),type:'checklist',items:['Measure Rf (fidelity) and Rg (gamut)','Score: Rf ≥90 & Rg 98–102 → 5; Rf 85–90 → 4; Rf 80–85 → 3; Rf 75–80 → 2; Rf <75 → 1']},
+ {id:nid(),type:'heading',text:'A5.5.4 Duv (weight 5%)'},
+ {id:nid(),type:'checklist',items:['Measure Duv vs Planckian locus','Score: |Duv| ≤0.002 → 5; ≤0.004 → 4; ≤0.006 → 3; ≤0.008 → 2; >0.008 → 1']},
+ {id:nid(),type:'heading',text:'A5.5.5 Beam Angle Accuracy (weight 5%)'},
+ {id:nid(),type:'text',text:'Compute beam angle via arctan method from the measured illuminance grid. Compare to the lens-datasheet target.'},
+ {id:nid(),type:'checklist',items:['Measure half-max points on illuminance curve','Compute beam angle = 2 × arctan(half-width / distance)','Score: within ±5% of target → 5; ±10% → 4; ±15% → 3; ±20% → 2; >±20% → 1']},
+ {id:nid(),type:'heading',text:'A5.5.6 Mechanical Fit (weight 10%)'},
+ {id:nid(),type:'checklist',items:['Lens drops onto PCB without interference','Retention feature engages correctly','No stress on LED dome','Score: perfect no-touch fit → 5; minor rework → 3; requires new PCB → 1']},
+ {id:nid(),type:'heading',text:'A5.5.7 Unit Cost (weight 20%)'},
+ {id:nid(),type:'text',text:'Linear normalisation across candidates: cheapest = 5, most expensive = 1, others interpolated.'},
+ {id:nid(),type:'checklist',items:['Record quoted unit price at target volume','Apply linear normalisation vs cheapest candidate','Score 1–5']},
+ {id:nid(),type:'heading',text:'A5.5.8 Lead Time (weight 10%)'},
+ {id:nid(),type:'checklist',items:['Record quoted lead time in weeks','Score: ≤4 wk → 5; 4–6 → 4; 6–8 → 3; 8–12 → 2; >12 → 1']},
+]},
+
+{id:nid(),name:'A5.6: MTP Master Decision Matrix',blocks:[
+ {id:nid(),type:'text',text:'For each candidate lens, multiply each 1–5 score by its weight, then sum. Highest weighted total is the selected lens. Example: a lens scoring roughly 4/5/4/4/3/4/2/3 across the eight criteria with the standard weights produces a weighted total of ~3.55.'},
+ {id:nid(),type:'callout',style:'tip',title:'Decision Rule',lines:['Always test at both PCB pitches (25 mm, 30 mm) and both distances (0.5 m, 1.0 m) before finalising a winner.','Document the winning matrix in the project folder alongside the measured IES file.']},
+]},
+
+{id:nid(),name:'A5.7: Prototype Revision',blocks:[
+ {id:nid(),type:'checklist',items:['Review test results vs. specs','Identify required changes','Update CAD with revisions','Build second prototype if critical changes','Update BOM and cost estimate','Present prototype to client','Obtain approval before production tooling']},
+]},
+
+]},
+
+// ===================================================================
+// PART A6 — PRE-PRODUCTION ENGINEERING
+// Absorbs B5 DFM. Adds Mecalux BOM tree (after design is complete).
+// ===================================================================
+{id:nid(),name:'PART A6 — Pre-Production Engineering',desc:'Design is now frozen. Prepare the design for volume manufacturing: DFM, BOM tree, tooling.',sections:[
+
+{id:nid(),name:'A6.1: DFM Review',blocks:[
+ {id:nid(),type:'checklist',items:['Review with manufacturer for producibility','Optimize part count','Verify wall thickness for process','Add draft angles for die-cast (min 1°)','Specify corner radii (min 0.5 mm)','Design for standard tooling sizes','Minimize secondary operations','Review assembly sequence','Verify standard hardware','Design poke-yoke features','Confirm PCB panelization']},
+]},
+
+{id:nid(),name:'A6.2: DFM — Extrusion',blocks:[
+ {id:nid(),type:'checklist',items:['Min wall 1.0 mm (1.2 preferred)','Max profile width 200–250 mm','Uniform wall thickness','Hollow sections for weight','Snap-fit features','Heat-sink fins: H ≤10×T, gap ≥5 mm','Alloy: 6063-T5 / 6061-T6 / 6005A']},
+]},
+
+{id:nid(),name:'A6.3: DFM — Die-Cast',blocks:[
+ {id:nid(),type:'checklist',items:['Min wall 1.5 mm (2.0 preferred)','Draft: 1° external, 2° internal','Fillet corners: 0.5 mm min','Avoid undercuts','Uniform wall sections','Gate away from cosmetic faces','Alloy: A380 / A360 / ADC12']},
+]},
+
+{id:nid(),name:'A6.4: DFM — PCB / PCBA',blocks:[
+ {id:nid(),type:'checklist',items:['MCPCB stack-up specified','Dielectric conductivity confirmed','Panelization for SMT','Fiducials included','Thermal vias under high-power LEDs','LED footprint matches datasheet','Test pads for ICT','Surface finish: HASL / ENIG / OSP']},
+]},
+
+{id:nid(),name:'A6.5: BOM Tree — Bill of Materials Nomenclature (Mecalux)',blocks:[
+ {id:nid(),type:'text',text:'Once the design is complete, the BOM (Bill of Materials / nomenclature) becomes the single source of truth for manufacturing. Reference: "La nomenclature BOM: définition et conception" (Mecalux). A BOM is the complete list of raw materials, parts, sub-assemblies and quantities needed to manufacture a finished product. Every item gets a unique number and description.'},
+ {id:nid(),type:'heading',text:'A6.5.1 BOM Hierarchical Levels'},
+ {id:nid(),type:'text',text:'The BOM is organized as a tree. Level 0 is the finished product; each lower level decomposes the item above it into its components and sub-components.'},
+ {id:nid(),type:'callout',style:'standard',title:'BOM Tree Levels',lines:['Level 0 — Finished product (the luminaire, saleable SKU).','Level 1 — Direct sub-assemblies (housing assembly, light engine, driver module, optical module, cable assembly).','Level 2 — Components within each Level 1 sub-assembly (MCPCB, LED chips, lens, gasket, heat sink, driver, connectors).','Level 3 — Raw materials and purchased parts (aluminium billet 6063-T5, PCB laminate, screws M3×6, TIM, wire AWG18, etc.).','Level 4+ — Further decomposition as needed.']},
+ {id:nid(),type:'heading',text:'A6.5.2 Types of BOM Used at LightBase'},
+ {id:nid(),type:'checklist',items:['Engineering BOM (EBOM) — full design structure from SolidWorks; owned by Engineering','Manufacturing BOM (MBOM) — production-ordered structure; owned by Operations; includes consumables and packaging','Sales BOM (SBOM) — customer-facing configuration; owned by Sales; drives the part-number configurator','Configurable BOM — single master with options (CCT, beam angle, finish); used for the product family','Single-Level BOM — shows only direct parent→child; fast lookups','Multi-Level BOM — full recursive tree from finished product to raw material; used for costing and MRP']},
+ {id:nid(),type:'heading',text:'A6.5.3 Required Fields for Every BOM Line'},
+ {id:nid(),type:'checklist',items:['Item / line number (hierarchical: 1, 1.1, 1.1.1…)','LightBase internal part number','Description','Quantity per parent assembly','Unit of measurement (ea / mm / g / m)','Approved supplier / manufacturer P/N','Material specification / grade','Lead time','Unit cost','Drawing reference / STEP file reference']},
+ {id:nid(),type:'heading',text:'A6.5.4 Example BOM Tree — LightBase Linear Luminaire'},
+ {id:nid(),type:'callout',style:'standard',title:'Worked Example (abridged)',lines:['Level 0: LB-LINEAR-4FT-3000K-90CRI (finished product)','  Level 1: Housing Assembly','    Level 2: Extruded profile 6063-T5 × 1','    Level 2: End-cap (die-cast A380) × 2','    Level 2: Gasket (EPDM profile) × 1','    Level 2: M3 screws × 6','  Level 1: Light Engine','    Level 2: MCPCB (aluminium, 1.6 mm) × 1','    Level 2: LED Samsung LM301B × 48','    Level 2: Thermal interface (TIM) × 1','    Level 2: Optical lens (Asahi AF21D12H1060G) × 48','  Level 1: Driver Module','    Level 2: Driver 347V DALI-2 × 1','    Level 2: Driver cavity mount × 1','  Level 1: Cable Assembly','    Level 2: 18 AWG SOOW cable × 1.5 m','    Level 2: IP65 cable gland × 1','  Level 1: Packaging','    Level 2: Corrugated box × 1','    Level 2: Foam insert × 2','    Level 2: Install manual + cert label × 1']},
+ {id:nid(),type:'heading',text:'A6.5.5 BOM Gate — Before Production Release'},
+ {id:nid(),type:'checklist',items:['EBOM reconciled with MBOM — no orphan parts','Every Level 2+ item has an approved vendor and cost','Every line has a unique LightBase P/N','Configurable options documented on SBOM','BOM imported into ODOO / ERP','Costed BOM approved by Finance','Drawing pack referenced from every line']},
+ {id:nid(),type:'callout',style:'critical',title:'Gate Rule',lines:['No RFQ, tooling order, or PO is issued without a frozen, costed, multi-level BOM approved by Engineering + Operations + Finance.']},
+]},
+
+{id:nid(),name:'A6.6: Production Documentation',blocks:[
+ {id:nid(),type:'checklist',items:['Finalize drawings with full GD&T','Create STEP files','Generate fabrication PDFs','Prepare Pack-and-Go','Finalize BOM with approved vendors','Create production routing','Prepare QC report template','Write incoming inspection criteria','Define AQL sampling plan']},
+]},
+
+{id:nid(),name:'A6.7: Supplier & Tooling',blocks:[
+ {id:nid(),type:'checklist',items:['Issue RFQ with drawing package','Review supplier DFM feedback','Approve tooling','Request T1 samples','Inspect T1 vs. drawings','Approve or revise tooling','Negotiate pricing and lead times','Establish safety stock levels']},
+]},
+
+]},
+
+// ===================================================================
+// PART A7 — CERTIFICATION & COMPLIANCE (absorbs B6 third-party testing)
+// ===================================================================
+{id:nid(),name:'PART A7 — Certification & Compliance',desc:'Independent safety / photometric / EMC testing and listing for the target markets.',sections:[
+
+{id:nid(),name:'A7.1: Certification Planning',blocks:[
+ {id:nid(),type:'checklist',items:['Identify required certs: CSA, UL, CE, UKCA, DLC, RoHS, REACH','Select test lab','Prepare application with specs','Compile docs: reports, drawings, schematics, BOM','Submit samples (3–5 units)','Budget for cost and timeline (8–16 weeks)']},
+]},
+
+{id:nid(),name:'A7.2: Standards Compliance',blocks:[
+ {id:nid(),type:'checklist',items:['CSA C22.2 No. 250.0 — Luminaires','UL 1598 — Luminaires','UL 8750 — LED Equipment','FCC Part 15 / ICES-003 — EMC','DLC QPL requirements','RoHS 2011/65/EU','REACH screening','IP rating per IEC 60529','LM-79 by accredited lab','CE: LVD + EMC (if EU market)','UKCA (if UK market)']},
+ {id:nid(),type:'callout',style:'critical',title:'DLC Qualification',lines:['Min efficacy varies by category (check V5.1).','Colour: 2700K–5700K, CRI ≥ 80, Duv ±0.006.']},
+]},
+
+{id:nid(),name:'A7.3: Third-Party Testing',blocks:[
+ {id:nid(),type:'checklist',items:['LM-79 at accredited lab','Safety per UL 1598 / CSA 250.0','EMC per FCC Part 15 / ICES-003','IP per IEC 60529','Submit 3–5 samples','Address non-compliances','Obtain cert mark and listing','File reports in compliance binder']},
+]},
+
+]},
+
+// ===================================================================
+// PART A8 — DOCUMENTATION & DELIVERABLES (absorbs C1–C4)
+// ===================================================================
+{id:nid(),name:'PART A8 — Documentation & Deliverables',desc:'Product specsheet, brochure, warehouse assembly manual, and client installation manual.',sections:[
+
+{id:nid(),name:'A8.1: Product Specsheet',blocks:[
+ {id:nid(),type:'text',text:'The specsheet is the single most important product document.'},
+ {id:nid(),type:'heading',text:'A8.1.1 Header Block'},
+ {id:nid(),type:'checklist',items:['Lightbase logo (consistent placement)','Product family name and model number','One-line product description','Hero image: render or studio photo, white background']},
+ {id:nid(),type:'heading',text:'A8.1.2 Description & Features'},
+ {id:nid(),type:'checklist',items:['2–4 sentence description','Target applications listed','Key differentiators','Available configurations','6–10 feature bullets with benefits','Certifications highlighted']},
+ {id:nid(),type:'heading',text:'A8.1.3 Technical Specs Table'},
+ {id:nid(),type:'checklist',items:['Electrical: voltage, wattage, PF, THD','Photometric: lumens, efficacy, CCT, CRI, R9, Duv','Distribution: beam angle, IES Type, BUG, UGR','Physical: dimensions, weight, material, finish','Environmental: temp range, IP, IK','Controls: dimming, sensors, emergency','Lifetime: L70 / L80 / L90, warranty','Certifications with listing numbers','Standards: LM-79, LM-80, TM-21']},
+ {id:nid(),type:'callout',style:'standard',title:'Industry Standard Format',lines:['Two-column table: grey labels left, values right.','Group by: Electrical, Photometric, Physical, Environmental, Certs.']},
+ {id:nid(),type:'heading',text:'A8.1.4 Photometric Data & Drawings'},
+ {id:nid(),type:'checklist',items:['Polar candela diagram','Illuminance cone at mounting heights','Zonal lumen summary','Spacing criteria (S/MH)','IES file reference','Dimensional drawing (imperial + metric)','Mounting detail and cutout dims','Cable entry shown']},
+ {id:nid(),type:'heading',text:'A8.1.5 Ordering & Footer'},
+ {id:nid(),type:'checklist',items:['Ordering matrix with all options','Part-number configurator with legend','Accessories listed','Contact info','Certification logos','Revision and date','Disclaimer and copyright']},
+]},
+
+{id:nid(),name:'A8.2: Product Brochure',blocks:[
+ {id:nid(),type:'text',text:'Marketing document emphasizing visual appeal and brand positioning.'},
+ {id:nid(),type:'heading',text:'A8.2.1 Cover & Introduction'},
+ {id:nid(),type:'checklist',items:['Full-bleed hero image','Logo and tagline','Product / collection name','Aspirational headline','Company intro (2–3 sentences)','Design philosophy','Key value propositions']},
+ {id:nid(),type:'heading',text:'A8.2.2 Product Showcase'},
+ {id:nid(),type:'checklist',items:['Studio photography (white BG)','Lifestyle / application photos','4–6 hero metrics callout','Feature highlights with icons','Finish swatches','Multiple product views']},
+ {id:nid(),type:'heading',text:'A8.2.3 Application Gallery & Tech'},
+ {id:nid(),type:'checklist',items:['3–6 application photos','Captions: project, location, product','Beam patterns shown','Summary spec table (4–6 rows)','Certification logos','Reference to full specsheet','Call-to-action']},
+ {id:nid(),type:'heading',text:'A8.2.4 Design & Photography Standards'},
+ {id:nid(),type:'checklist',items:['Format: Letter, A4, or square','Page count: multiples of 4','300 DPI minimum','Brand fonts and colours','PDF/X-1a with bleed for print','Digital < 5 MB for email','Multi-angle studio shots','Beam effect photography','Consistent post-processing']},
+ {id:nid(),type:'callout',style:'standard',title:'Brochure Benchmarks',lines:['Zumtobel: full-bleed, minimal text, generous white space.','Lumitec: two-column, hero image top, specs bottom.']},
+]},
+
+{id:nid(),name:'A8.3: Warehouse Assembly Manual',blocks:[
+ {id:nid(),type:'text',text:'Internal production document. Must be clear, visual, and unambiguous.'},
+ {id:nid(),type:'heading',text:'A8.3.1 Cover & BOM'},
+ {id:nid(),type:'checklist',items:['Title: Assembly Manual — [Product/Model]','Doc number, revision, date','Prepared by / approved by','CONFIDENTIAL marking','BOM table: item, desc, P/N, qty','ERP BOM reference','Kit photo of all components','ESD items flagged']},
+ {id:nid(),type:'heading',text:'A8.3.2 Tools & Pre-Assembly'},
+ {id:nid(),type:'checklist',items:['Tools list with torque settings','PPE: ESD strap, gloves, glasses','Jigs / fixtures noted','Torque calibration requirements','Verify BOM completeness','Inspect housing cosmetically','Check LED board: P/N, solder','Verify driver label','Confirm wire colours / gauges','Clean ESD-protected surface']},
+ {id:nid(),type:'heading',text:'A8.3.3 Step-by-Step Assembly'},
+ {id:nid(),type:'checklist',items:['One action per step','Photo for EVERY step (annotated)','Exact torque values (Nm or in-lbs)','Wire polarity: + red, − black, GND green','QC HOLD POINT for critical ops','Time estimate per step','Sequential numbering, no gaps','Wiring diagram in electrical steps','Connector pinout and colours shown']},
+ {id:nid(),type:'callout',style:'critical',title:'QC Hold Points',lines:['Mandatory: thermal interface, LED torque, hipot, IP sealing, final test.','Document results on traveler for traceability.']},
+ {id:nid(),type:'heading',text:'A8.3.4 Final Test & Packaging'},
+ {id:nid(),type:'checklist',items:['Hipot test','Ground continuity ≤0.1Ω','Power-on: light, CCT, dimming','Input wattage ±10%','Visual inspection','Apply certification labels','Record serial / batch number','Packaging spec: box, foam, desiccant','Include manuals in box','Shipping label','Photo of packed unit']},
+]},
+
+{id:nid(),name:'A8.4: Client Installation Manual',blocks:[
+ {id:nid(),type:'text',text:'Included with every shipped product. Must be clear for any licensed electrician.'},
+ {id:nid(),type:'heading',text:'A8.4.1 Safety & ID'},
+ {id:nid(),type:'checklist',items:['DANGER / WARNING / CAUTION per ANSI Z535.6','Electrical shock warning','Weight warning if >10 lbs','Suitable for dry / damp / wet per listing','Temperature clearance for recessed','Grounding requirement','Model number and ratings','Certification marks']},
+ {id:nid(),type:'callout',style:'critical',title:'Certification Requirement',lines:['UL 1598 and CSA 250.0 REQUIRE installation instructions with every luminaire.']},
+ {id:nid(),type:'heading',text:'A8.4.2 Package Contents & Tools'},
+ {id:nid(),type:'checklist',items:['Illustration of box contents','Numbered list of all items','Items NOT included noted','Tools list: screwdriver, strippers, tester, drill']},
+ {id:nid(),type:'heading',text:'A8.4.3 Mounting & Wiring'},
+ {id:nid(),type:'checklist',items:['Step 1: Power off at breaker','Step 2: Mount bracket','Step 3: Wiring (L1: black, N: white, GND: green)','Step 4: Junction box connection','Step 5: Attach fixture','Step 6: Aim / adjust if applicable','Step 7: Install lens / cover','Step 8: Power on and verify','Wiring per voltage and dimming config','347V wiring diagram separate','DALI-2 and 0–10V diagrams','Junction box requirements','Max fixtures per circuit']},
+ {id:nid(),type:'heading',text:'A8.4.4 Exploded View & Maintenance'},
+ {id:nid(),type:'checklist',items:['Exploded view from SolidWorks','Numbered parts with legend','Mounting hardware shown installed','High-res export','Cleaning instructions','LED module replacement if applicable','Driver replacement if applicable','Annual inspection recommendation','Troubleshooting table','Support contact info','Warranty summary']},
+ {id:nid(),type:'heading',text:'A8.4.5 Design Standards'},
+ {id:nid(),type:'checklist',items:['Folded sheet or booklet format','Use Lightbase InDesign templates','Bilingual EN / FR for Canada','Min font 8pt body, 10pt warnings','ANSI warning symbols','Durable print stock','PDF on website and in folder','Submit to cert body','Standard electrical symbols','CEC wire colours','Separate voltage diagrams','Consistent symbol set']},
+ {id:nid(),type:'callout',style:'tip',title:'Installation Manual Tips',lines:['QR codes to video guides for complex products.','Have an electrician test-install using only the manual.']},
+]},
+
+{id:nid(),name:'A8.5: Regulatory & Archive',blocks:[
+ {id:nid(),type:'checklist',items:['Compile certificates and marks','Prepare Declaration of Conformity','File DLC listing application','Organize compliance binder','Archive certification correspondence','Archive SolidWorks Pack-and-Go','Store STEP files','Archive TracePro files','Compile material / finish specs']},
+]},
+
+]},
+
+// ===================================================================
+// PART A9 — PRODUCTION LAUNCH & QUALITY
+// ===================================================================
+{id:nid(),name:'PART A9 — Production Launch & Quality',desc:'Pilot run, full production, QC, ship.',sections:[
+
+{id:nid(),name:'A9.1: Pilot Production',blocks:[
+ {id:nid(),type:'checklist',items:['Produce pilot batch (10–25 units)','Full QC on pilot units','Time assembly, identify bottlenecks','Verify docs with production team','Photometric spot-check 3+ units','Verify packaging','Confirm labeling','Resolve issues before full run']},
+]},
+
+{id:nid(),name:'A9.2: Full Production',blocks:[
+ {id:nid(),type:'checklist',items:['Execute production order','Incoming inspection per AQL','Follow assembly manual','In-process QC checks','Final functional test every unit','Visual inspection','Package per spec','Complete QC reports','Ship']},
+ {id:nid(),type:'callout',style:'standard',title:'Statistical Quality Control',lines:['AQL: Critical 0%, Major 1.0%, Minor 2.5% per ISO 2859-1.']},
+]},
+
+]},
+
+// ===================================================================
+// PART A10 — DELIVERY, CLOSE-OUT & IMPROVEMENT
+// ===================================================================
+{id:nid(),name:'PART A10 — Delivery, Close-Out & Improvement',desc:'Ship, commission, debrief, and close the loop.',sections:[
+
+{id:nid(),name:'A10.1: Project Delivery',blocks:[
+ {id:nid(),type:'checklist',items:['Coordinate delivery logistics','Provide installation manual','Offer installation support','Post-installation commissioning','Deliver all documentation','Obtain client acceptance sign-off']},
+]},
+
+{id:nid(),name:'A10.2: Close-Out',blocks:[
+ {id:nid(),type:'checklist',items:['Internal debrief / lessons-learned','Document improvements','Archive project folder','Close in ODOO / ERP','Issue final invoice','Transfer to catalog if applicable','Schedule 30-day and 6-month follow-up']},
+]},
+
+{id:nid(),name:'A10.3: Continuous Improvement',blocks:[
+ {id:nid(),type:'checklist',items:['Collect field data: failures, complaints, RMA','Monitor competitors and trends','Evaluate new LEDs, drivers, materials','Update specsheets and IES files','Review this handbook annually']},
+]},
+
+]},
+
+];
+}
+
+// ===============================================================
+// RENDER ENGINE
+// ===============================================================
+function render(){
+  seedNav();
+  renderMain();
+  updateProgress();
+  setupScrollSpy();
+}
+
+let scrollSpyObserver=null;
+let scrollSpyVisible={};
+function setupScrollSpy(){
+  if(scrollSpyObserver){ scrollSpyObserver.disconnect(); }
+  scrollSpyVisible={};
+  const targets=document.querySelectorAll('[id^="sec_"], [id^="part_"]');
+  if(!targets.length) return;
+  scrollSpyObserver=new IntersectionObserver((entries)=>{
+    entries.forEach(en=>{
+      if(en.isIntersecting){
+        scrollSpyVisible[en.target.id]=en.boundingClientRect.top;
+      } else {
+        delete scrollSpyVisible[en.target.id];
+      }
+    });
+    updateScrollSpyHighlight();
+  },{rootMargin:'-80px 0px -60% 0px',threshold:0});
+  targets.forEach(t=>scrollSpyObserver.observe(t));
+}
+function updateScrollSpyHighlight(){
+  const ids=Object.keys(scrollSpyVisible);
+  if(!ids.length) return;
+  // pick the one closest to top (smallest top value that's >= 0 or the max negative)
+  let best=ids[0];
+  let bestVal=scrollSpyVisible[best];
+  ids.forEach(id=>{
+    const v=scrollSpyVisible[id];
+    if(bestVal<0 && v>bestVal) { best=id; bestVal=v; }
+    else if(bestVal>=0 && v>=0 && v<bestVal) { best=id; bestVal=v; }
+    else if(bestVal<0 && v>=0) { best=id; bestVal=v; }
+  });
+  // clear
+  document.querySelectorAll('.nav-item-wrap.active').forEach(el=>el.classList.remove('active'));
+  document.querySelectorAll('.nav-part-group.active-part').forEach(el=>el.classList.remove('active-part'));
+  if(best.startsWith('sec_')){
+    const parts=best.split('_'); // sec_pi_si
+    const pi=parts[1], si=parts[2];
+    const wrap=document.querySelector(`.nav-item-wrap[data-part="${pi}"][data-sec="${si}"]`);
+    if(wrap){
+      wrap.classList.add('active');
+      const partGroup=document.querySelector(`.nav-part-group[data-part="${pi}"]`);
+      if(partGroup) partGroup.classList.add('active-part');
+      // keep active item in view within sidebar
+      const sb=document.getElementById('sidebar');
+      if(sb){
+        const wr=wrap.getBoundingClientRect();
+        const sr=sb.getBoundingClientRect();
+        if(wr.top<sr.top+40 || wr.bottom>sr.bottom-40){
+          wrap.scrollIntoView({block:'nearest',behavior:'smooth'});
+        }
+      }
+    }
+  } else if(best.startsWith('part_')){
+    const pi=best.split('_')[1];
+    const partGroup=document.querySelector(`.nav-part-group[data-part="${pi}"]`);
+    if(partGroup) partGroup.classList.add('active-part');
+  }
+}
+
+function seedNav(){
+  const sb=document.getElementById('sidebar');
+  let h='';
+  data.parts.forEach((p,pi)=>{
+    h+=`<div class="nav-part-group" draggable="true" data-part="${pi}" ondragstart="dragStartPart(event,${pi})" ondragover="dragOverPart(event,${pi})" ondragleave="dragLeavePart(event)" ondrop="dropPart(event,${pi})" ondragend="dragEnd(event)">`;
+    h+=`<div class="nav-part">`;
+    h+=`<span class="drag-handle" title="Drag to reorder">&#9776;</span>`;
+    h+=`<span class="nav-label" onclick="goTo('part_${pi}')" title="${escA(p.name)}">${esc(p.name)}</span>`;
+    h+=`<span class="section-progress"><span class="sp-bar"><span class="sp-fill" id="spFill_${pi}" style="width:0%"></span></span><span id="spText_${pi}">0%</span></span>`;
+    h+=`<span class="nav-acts">`;
+    h+=`<button onclick="event.stopPropagation();showModal('editPart',${pi})" title="Edit Part">&#9998;</button>`;
+    h+=`<button class="del" onclick="event.stopPropagation();showModal('deletePart',${pi})" title="Delete Part">&#10005;</button>`;
+    h+=`</span>`;
+    h+=`</div>`;
+    p.sections.forEach((s,si)=>{
+      h+=`<div class="nav-item-wrap" draggable="true" data-part="${pi}" data-sec="${si}" ondragstart="dragStartSec(event,${pi},${si})" ondragover="dragOverSec(event,${pi},${si})" ondragleave="dragLeaveSec(event)" ondrop="dropSec(event,${pi},${si})" ondragend="dragEnd(event)">`;
+      h+=`<div class="nav-item">`;
+      h+=`<span class="drag-handle" title="Drag to reorder">&#8942;</span>`;
+      h+=`<span class="nav-label" onclick="goTo('sec_${pi}_${si}')" title="${escA(s.name)}">${esc(s.name)}</span>`;
+      h+=`<span class="nav-check" id="navCheck_${pi}_${si}"></span>`;
+      h+=`<span class="nav-acts">`;
+      h+=`<button onclick="event.stopPropagation();showModal('editSection',${pi},${si})" title="Edit Section">&#9998;</button>`;
+      h+=`<button class="del" onclick="event.stopPropagation();showModal('deleteSection',${pi},${si})" title="Delete Section">&#10005;</button>`;
+      h+=`</span>`;
+      h+=`</div>`;
+      h+=`</div>`;
+    });
+    h+=`<button class="nav-add" onclick="showModal('addSection',${pi})">+ Add Section</button>`;
+    h+=`</div>`;
+  });
+  h+=`<button class="nav-add-part" onclick="showModal('addPart')">+ Add New Part</button>`;
+  sb.innerHTML=h;
+}
+
+function goTo(id){
+  const el=document.getElementById(id);
+  if(!el) return;
+  // Account for sticky toolbar height (approx 52px desktop, ~48px mobile)
+  const toolbar=document.querySelector('.toolbar');
+  const offset=(toolbar?toolbar.offsetHeight:52)+12;
+  const rect=el.getBoundingClientRect();
+  const targetY=window.pageYOffset+rect.top-offset;
+  window.scrollTo({top:targetY,behavior:'smooth'});
+  if(window.innerWidth<=900) closeSidebar();
+}
+function toggleSidebar(){
+  const sb=document.getElementById('sidebar');
+  const bd=document.getElementById('sidebarBackdrop');
+  sb.classList.toggle('open');
+  bd.classList.toggle('show');
+}
+function closeSidebar(){
+  const sb=document.getElementById('sidebar');
+  const bd=document.getElementById('sidebarBackdrop');
+  sb.classList.remove('open');
+  bd.classList.remove('show');
+}
+
+function addStripHTML(pi,si,pos){
+  return `<section class="add-strip"><span class="add-strip-label">Add content &#8595;</span><button class="add-btn" onclick="insertBlock(${pi},${si},${pos},'checklist')">&#9745; Checklist</button><button class="add-btn" onclick="insertBlock(${pi},${si},${pos},'heading')">&#8466; Heading</button><button class="add-btn" onclick="insertBlock(${pi},${si},${pos},'text')">&#182; Text</button><button class="add-btn" onclick="insertBlock(${pi},${si},${pos},'callout')">&#9888; Callout</button></section>`;
+}
+
+function renderMain(){
+  const m=document.getElementById('main');
+  let h='';
+  h+=`<section class="cover"><span class="brand">${esc(data.title)}</span><br><span class="title">${esc(data.subtitle)}</span><br><span class="version">${esc(data.version)}</span><br><span class="sub">Fully Editable &mdash; Add, Edit, Remove Everything</span><br><span class="conf">CONFIDENTIAL &mdash; For Internal Use</span></section>`;
+
+  data.parts.forEach((p,pi)=>{
+    h+=`<section class="part-divider" id="part_${pi}"><h2>${esc(p.name)} <span class="acts"><button class="abtn" onclick="showModal('editPart',${pi})" title="Edit Part">&#9998;</button><button class="abtn del" onclick="showModal('deletePart',${pi})" title="Delete Part">&#10005;</button></span></h2><p>${esc(p.desc||'')}</p></section>`;
+
+    p.sections.forEach((s,si)=>{
+      h+=`<h1 id="sec_${pi}_${si}">${esc(s.name)} <span class="section-progress"><span class="sp-bar"><span class="sp-fill" id="secFill_${pi}_${si}" style="width:0%"></span></span><span id="secText_${pi}_${si}">0%</span></span> <span class="acts"><button class="abtn" onclick="showModal('editSection',${pi},${si})" title="Edit Section">&#9998;</button><button class="abtn del" onclick="showModal('deleteSection',${pi},${si})" title="Delete Section">&#10005;</button></span></h1>`;
+
+      // Track whether we've seen any non-heading content since the last heading
+      // Insert an add-strip before every heading (except the very first block)
+      // and always at the end of the section
+      s.blocks.forEach((b,bi)=>{
+        if(b.type==='heading' && bi>0){
+          // Close previous sub-group with an add-strip
+          h+=addStripHTML(pi,si,bi);
+        }
+        h+=renderBlock(b,pi,si,bi);
+      });
+
+      // Always add a final strip at the end of the section
+      h+=addStripHTML(pi,si,s.blocks.length);
+    });
+
+    h+=`<button class="add-btn" onclick="showModal('addSection',${pi})" style="margin:8px 0 24px;padding:10px 20px">+ Add Section to ${escA(p.name)}</button>`;
+  });
+
+  h+=`<button class="add-btn" onclick="showModal('addPart')" style="margin:24px 0;font-size:14px;padding:10px 24px">+ Add New Part</button>`;
+
+  m.innerHTML=h;
+}
+
+function renderBlock(b,pi,si,bi){
+  let h='';
+  const acts=`<span class="acts"><button class="abtn" onclick="showModal('editBlock',${pi},${si},${bi})" title="Edit">&#9998;</button><button class="abtn del" onclick="showModal('deleteBlock',${pi},${si},${bi})" title="Delete">&#10005;</button></span>`;
+
+  if(b.type==='heading'){
+    h+=`<h2>${esc(b.text)} ${acts}</h2>`;
+  } else if(b.type==='text'){
+    h+=`<p class="desc">${esc(b.text)} ${acts}</p>`;
+  } else if(b.type==='callout'){
+    h+=`<div class="callout ${b.style||'standard'}">${acts}<div class="callout-title">${b.style==='critical'?'&#9888; ':''}${b.style==='tip'?'&#128161; ':''}${b.style==='standard'?'&#9989; ':''}${esc(b.title||'')}</div>`;
+    (b.lines||[]).forEach(l=>{h+=`<div class="callout-line">${esc(l)}</div>`;});
+    h+=`</div>`;
+  } else if(b.type==='checklist'){
+    h+=`<section class="checklist-wrap" style="position:relative">${acts}`;
+    h+=`<table class="checklist-table"><thead><tr><th></th><th>Task</th><th>Owner</th><th>Date</th><th>&#128172;</th></tr></thead><tbody>`;
+    (b.items||[]).forEach((item,ii)=>{
+      const k=sKey(pi,si,bi,ii);
+      const st=gS(k);
+      const chk=st.checked?'checked':'';
+      const cls=st.checked?'done':'';
+      h+=`<tr class="${st.checked?'checked':''}" id="row_${k}">`;
+      h+=`<td data-label=""><input type="checkbox" ${chk} onchange="toggleCheck(${pi},${si},${bi},${ii})"></td>`;
+      h+=`<td data-label="Task"><span class="task-text ${cls}">${esc(item)}</span> <span class="acts"><button class="abtn" onclick="showModal('editItem',${pi},${si},${bi},${ii})" title="Edit">&#9998;</button><button class="abtn del" onclick="showModal('deleteItem',${pi},${si},${bi},${ii})" title="Delete">&#10005;</button></span></td>`;
+      h+=`<td data-label="Owner"><input type="text" value="${escA(st.owner)}" onchange="setOwner(${pi},${si},${bi},${ii},this.value)" placeholder="Assign..."></td>`;
+      h+=`<td data-label="Date"><input type="date" value="${escA(st.date)}" onchange="setDate(${pi},${si},${bi},${ii},this.value)"></td>`;
+      h+=`<td data-label=""><button class="comment-btn ${st.comment?'has-comment':''}" onclick="toggleComment('${k}')" title="Comment">&#128172;</button></td>`;
+      h+=`</tr>`;
+      h+=`<tr class="comment-row${st.comment?' has-content':''}" id="cmt_${k}" style="display:none"><td colspan="5"><textarea placeholder="Add a comment..." oninput="autoResize(this)" onchange="setComment('${k}',this.value)">${esc(st.comment)}</textarea><span class="comment-print">${st.comment?'💬 '+esc(st.comment):''}</span></td></tr>`;
+    });
+    h+=`</tbody></table>`;
+    h+=`<button class="add-btn" onclick="showModal('addItem',${pi},${si},${bi})" style="margin-top:4px">+ Add Item</button>`;
+    h+=`</section>`;
+  }
+  return h;
+}
+
+// ===============================================================
+// CHECKLIST INTERACTIONS
+// ===============================================================
+function toggleCheck(pi,si,bi,ii){
+  const k=sKey(pi,si,bi,ii);
+  const st=gS(k);
+  st.checked=!st.checked;
+  render();
+}
+function setOwner(pi,si,bi,ii,v){gS(sKey(pi,si,bi,ii)).owner=v;}
+function setDate(pi,si,bi,ii,v){gS(sKey(pi,si,bi,ii)).date=v;}
+function setComment(k,v){
+  gS(k).comment=v;
+  const row=document.getElementById('cmt_'+k);
+  if(row){
+    if(v) row.classList.add('has-content'); else row.classList.remove('has-content');
+    const printSpan=row.querySelector('.comment-print');
+    if(printSpan) printSpan.textContent=v?'💬 '+v:'';
+  }
+}
+function autoResize(el){
+  el.style.height='auto';
+  el.style.height=el.scrollHeight+'px';
+}
+function toggleComment(k){
+  const row=document.getElementById('cmt_'+k);
+  if(!row) return;
+  const showing=row.style.display==='none';
+  row.style.display=showing?'table-row':'none';
+  if(showing){
+    const ta=row.querySelector('textarea');
+    if(ta){ta.focus();autoResize(ta);}
+  }
+}
+
+// ===============================================================
+// PROGRESS TRACKING
+// ===============================================================
+function updateProgress(){
+  let totalAll=0, checkedAll=0;
+  data.parts.forEach((p,pi)=>{
+    let totalPart=0, checkedPart=0;
+    p.sections.forEach((s,si)=>{
+      let totalSec=0, checkedSec=0;
+      s.blocks.forEach((b,bi)=>{
+        if(b.type==='checklist'){
+          (b.items||[]).forEach((item,ii)=>{
+            totalSec++;
+            if(gS(sKey(pi,si,bi,ii)).checked) checkedSec++;
+          });
+        }
+      });
+      totalPart+=totalSec; checkedPart+=checkedSec;
+      const secPct=totalSec?Math.round(checkedSec/totalSec*100):0;
+      const sf=document.getElementById('secFill_'+pi+'_'+si);
+      const st=document.getElementById('secText_'+pi+'_'+si);
+      if(sf) sf.style.width=secPct+'%';
+      if(st) st.textContent=secPct+'%';
+      const nc=document.getElementById('navCheck_'+pi+'_'+si);
+      if(nc){nc.textContent=secPct===100?'✓ Done':checkedSec+'/'+totalSec; nc.className='nav-check'+(secPct===100?' done':'');}
+    });
+    totalAll+=totalPart; checkedAll+=checkedPart;
+    const partPct=totalPart?Math.round(checkedPart/totalPart*100):0;
+    const pf=document.getElementById('spFill_'+pi);
+    const pt=document.getElementById('spText_'+pi);
+    if(pf) pf.style.width=partPct+'%';
+    if(pt) pt.textContent=partPct+'%';
+  });
+  const globalPct=totalAll?Math.round(checkedAll/totalAll*100):0;
+  document.getElementById('globalProgress').style.width=globalPct+'%';
+  document.getElementById('globalProgressText').textContent=globalPct+'%';
+}
+
+// ===============================================================
+// MODAL SYSTEM
+// ===============================================================
+let modalCtx={};
+function showModal(action,a,b,c,d){
+  modalCtx={action,a,b,c,d};
+  const mc=document.getElementById('modalContent');
+  let h='';
+
+  switch(action){
+    case 'addPart':
+      h=`<h3>Add New Part</h3><label>Part Name</label><input id="mName" placeholder="e.g. PART D — TEMPLATES"><label>Description</label><textarea id="mDesc" placeholder="Brief description..."></textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doAddPart()">Add Part</button></div>`;
+      break;
+    case 'editPart':
+      h=`<h3>Edit Part</h3><label>Part Name</label><input id="mName" value="${escA(data.parts[a].name)}"><label>Description</label><textarea id="mDesc">${esc(data.parts[a].desc||'')}</textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doEditPart()">Save</button></div>`;
+      break;
+    case 'deletePart':
+      h=`<h3>Delete Part?</h3><p>Are you sure you want to delete <strong>${esc(data.parts[a].name)}</strong> and all its sections?</p><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-danger" onclick="doDeletePart()">Delete</button></div>`;
+      break;
+    case 'addSection':
+      h=`<h3>Add Section</h3><p>Adding to: <strong>${esc(data.parts[a].name)}</strong></p><label>Section Name</label><input id="mName" placeholder="e.g. New Section Title"><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doAddSection()">Add Section</button></div>`;
+      break;
+    case 'editSection':
+      h=`<h3>Edit Section</h3><label>Section Name</label><input id="mName" value="${escA(data.parts[a].sections[b].name)}"><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doEditSection()">Save</button></div>`;
+      break;
+    case 'deleteSection':
+      h=`<h3>Delete Section?</h3><p>Delete <strong>${esc(data.parts[a].sections[b].name)}</strong> and all its content?</p><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-danger" onclick="doDeleteSection()">Delete</button></div>`;
+      break;
+    case 'addBlock':
+      if(c==='checklist'){
+        h=`<h3>Add Checklist</h3><label>Items (one per line)</label><textarea id="mItems" rows="8" placeholder="First item\nSecond item\nThird item"></textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doAddBlock()">Add</button></div>`;
+      } else if(c==='heading'){
+        h=`<h3>Add Heading</h3><label>Heading Text</label><input id="mText" placeholder="Section heading..."><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doAddBlock()">Add</button></div>`;
+      } else if(c==='text'){
+        h=`<h3>Add Text</h3><label>Paragraph Text</label><textarea id="mText" placeholder="Descriptive text..."></textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doAddBlock()">Add</button></div>`;
+      } else if(c==='callout'){
+        h=`<h3>Add Callout</h3><label>Style</label><select id="mStyle"><option value="standard">Standard (Green)</option><option value="tip">Tip (Orange)</option><option value="critical">Critical (Red)</option></select><label>Title</label><input id="mTitle" placeholder="Callout title..."><label>Lines (one per line)</label><textarea id="mItems" rows="4" placeholder="First line\nSecond line"></textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doAddBlock()">Add</button></div>`;
+      }
+      break;
+    case 'editBlock': {
+      const blk=data.parts[a].sections[b].blocks[c];
+      if(blk.type==='checklist'){
+        h=`<h3>Edit Checklist Items</h3><label>Items (one per line)</label><textarea id="mItems" rows="10">${esc((blk.items||[]).join('\n'))}</textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doEditBlock()">Save</button></div>`;
+      } else if(blk.type==='heading'){
+        h=`<h3>Edit Heading</h3><label>Heading Text</label><input id="mText" value="${escA(blk.text)}"><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doEditBlock()">Save</button></div>`;
+      } else if(blk.type==='text'){
+        h=`<h3>Edit Text</h3><label>Paragraph Text</label><textarea id="mText">${esc(blk.text)}</textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doEditBlock()">Save</button></div>`;
+      } else if(blk.type==='callout'){
+        h=`<h3>Edit Callout</h3><label>Style</label><select id="mStyle"><option value="standard" ${blk.style==='standard'?'selected':''}>Standard (Green)</option><option value="tip" ${blk.style==='tip'?'selected':''}>Tip (Orange)</option><option value="critical" ${blk.style==='critical'?'selected':''}>Critical (Red)</option></select><label>Title</label><input id="mTitle" value="${escA(blk.title||'')}"><label>Lines (one per line)</label><textarea id="mItems" rows="4">${esc((blk.lines||[]).join('\n'))}</textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doEditBlock()">Save</button></div>`;
+      }
+      break;
+    }
+    case 'deleteBlock': {
+      const blk2=data.parts[a].sections[b].blocks[c];
+      const label=blk2.type==='checklist'?'checklist ('+((blk2.items||[]).length)+' items)':blk2.type+': "'+((blk2.text||blk2.title||'').substring(0,40))+'..."';
+      h=`<h3>Delete Block?</h3><p>Delete this ${esc(label)}?</p><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-danger" onclick="doDeleteBlock()">Delete</button></div>`;
+      break;
+    }
+    case 'addItem':
+      h=`<h3>Add Checklist Item</h3><label>Item Text</label><textarea id="mText" placeholder="New checklist item..."></textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doAddItem()">Add</button></div>`;
+      break;
+    case 'editItem': {
+      const itm=data.parts[a].sections[b].blocks[c].items[d];
+      h=`<h3>Edit Item</h3><label>Item Text</label><textarea id="mText">${esc(itm)}</textarea><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doEditItem()">Save</button></div>`;
+      break;
+    }
+    case 'deleteItem': {
+      const itm2=data.parts[a].sections[b].blocks[c].items[d];
+      h=`<h3>Delete Item?</h3><p>Delete: "${esc((itm2||'').substring(0,80))}"?</p><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-danger" onclick="doDeleteItem()">Delete</button></div>`;
+      break;
+    }
+    case 'reset':
+      h=`<h3>Reset Everything?</h3><p>This will reset all content back to defaults and clear progress in this browser tab. Your saved revisions in the database are NOT affected.</p><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-danger" onclick="doReset()">Reset</button></div>`;
+      break;
+    case 'saveAs':
+      h=`<h3>Save Revision</h3><p>This will create a new revision in your history. You can rename or delete revisions later.</p><label>Revision Name</label><input id="mName" placeholder="e.g. Pre-client review draft"><div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm" onclick="doSaveAsConfirm()">Save</button></div>`;
+      break;
+    case 'confirmFinal':
+      h=`<h3>Submit as Final?</h3><p>This marks the current revision as <strong>Final</strong>. The revision stays editable &mdash; later saves will keep its Final status until you revert it.</p>${currentRevisionId==null?'<p style="color:#888;font-size:12px">No revision is loaded yet, so a new one will be created.</p>':''}<div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-confirm success" style="background:var(--green);border:none;color:#fff" onclick="doConfirmFinal()">Submit as Final</button></div>`;
+      break;
+    case 'openList':
+      h=renderRevisionListModal();
+      break;
+    case 'confirmDeleteRev': {
+      const rev=(revisionListCache||[]).find(r=>r.id===a);
+      h=`<h3>Delete Revision?</h3><p>Delete <strong>${esc(rev?rev.name:'this revision')}</strong>? This cannot be undone.</p><div class="modal-actions"><button class="btn-cancel" onclick="showModal('openList')">Cancel</button><button class="btn-danger" onclick="deleteRevision(${a})">Delete</button></div>`;
+      break;
+    }
+  }
+  mc.innerHTML=h;
+  document.getElementById('modalOverlay').classList.add('show');
+  const firstInput=mc.querySelector('input,textarea,select');
+  if(firstInput) setTimeout(()=>firstInput.focus(),100);
+}
+
+function hideModal(){
+  document.getElementById('modalOverlay').classList.remove('show');
+}
+
+function renderRevisionListModal(){
+  // Async refresh kicks off in the background; we render with whatever cache
+  // we have and refresh in place once the fetch resolves.
+  refreshRevisionList().then(()=>{
+    if(document.getElementById('modalOverlay').classList.contains('show')&&modalCtx.action==='openList'){
+      const mc=document.getElementById('modalContent');
+      if(mc) mc.innerHTML=renderRevisionListModal();
+    }
+  });
+  const list=revisionListCache;
+  let body='';
+  if(list==null){
+    body='<div class="rev-empty">Loading…</div>';
+  } else if(!list.length){
+    body='<div class="rev-empty">No saved revisions yet. Use Save to create your first one.</div>';
+  } else {
+    body='<ul class="rev-list">';
+    list.forEach(r=>{
+      const isCurrent=currentRevisionId===r.id;
+      body+=`<li class="rev-list-item ${isCurrent?'is-current':''}">`;
+      body+=`<div class="rev-info"><div class="rev-title">${esc(r.name)}<span class="rev-status-pill ${r.status}">${r.status}</span>${isCurrent?'<span class="rev-status-pill draft" style="border-color:var(--accent-blue);color:var(--accent-blue);background:#E3EEF9">loaded</span>':''}</div><div class="rev-meta">Updated ${esc(fmtRevDate(r.updatedAt))} · Created ${esc(fmtRevDate(r.createdAt))}</div></div>`;
+      body+=`<div class="rev-actions">`;
+      body+=`<button onclick="loadRevision(${r.id});hideModal()" title="Load this revision">Load</button>`;
+      body+=`<button onclick="renameRevisionPrompt(${r.id},${JSON.stringify(r.name)})" title="Rename">Rename</button>`;
+      body+=`<button class="del" onclick="showModal('confirmDeleteRev',${r.id})" title="Delete">Delete</button>`;
+      body+=`</div>`;
+      body+=`</li>`;
+    });
+    body+='</ul>';
+  }
+  return `<h3>Open Revision</h3><p>Pick a saved revision to load. Loading replaces what's on screen, but your other revisions stay safe in the database.</p>${body}<div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Close</button></div>`;
+}
+
+function doSaveAsConfirm(){
+  const name=(document.getElementById('mName').value||'').trim();
+  hideModal();
+  saveAsNew(name||'',null);
+}
+
+function doConfirmFinal(){
+  hideModal();
+  submitAsFinal();
+}
+
+// ===============================================================
+// DRAG & DROP - PARTS
+// ===============================================================
+let dragType=null, dragFrom=null;
+
+function dragStartPart(e,pi){
+  dragType='part'; dragFrom=pi;
+  e.dataTransfer.effectAllowed='move';
+  e.dataTransfer.setData('text/plain',pi);
+  setTimeout(()=>e.target.classList.add('dragging'),0);
+}
+function dragOverPart(e,pi){
+  if(dragType!=='part') return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  clearDragClasses();
+  const rect=e.currentTarget.getBoundingClientRect();
+  const mid=rect.top+rect.height/2;
+  if(e.clientY<mid) e.currentTarget.classList.add('drag-over-top');
+  else e.currentTarget.classList.add('drag-over-bottom');
+}
+function dragLeavePart(e){
+  e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');
+}
+function dropPart(e,targetPi){
+  e.preventDefault();
+  clearDragClasses();
+  if(dragType!=='part'||dragFrom===null||dragFrom===targetPi) return;
+  const rect=e.currentTarget.getBoundingClientRect();
+  const mid=rect.top+rect.height/2;
+  let to=e.clientY<mid?targetPi:targetPi+1;
+  if(dragFrom<to) to--;
+  if(dragFrom===to) return;
+  const part=data.parts.splice(dragFrom,1)[0];
+  data.parts.splice(to,0,part);
+  renumberAll();
+  rebuildState();
+  render();
+  toast('Part moved');
+}
+
+// ===============================================================
+// DRAG & DROP - SECTIONS (within same part)
+// ===============================================================
+let dragSecFrom=null;
+
+function dragStartSec(e,pi,si){
+  dragType='sec'; dragFrom=pi; dragSecFrom=si;
+  e.dataTransfer.effectAllowed='move';
+  e.dataTransfer.setData('text/plain',pi+'_'+si);
+  e.stopPropagation();
+  setTimeout(()=>e.target.classList.add('dragging'),0);
+}
+function dragOverSec(e,pi,si){
+  if(dragType!=='sec'||dragFrom!==pi) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect='move';
+  e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');
+  const rect=e.currentTarget.getBoundingClientRect();
+  const mid=rect.top+rect.height/2;
+  if(e.clientY<mid) e.currentTarget.classList.add('drag-over-top');
+  else e.currentTarget.classList.add('drag-over-bottom');
+}
+function dragLeaveSec(e){
+  e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');
+}
+function dropSec(e,pi,targetSi){
+  e.preventDefault();
+  e.stopPropagation();
+  clearDragClasses();
+  if(dragType!=='sec'||dragFrom!==pi||dragSecFrom===null||dragSecFrom===targetSi) return;
+  const rect=e.currentTarget.getBoundingClientRect();
+  const mid=rect.top+rect.height/2;
+  let to=e.clientY<mid?targetSi:targetSi+1;
+  if(dragSecFrom<to) to--;
+  if(dragSecFrom===to) return;
+  const sec=data.parts[pi].sections.splice(dragSecFrom,1)[0];
+  data.parts[pi].sections.splice(to,0,sec);
+  renumberAll();
+  rebuildState();
+  render();
+  toast('Section moved');
+}
+
+function dragEnd(e){
+  dragType=null; dragFrom=null; dragSecFrom=null;
+  clearDragClasses();
+}
+function clearDragClasses(){
+  document.querySelectorAll('.dragging,.drag-over-top,.drag-over-bottom').forEach(el=>{
+    el.classList.remove('dragging','drag-over-top','drag-over-bottom');
+  });
+}
+
+// ===============================================================
+// AUTO-RENUMBER - updates section names and heading prefixes
+// ===============================================================
+function renumberAll(){
+  const partLetters=['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'];
+  data.parts.forEach((p,pi)=>{
+    // If the part name contains an explicit "A1", "A10", "B3" etc. prefix,
+    // use that as the base (e.g. "PART A3 - Detailed Design" -> basePrefix "A3").
+    // Otherwise fall back to positional letter (A, B, C...).
+    const m=p.name.match(/\b([A-Z])(\d+)\b/);
+    const explicit=!!m;
+    const basePrefix=explicit?(m[1]+m[2]):(pi<partLetters.length?partLetters[pi]:('P'+(pi+1)));
+
+    p.sections.forEach((s,si)=>{
+      const num=si+1;
+      // For explicit A-parts the section becomes "A3.1", "A3.2" etc.
+      // For positional parts it stays "A1", "B2" etc. (legacy behaviour).
+      const newPrefix=explicit?(basePrefix+'.'+num):(basePrefix+num);
+      // Strip any existing "A1:", "A1.2:", "B10:", "Stage 3:", etc.
+      const stripped=s.name.replace(/^[A-Z]\d+(?:\.\d+)?\s*:\s*/,'').replace(/^Stage\s+\d+\s*:\s*/,'');
+      s.name=newPrefix+': '+stripped;
+
+      // Renumber heading blocks inside this section.
+      let subNum=1;
+      s.blocks.forEach(b=>{
+        if(b.type==='heading'){
+          // Strip any existing "A3.2.1", "A3.2", "10.3" etc. prefix
+          const headStripped=b.text.replace(/^[A-Z]?\d+(?:\.\d+){0,2}\s*/,'');
+          b.text=newPrefix+'.'+subNum+' '+headStripped;
+          subNum++;
+        }
+      });
+    });
+  });
+}
+
+// ===============================================================
+// CRUD HANDLERS
+// ===============================================================
+function doAddPart(){
+  const name=document.getElementById('mName').value.trim();
+  if(!name){toast('Please enter a name');return;}
+  data.parts.push({id:nid(),name,desc:document.getElementById('mDesc').value.trim(),sections:[]});
+  hideModal(); render(); toast('Part added');
+}
+function doEditPart(){
+  const p=data.parts[modalCtx.a];
+  p.name=document.getElementById('mName').value.trim()||p.name;
+  p.desc=document.getElementById('mDesc').value.trim();
+  hideModal(); render(); toast('Part updated');
+}
+function doDeletePart(){
+  data.parts.splice(modalCtx.a,1);
+  rebuildState();
+  hideModal(); render(); toast('Part deleted');
+}
+function doAddSection(){
+  const name=document.getElementById('mName').value.trim();
+  if(!name){toast('Please enter a name');return;}
+  data.parts[modalCtx.a].sections.push({id:nid(),name,blocks:[]});
+  hideModal(); render(); toast('Section added');
+}
+function doEditSection(){
+  const s=data.parts[modalCtx.a].sections[modalCtx.b];
+  s.name=document.getElementById('mName').value.trim()||s.name;
+  hideModal(); render(); toast('Section updated');
+}
+function doDeleteSection(){
+  data.parts[modalCtx.a].sections.splice(modalCtx.b,1);
+  rebuildState();
+  hideModal(); render(); toast('Section deleted');
+}
+function insertBlock(pi,si,pos,type){
+  modalCtx={action:'insertBlock',a:pi,b:si,c:type,d:pos};
+  let block;
+  if(type==='checklist') block={id:nid(),type:'checklist',items:['New checklist item']};
+  else if(type==='heading') block={id:nid(),type:'heading',text:'New Heading'};
+  else if(type==='text') block={id:nid(),type:'text',text:'New text paragraph.'};
+  else if(type==='callout') block={id:nid(),type:'callout',style:'standard',title:'New Callout',lines:['Details here.']};
+  data.parts[pi].sections[si].blocks.splice(pos,0,block);
+  rebuildState(); render(); toast(type+' inserted');
+}
+function doAddBlock(){
+  const type=modalCtx.c;
+  let block;
+  if(type==='checklist'){
+    const items=(document.getElementById('mItems').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+    if(!items.length){toast('Add at least one item');return;}
+    block={id:nid(),type:'checklist',items};
+  } else if(type==='heading'){
+    const text=document.getElementById('mText').value.trim();
+    if(!text){toast('Enter heading text');return;}
+    block={id:nid(),type:'heading',text};
+  } else if(type==='text'){
+    const text=document.getElementById('mText').value.trim();
+    if(!text){toast('Enter text');return;}
+    block={id:nid(),type:'text',text};
+  } else if(type==='callout'){
+    const title=document.getElementById('mTitle').value.trim();
+    if(!title){toast('Enter title');return;}
+    block={id:nid(),type:'callout',style:document.getElementById('mStyle').value,title,lines:(document.getElementById('mItems').value||'').split('\n').map(s=>s.trim()).filter(Boolean)};
+  }
+  data.parts[modalCtx.a].sections[modalCtx.b].blocks.push(block);
+  hideModal(); render(); toast('Block added');
+}
+function doEditBlock(){
+  const blk=data.parts[modalCtx.a].sections[modalCtx.b].blocks[modalCtx.c];
+  if(blk.type==='checklist'){
+    const items=(document.getElementById('mItems').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+    blk.items=items;
+  } else if(blk.type==='heading'||blk.type==='text'){
+    blk.text=document.getElementById('mText').value.trim()||blk.text;
+  } else if(blk.type==='callout'){
+    blk.style=document.getElementById('mStyle').value;
+    blk.title=document.getElementById('mTitle').value.trim()||blk.title;
+    blk.lines=(document.getElementById('mItems').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  }
+  rebuildState();
+  hideModal(); render(); toast('Block updated');
+}
+function doDeleteBlock(){
+  data.parts[modalCtx.a].sections[modalCtx.b].blocks.splice(modalCtx.c,1);
+  rebuildState();
+  hideModal(); render(); toast('Block deleted');
+}
+function doAddItem(){
+  const text=document.getElementById('mText').value.trim();
+  if(!text){toast('Enter item text');return;}
+  data.parts[modalCtx.a].sections[modalCtx.b].blocks[modalCtx.c].items.push(text);
+  hideModal(); render(); toast('Item added');
+}
+function doEditItem(){
+  const text=document.getElementById('mText').value.trim();
+  if(!text){toast('Enter item text');return;}
+  data.parts[modalCtx.a].sections[modalCtx.b].blocks[modalCtx.c].items[modalCtx.d]=text;
+  hideModal(); render(); toast('Item updated');
+}
+function doDeleteItem(){
+  data.parts[modalCtx.a].sections[modalCtx.b].blocks[modalCtx.c].items.splice(modalCtx.d,1);
+  rebuildState();
+  hideModal(); render(); toast('Item deleted');
+}
+function doReset(){
+  itemState={};
+  _uid=0;
+  seedData();
+  hideModal(); render(); toast('All reset to defaults');
+}
+
+// Rebuild itemState keys after structural changes
+function rebuildState(){
+  const newState={};
+  data.parts.forEach((p,pi)=>{
+    p.sections.forEach((s,si)=>{
+      s.blocks.forEach((b,bi)=>{
+        if(b.type==='checklist'){
+          (b.items||[]).forEach((item,ii)=>{
+            const newK=sKey(pi,si,bi,ii);
+            // Try to find existing state - best-effort match
+            newState[newK]=itemState[newK]||{checked:false,owner:'',date:'',comment:''};
+          });
+        }
+      });
+    });
+  });
+  itemState=newState;
+}
+
+// ===============================================================
+// REVISION STATE + DATABASE PERSISTENCE
+// ===============================================================
+let currentRevisionId=null;
+let currentRevisionName='';
+let currentRevisionStatus=null; // 'draft' | 'final' | null
+let revDirty=false;
+let revisionListCache=null;
+
+function markDirty(){ revDirty=true; updateRevisionIndicator(); }
+function markClean(){ revDirty=false; updateRevisionIndicator(); }
+
+function updateRevisionIndicator(){
+  const nameEl=document.getElementById('revIndicatorName');
+  const badgeEl=document.getElementById('revIndicatorBadge');
+  if(!nameEl||!badgeEl) return;
+  if(currentRevisionId==null){
+    nameEl.textContent=revDirty?'Unsaved draft':'No revision loaded';
+    badgeEl.className='rev-badge unsaved';
+    badgeEl.textContent=revDirty?'unsaved':'new';
+    return;
+  }
+  nameEl.textContent=currentRevisionName||'Untitled';
+  if(revDirty){
+    badgeEl.className='rev-badge unsaved';
+    badgeEl.textContent='unsaved*';
+  } else if(currentRevisionStatus==='final'){
+    badgeEl.className='rev-badge final';
+    badgeEl.textContent='final';
+  } else {
+    badgeEl.className='rev-badge draft';
+    badgeEl.textContent='draft';
+  }
+}
+
+async function apiFetch(path,opts){
+  const res=await fetch(path,Object.assign({headers:{'Content-Type':'application/json'},credentials:'same-origin'},opts||{}));
+  if(res.status===401){
+    toast('Sign in required to use saved revisions.');
+    throw new Error('Unauthorized');
+  }
+  if(!res.ok){
+    let msg='Request failed';
+    try { const j=await res.json(); msg=j.error||msg; } catch{}
+    toast('Error: '+msg);
+    throw new Error(msg);
+  }
+  return res.status===204?null:res.json();
+}
+
+function snapshot(){ return {data,itemState,_uid}; }
+
+async function saveProgress(){
+  // If a revision is loaded, update it in place. Otherwise prompt for a name
+  // and create a new one. Saving NEVER changes a final back to a draft.
+  try {
+    if(currentRevisionId!=null){
+      const j=await apiFetch('/api/handbook/revisions/'+currentRevisionId,{
+        method:'PATCH',
+        body:JSON.stringify({content:snapshot()})
+      });
+      if(j&&j.revision){
+        currentRevisionName=j.revision.name;
+        currentRevisionStatus=j.revision.status;
+        revisionListCache=null;
+        markClean();
+        toast('Saved');
+      }
+    } else {
+      showModal('saveAs');
+    }
+  } catch(_e){ /* toast already shown */ }
+}
+
+async function saveAsNew(name,statusOverride){
+  try {
+    const j=await apiFetch('/api/handbook/revisions',{
+      method:'POST',
+      body:JSON.stringify({name:name,content:snapshot(),status:statusOverride||'draft'})
+    });
+    if(j&&j.revision){
+      currentRevisionId=j.revision.id;
+      currentRevisionName=j.revision.name;
+      currentRevisionStatus=j.revision.status;
+      revisionListCache=null;
+      markClean();
+      toast('Saved as "'+currentRevisionName+'"');
+    }
+  } catch(_e){ /* toast already shown */ }
+}
+
+async function submitAsFinal(){
+  // Submitting saves the current state with status='final'. The row remains
+  // editable afterward — saving a finalised revision keeps it final unless
+  // the user explicitly reverts via the Open list.
+  try {
+    if(currentRevisionId==null){
+      // No revision yet — save a new one straight to final.
+      const name=(prompt('Name this final revision:','Final '+new Date().toISOString().slice(0,10))||'').trim();
+      if(!name) return;
+      await saveAsNew(name,'final');
+      return;
+    }
+    const j=await apiFetch('/api/handbook/revisions/'+currentRevisionId,{
+      method:'PATCH',
+      body:JSON.stringify({content:snapshot(),status:'final'})
+    });
+    if(j&&j.revision){
+      currentRevisionStatus=j.revision.status;
+      currentRevisionName=j.revision.name;
+      revisionListCache=null;
+      markClean();
+      toast('Submitted as Final');
+    }
+  } catch(_e){ /* toast already shown */ }
+}
+
+async function loadRevision(id){
+  try {
+    const j=await apiFetch('/api/handbook/revisions/'+id);
+    if(!j||!j.revision) return;
+    const c=j.revision.content||{};
+    if(c.data) data=c.data;
+    if(c.itemState) itemState=c.itemState; else itemState={};
+    if(typeof c._uid==='number') _uid=c._uid;
+    currentRevisionId=j.revision.id;
+    currentRevisionName=j.revision.name;
+    currentRevisionStatus=j.revision.status;
+    revDirty=false;
+    render();
+    toast('Loaded "'+currentRevisionName+'"');
+  } catch(_e){ /* toast already shown */ }
+}
+
+async function deleteRevision(id){
+  try {
+    await apiFetch('/api/handbook/revisions/'+id,{method:'DELETE'});
+    if(currentRevisionId===id){
+      currentRevisionId=null;
+      currentRevisionName='';
+      currentRevisionStatus=null;
+      revDirty=true;
+    }
+    revisionListCache=null;
+    toast('Revision deleted');
+    showModal('openList');
+  } catch(_e){ /* toast already shown */ }
+}
+
+async function renameRevisionPrompt(id,oldName){
+  const next=(prompt('Rename revision:',oldName)||'').trim();
+  if(!next||next===oldName) return;
+  try {
+    const j=await apiFetch('/api/handbook/revisions/'+id,{
+      method:'PATCH',
+      body:JSON.stringify({name:next})
+    });
+    if(j&&j.revision){
+      if(currentRevisionId===id){
+        currentRevisionName=j.revision.name;
+        updateRevisionIndicator();
+      }
+      revisionListCache=null;
+      toast('Renamed');
+      showModal('openList');
+    }
+  } catch(_e){ /* toast already shown */ }
+}
+
+async function refreshRevisionList(){
+  try {
+    const j=await apiFetch('/api/handbook/revisions');
+    revisionListCache=(j&&j.revisions)||[];
+    return revisionListCache;
+  } catch(_e){
+    revisionListCache=[];
+    return [];
+  }
+}
+
+function fmtRevDate(s){
+  if(!s) return '';
+  const d=new Date(s);
+  if(Number.isNaN(d.getTime())) return '';
+  const pad=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+
+// ===============================================================
+// AUTO-MARK MUTATIONS AS DIRTY
+// Hook the existing CRUD handlers so the toolbar indicator reflects unsaved
+// edits. Wraps the original functions with markDirty() afterwards.
+// ===============================================================
+[
+  'toggleCheck','setOwner','setDate','setComment',
+  'insertBlock','doAddPart','doEditPart','doDeletePart',
+  'doAddSection','doEditSection','doDeleteSection',
+  'doAddBlock','doEditBlock','doDeleteBlock',
+  'doAddItem','doEditItem','doDeleteItem','doReset'
+].forEach(fn=>{
+  const original=window[fn];
+  if(typeof original!=='function') return;
+  window[fn]=function(){
+    const r=original.apply(this,arguments);
+    if(fn==='doReset'){
+      currentRevisionId=null;
+      currentRevisionName='';
+      currentRevisionStatus=null;
+    }
+    markDirty();
+    return r;
+  };
+});
+
+// ===============================================================
+// INIT
+// ===============================================================
+document.getElementById('modalOverlay').addEventListener('click',function(e){
+  if(e.target===this) hideModal();
+});
+
+window.addEventListener('beforeunload',function(e){
+  if(revDirty){
+    e.preventDefault();
+    e.returnValue='You have unsaved changes. Leave anyway?';
+    return e.returnValue;
+  }
+});
+
+seedData();
+render();
+updateRevisionIndicator();
+
+// On first load, fetch the revision list and offer to resume the most recent.
+(async function(){
+  try {
+    const list=await refreshRevisionList();
+    if(list&&list.length){
+      // Auto-load the most recently updated revision so users continue where
+      // they left off. They can always click Open to switch, or Reset to start
+      // fresh.
+      await loadRevision(list[0].id);
+    }
+  } catch(_e){ /* not signed in or network error — leave defaults */ }
+})();
+</script></body></html>

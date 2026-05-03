@@ -32,6 +32,7 @@ export default function TopNav({ canViewSuppliers, canViewCompetitors, isAdmin }
     <nav className="flex items-center gap-1">
       {canViewSuppliers && tab("/suppliers", "Suppliers")}
       {canViewCompetitors && tab("/competitors", "Competitors")}
+      {tab("/handbook", "Handbook")}
       {isAdmin && tab("/admin", "Admin")}
     </nav>
   );

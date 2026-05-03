@@ -320,6 +320,35 @@ export const competitorProductAttachments = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// HANDBOOK REVISIONS — snapshots of the interactive Process Handbook content
+// for a given user. Each row holds the full {data, itemState, _uid} blob from
+// the in-page editor. Drafts can be saved repeatedly; submitting flips status
+// to "final" but does not lock the row — users can keep editing afterward.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const handbookRevisionStatus = pgEnum("handbook_revision_status", [
+  "draft",
+  "final",
+]);
+
+export const handbookRevisions = pgTable(
+  "handbook_revisions",
+  {
+    id: serial("id").primaryKey(),
+    ownerClerkId: text("owner_clerk_id").notNull(),
+    name: text("name").notNull().default("Untitled"),
+    content: jsonb("content").notNull(),
+    status: handbookRevisionStatus("status").notNull().default("draft"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    ownerIdx: index("handbook_revisions_owner_idx").on(t.ownerClerkId),
+    statusIdx: index("handbook_revisions_status_idx").on(t.status),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RELATIONS (for typed joins)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -421,3 +450,5 @@ export type CompetitorAttachment = typeof competitorAttachments.$inferSelect;
 export type CompetitorProduct = typeof competitorProducts.$inferSelect;
 export type NewCompetitorProduct = typeof competitorProducts.$inferInsert;
 export type CompetitorProductAttachment = typeof competitorProductAttachments.$inferSelect;
+export type HandbookRevision = typeof handbookRevisions.$inferSelect;
+export type NewHandbookRevision = typeof handbookRevisions.$inferInsert;
