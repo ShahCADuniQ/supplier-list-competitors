@@ -29,7 +29,17 @@ import type {
   CompetitorAttachment,
   CompetitorProduct,
   CompetitorProductAttachment,
+  CompetitorIdeationItem,
 } from "@/db/schema";
+import BenchmarkView from "./BenchmarkView";
+import IdeationBoard from "./IdeationBoard";
+import SummaryView from "./SummaryView";
+import {
+  aiResearchTopBrands,
+  aiPopulateResearchedBrand,
+  aiDeepExtractBrand,
+  clearCollectionBrands,
+} from "./research-actions";
 
 type FullCompetitorProduct = CompetitorProduct & {
   attachments: CompetitorProductAttachment[];
@@ -72,13 +82,17 @@ function safeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "file";
 }
 
+type ViewTab = "brands" | "benchmark" | "ideation" | "summary";
+
 export default function CompetitorsView({
   collections,
   brands,
+  ideationItems,
   canEdit,
 }: {
   collections: CompetitorCollection[];
   brands: FullCompetitor[];
+  ideationItems: CompetitorIdeationItem[];
   canEdit: boolean;
 }) {
   const router = useRouter();
@@ -98,6 +112,13 @@ export default function CompetitorsView({
     () => brands.filter((b) => b.collectionId === activeCollectionId),
     [brands, activeCollectionId],
   );
+  const collIdeation = useMemo(
+    () =>
+      activeCollectionId
+        ? ideationItems.filter((i) => i.collectionId === activeCollectionId)
+        : [],
+    [ideationItems, activeCollectionId],
+  );
 
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState<Set<string>>(new Set());
@@ -108,6 +129,19 @@ export default function CompetitorsView({
   const [editing, setEditing] = useState<"new" | "edit" | false>(false);
   const [draft, setDraft] = useState<CompetitorInput | null>(null);
   const [collMenuOpen, setCollMenuOpen] = useState(false);
+
+  // ── View tabs (Ideation default, then Brands / Benchmark / Summary) ──
+  // Benchmark is the default landing tab — that's where users add products
+  // and accumulate brand sections. Ideation / Brands / Summary are secondary.
+  const [view, setView] = useState<ViewTab>("benchmark");
+  // Reset detail/editing state when switching away from Brands.
+  useEffect(() => {
+    if (view !== "brands") {
+      setSelectedId(null);
+      setEditing(false);
+      setDraft(null);
+    }
+  }, [view]);
 
   const [toastMsg, setToastMsg] = useState<{ msg: string; err?: boolean } | null>(null);
   function toast(msg: string, err = false) {
@@ -515,6 +549,33 @@ export default function CompetitorsView({
           <span className="brand-sep">/</span>
           <span className="brand-sub">Competitor Tracker</span>
 
+          <div className="view-tabs">
+            <button
+              className={`view-tab ${view === "ideation" ? "active" : ""}`}
+              onClick={() => setView("ideation")}
+            >
+              Ideation<span className="ct">{collIdeation.length}</span>
+            </button>
+            <button
+              className={`view-tab ${view === "benchmark" ? "active" : ""}`}
+              onClick={() => setView("benchmark")}
+            >
+              Benchmark<span className="ct">{collBrands.length}</span>
+            </button>
+            <button
+              className={`view-tab ${view === "brands" ? "active" : ""}`}
+              onClick={() => setView("brands")}
+            >
+              Brands
+            </button>
+            <button
+              className={`view-tab ${view === "summary" ? "active" : ""}`}
+              onClick={() => setView("summary")}
+            >
+              Summary
+            </button>
+          </div>
+
           {collMenuOpen && (
             <div className="coll-menu" onClick={(e) => e.stopPropagation()}>
               <div className="coll-menu-h">Collections</div>
@@ -538,13 +599,56 @@ export default function CompetitorsView({
           )}
 
           <div className="spacer" />
-          <div className="search-wrap">
-            <span className="search-ico">🔎</span>
-            <input className="search" placeholder="Search this collection…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          {canEdit && <button className="btn primary" onClick={startNew}>+ Add competitor</button>}
+          {view === "brands" && (
+            <div className="search-wrap">
+              <span className="search-ico">🔎</span>
+              <input className="search" placeholder="Search this collection…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+          )}
+          {view === "brands" && canEdit && (
+            <BrandsToolbar
+              activeCollectionId={activeCollectionId}
+              activeCollectionName={activeCollection?.name ?? ""}
+              brandCount={collBrands.length}
+              onToast={toast}
+              onStartNew={startNew}
+              onChange={() => router.refresh()}
+            />
+          )}
         </header>
 
+        {view === "benchmark" && activeCollection && (
+          <main className="cm-detail solo">
+            <BenchmarkView
+              collection={activeCollection}
+              brands={collBrands}
+              canEdit={canEdit}
+              onToast={toast}
+            />
+          </main>
+        )}
+        {view === "ideation" && activeCollection && (
+          <main className="cm-detail solo">
+            <IdeationBoard
+              collection={activeCollection}
+              brands={collBrands}
+              items={collIdeation}
+              canEdit={canEdit}
+              onToast={toast}
+            />
+          </main>
+        )}
+        {view === "summary" && activeCollection && (
+          <main className="cm-detail solo">
+            <SummaryView
+              collection={activeCollection}
+              brands={collBrands}
+              canEdit={canEdit}
+              onToast={toast}
+            />
+          </main>
+        )}
+        {view === "brands" && (
         <div className="layout">
           <aside className="sidebar">
             <div className="sidebar-tools">
@@ -660,10 +764,167 @@ export default function CompetitorsView({
             )}
           </main>
         </div>
+        )}
 
         {toastMsg && <div className={`toast show ${toastMsg.err ? "error" : ""}`}>{toastMsg.msg}</div>}
       </div>
     </>
+  );
+}
+
+function BrandsToolbar({
+  activeCollectionId,
+  activeCollectionName,
+  brandCount,
+  onToast,
+  onStartNew,
+  onChange,
+}: {
+  activeCollectionId: number | null;
+  activeCollectionName: string;
+  brandCount: number;
+  onToast: (msg: string, err?: boolean) => void;
+  onStartNew: () => void;
+  onChange: () => void;
+}) {
+  const [findBusy, setFindBusy] = useState(false);
+  const [findStatus, setFindStatus] = useState<string | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [deepBusy, setDeepBusy] = useState(false);
+  const [deepStatus, setDeepStatus] = useState<string | null>(null);
+
+  async function handleFind(count: number) {
+    if (!activeCollectionId) return;
+    setFindBusy(true);
+    setFindStatus("Searching the web…");
+    try {
+      const r = await aiResearchTopBrands({ collectionId: activeCollectionId, count });
+      const list = r.found;
+      if (!list.length) {
+        onToast("No brands returned — try again", true);
+        return;
+      }
+      setFindStatus(`Adding ${list.length}…`);
+      let added = 0;
+      let products = 0;
+      for (let i = 0; i < list.length; i++) {
+        setFindStatus(`Adding ${list[i].name} (${i + 1}/${list.length})…`);
+        try {
+          const r = await aiPopulateResearchedBrand({
+            collectionId: activeCollectionId,
+            brand: list[i],
+          });
+          added++;
+          products += r.productsInserted;
+        } catch (err) {
+          console.error("Brand populate failed:", list[i].name, err);
+        }
+      }
+      onChange();
+      onToast(
+        `Added ${added} brand${added === 1 ? "" : "s"} · ${products} product${products === 1 ? "" : "s"}`,
+      );
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Research failed", true);
+    } finally {
+      setFindBusy(false);
+      setTimeout(() => setFindStatus(null), 4000);
+    }
+  }
+
+  async function handleDeepCrawl() {
+    if (!activeCollectionId) return;
+    const raw = prompt(
+      `Paste the brand's website (e.g. "lumenpulse.com"). Perplexity will enumerate every "${activeCollectionName}" product on the site; for each one we'll extract full specs and download every spec PDF / IES / drawing / BIM file. Takes 2–4 minutes for a large catalog.`,
+    );
+    if (!raw) return;
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const websiteUrl = /^https?:\/\//i.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+    setDeepBusy(true);
+    setDeepStatus(
+      `Discovering products on ${new URL(websiteUrl).host}… (2–4 min)`,
+    );
+    try {
+      const r = await aiDeepExtractBrand({
+        collectionId: activeCollectionId,
+        website: websiteUrl,
+        maxProducts: 250,
+      });
+      onChange();
+      const parts = [
+        `${r.brandName} added`,
+        `${r.productsInserted} product${r.productsInserted === 1 ? "" : "s"}`,
+      ];
+      const productDocs = r.specsheetsAttached + r.documentsAttached;
+      if (productDocs)
+        parts.push(`${productDocs} product file${productDocs === 1 ? "" : "s"}`);
+      if (r.brandFilesAttached)
+        parts.push(`${r.brandFilesAttached} brand file${r.brandFilesAttached === 1 ? "" : "s"}`);
+      if (r.fetchErrors.length)
+        parts.push(`${r.fetchErrors.length} fetch errors (see dev log)`);
+      onToast(parts.join(" · "));
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Deep crawl failed", true);
+    } finally {
+      setDeepBusy(false);
+      setTimeout(() => setDeepStatus(null), 4000);
+    }
+  }
+
+  async function handleReset() {
+    if (!activeCollectionId) return;
+    if (
+      !confirm(
+        `Delete all ${brandCount} brand${brandCount === 1 ? "" : "s"} in "${activeCollectionName}"? This also removes their products and attachments. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setResetBusy(true);
+    try {
+      const r = await clearCollectionBrands(activeCollectionId);
+      onChange();
+      onToast(`Cleared ${r.deleted} brand${r.deleted === 1 ? "" : "s"}`);
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Reset failed", true);
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
+  return (
+    <div className="brands-toolbar">
+      <button
+        className="btn primary sm"
+        onClick={handleDeepCrawl}
+        disabled={deepBusy || !activeCollectionId}
+        title="Paste one brand website. We crawl it, extract every product in the active collection's niche, and download spec PDFs."
+      >
+        {deepBusy ? (deepStatus ?? "Crawling…") : "✨ Add brand by URL (deep crawl)"}
+      </button>
+      <button
+        className="btn sm"
+        onClick={() => handleFind(5)}
+        disabled={findBusy || !activeCollectionId}
+        title="Web-search 5 top brands and auto-populate them"
+      >
+        {findBusy ? (findStatus ?? "Searching…") : "✨ Find 5 top brands"}
+      </button>
+      <button className="btn sm" onClick={onStartNew}>
+        + Add manually
+      </button>
+      <button
+        className="btn sm danger"
+        onClick={handleReset}
+        disabled={resetBusy || !brandCount}
+        title="Delete every brand in this collection"
+      >
+        {resetBusy ? "Clearing…" : "Reset all"}
+      </button>
+    </div>
   );
 }
 
@@ -766,25 +1027,18 @@ function DetailView({
             {brand.products.length || "—"}
           </span>
         </h4>
-        {brand.products.length === 0 ? (
-          <div style={{ fontSize: 13, color: "var(--muted)", padding: "10px 0" }}>
-            {canEdit
+        <div style={{ fontSize: 13, color: "var(--muted)", padding: "10px 0" }}>
+          {brand.products.length === 0 ? (
+            canEdit
               ? "No products yet. Use the AI panel in Edit to extract products from a website or PDF catalog."
-              : "No products yet."}
-          </div>
-        ) : (
-          <div className="products-grid">
-            {brand.products.map((p) => (
-              <ProductCard
-                key={p.id}
-                product={p}
-                canEdit={canEdit}
-                onDelete={() => onDeleteProduct(p.id)}
-                onUploadFiles={(files) => onUploadProductFile(p.id, files)}
-              />
-            ))}
-          </div>
-        )}
+              : "No products yet."
+          ) : (
+            <>
+              {brand.products.length} product{brand.products.length === 1 ? "" : "s"} on file —
+              see the <strong>Benchmark</strong> tab for the per-product spec cards and downloads.
+            </>
+          )}
+        </div>
       </div>
 
       <div className="d-card">
@@ -978,6 +1232,7 @@ function ProductCard({
 function labelFor(key: string): string {
   const map: Record<string, string> = {
     dimensions: "Dimensions",
+    maxLength: "Max length",
     colors: "Colors",
     finishes: "Finishes",
     certifications: "Certifications",
@@ -988,6 +1243,14 @@ function labelFor(key: string): string {
     beamAngle: "Beam angle",
     voltage: "Voltage",
     ipRating: "IP rating",
+    mounting: "Mounting",
+    lensType: "Lens / optic",
+    orientation: "Orientation",
+    driverLocation: "Driver location",
+    dimming: "Dimming",
+    efficacy: "Efficacy",
+    customization: "Customization",
+    accessories: "Accessories",
     notes: "Notes",
   };
   return map[key] ?? key;
@@ -1320,4 +1583,474 @@ const COMPETITOR_CSS = `
 .cm-app .product-source{display:inline-block;font-size:12.5px;color:var(--accent);margin-top:8px}
 .cm-app .product-actions{margin-top:14px;display:flex;justify-content:flex-end}
 @media(max-width:600px){.cm-app .product-specs{grid-template-columns:1fr;gap:2px}.cm-app .product-spec-row dt{padding-top:6px}.cm-app .product-spec-row dd{padding-bottom:4px}}
+
+/* ── View tabs (Brands / Benchmark / Ideation) ── */
+.cm-app .view-tabs{display:flex;gap:2px;margin-left:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:2px}
+.cm-app .view-tab{appearance:none;border:0;background:transparent;color:var(--text-2);font:inherit;font-size:12.5px;font-weight:500;padding:5px 12px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background .15s,color .15s}
+.cm-app .view-tab:hover{color:var(--text)}
+.cm-app .view-tab.active{background:#fff;color:var(--text);box-shadow:0 1px 2px rgba(15,23,42,.05);border:1px solid var(--border)}
+.cm-app .view-tab .ct{font-size:10.5px;font-weight:600;color:var(--muted);background:var(--surface);border-radius:9px;padding:1px 6px;border:1px solid var(--border)}
+.cm-app .view-tab.active .ct{color:var(--accent-strong);background:var(--accent-bg);border-color:var(--accent-border)}
+
+/* ── Solo (full-width) main column for benchmark / ideation tabs ── */
+.cm-app .cm-detail.solo{grid-column:1/-1;width:100%;max-width:none;background:var(--bg)}
+.cm-app .cm-detail.solo .bm-wrap,
+.cm-app .cm-detail.solo .id-wrap{padding:24px 32px;max-width:1320px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+
+/* ── Common micro-classes used by Benchmark + Ideation ── */
+.cm-app .d-eyebrow{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+.cm-app .bm-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.cm-app .bm-head .d-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ── Benchmark stat cards ── */
+.cm-app .bm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.cm-app .stat-card{display:flex;flex-direction:column;max-height:340px}
+.cm-app .stat-card h4{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-2);text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin:0 0 10px;flex:0 0 auto}
+.cm-app .stat-card-badge{margin-left:auto;font-size:10.5px;font-weight:600;letter-spacing:0;text-transform:none;padding:2px 7px;border-radius:9px;background:#f1f5f9;color:var(--text-2)}
+.cm-app .stat-rows-scroll{flex:1;min-height:0;overflow-y:auto;padding-right:4px;margin-right:-4px;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.cm-app .stat-rows-scroll::-webkit-scrollbar{width:6px}
+.cm-app .stat-rows-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.cm-app .stat-rows-scroll::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+.cm-app .stat-rows{display:flex;flex-direction:column;gap:5px}
+.cm-app .stat-row{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.cm-app .stat-row-bar{flex:1;position:relative;background:var(--accent-bg);border:1px solid var(--accent-border);border-radius:5px;height:22px;overflow:hidden;display:flex;align-items:center}
+.cm-app .stat-row-fill{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--accent-bg),#fde9b8);border-right:1px solid var(--accent-border)}
+.cm-app .stat-row-label{position:relative;padding:0 8px;color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.cm-app .stat-row-count{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:24px;text-align:right}
+
+/* ── Benchmark AI panel ── */
+.cm-app .bm-ai{background:linear-gradient(180deg,#fef9ec 0%,#fff 60%)}
+.cm-app .bm-ai-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:6px}
+.cm-app .bm-ai-grid h5{margin:0 0 8px;font-size:12px;color:var(--accent-strong);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+.cm-app .bm-list{margin:0;padding-left:18px;font-size:13px;line-height:1.6}
+.cm-app .bm-list li strong{color:var(--text)}
+
+/* ── Benchmark photo wall ── */
+.cm-app .bm-photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.cm-app .bm-photo{display:block;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;overflow:hidden;text-decoration:none;color:inherit;transition:transform .15s,border-color .15s}
+.cm-app .bm-photo:hover{transform:translateY(-1px);border-color:var(--accent-border)}
+.cm-app .bm-photo img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block;background:#f1f5f9}
+.cm-app .bm-photo-cap{padding:6px 8px;display:flex;flex-direction:column;font-size:11px;line-height:1.3;border-top:1px solid var(--border)}
+.cm-app .bm-photo-brand{color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.cm-app .bm-photo-name{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-app .bm-photo-more{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;background:var(--surface-2);border:1px dashed var(--border);border-radius:10px;aspect-ratio:1/1}
+
+/* ── Ideation board ── */
+.cm-app .id-input-row{display:grid;grid-template-columns:2fr auto 2fr;gap:10px;align-items:center}
+.cm-app .id-drop{display:flex;align-items:center;justify-content:center;text-align:center;border:2px dashed var(--border-strong);border-radius:10px;padding:18px;background:var(--surface-2);cursor:pointer;font-size:13px;color:var(--text-2);transition:border-color .15s,background .15s}
+.cm-app .id-drop:hover,.cm-app .id-drop.drag{border-color:var(--accent);background:var(--accent-bg)}
+.cm-app .id-or{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;text-align:center}
+.cm-app .id-url-row{display:flex;gap:6px}
+.cm-app .id-url{flex:1;min-width:0}
+.cm-app .id-url-row input,.cm-app .id-input input,.cm-app .id-input textarea{width:100%}
+.cm-app .id-controls{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+.cm-app .id-search input{min-width:240px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;font-size:13px}
+.cm-app .id-ai{background:linear-gradient(180deg,#fef9ec 0%,#fff 60%)}
+.cm-app .id-ai-row{display:flex;gap:8px;margin:8px 0}
+.cm-app .id-ai-row input{flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;font-size:13px}
+.cm-app .id-ai-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:14px}
+.cm-app .id-idea{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px}
+.cm-app .id-idea-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.cm-app .id-idea-head strong{font-size:14px;color:var(--text)}
+.cm-app .id-idea-cat{font-size:10.5px;background:var(--accent-bg);border:1px solid var(--accent-border);color:var(--accent-strong);padding:2px 7px;border-radius:9px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.cm-app .id-idea-concept{font-size:12.5px;color:var(--text-2);margin:0 0 8px;line-height:1.45}
+.cm-app .id-idea-specs{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:4px 8px;margin:0 0 8px;font-size:11.5px}
+.cm-app .id-idea-specs div{display:flex;flex-direction:column}
+.cm-app .id-idea-specs dt{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.cm-app .id-idea-specs dd{margin:0;color:var(--text);font-weight:500}
+.cm-app .id-idea-section{margin-top:6px}
+.cm-app .id-idea-section-h{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.cm-app .id-idea-section ul{margin:2px 0 0;padding-left:18px;font-size:12px;color:var(--text-2);line-height:1.5}
+.cm-app .id-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.cm-app .id-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;transition:transform .15s,border-color .15s,box-shadow .15s}
+.cm-app .id-card:hover{transform:translateY(-1px);border-color:var(--accent-border);box-shadow:0 2px 8px rgba(15,23,42,.06)}
+.cm-app .id-card-img{position:relative;appearance:none;border:0;background:#f1f5f9;cursor:pointer;padding:0;display:block;width:100%;aspect-ratio:4/3;overflow:hidden}
+.cm-app .id-card-img img{width:100%;height:100%;object-fit:cover;display:block}
+.cm-app .id-card-pen{position:absolute;top:6px;right:6px;background:#fff;border:1px solid var(--border);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--accent-strong)}
+.cm-app .id-kind{position:absolute;bottom:6px;left:6px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:2px 7px;border-radius:9px;background:#fff;border:1px solid var(--border);color:var(--text-2)}
+.cm-app .id-kind-sketch{background:#f5f3ff;border-color:#ddd6fe;color:#6d28d9}
+.cm-app .id-kind-mounting{background:#ecfeff;border-color:#a5f3fc;color:#0e7490}
+.cm-app .id-kind-moodboard{background:#fef3c7;border-color:#fde68a;color:#92400e}
+.cm-app .id-kind-ai-generated{background:#ede9fe;border-color:#c4b5fd;color:#5b21b6}
+.cm-app .id-card-body{padding:8px 10px 10px;display:flex;flex-direction:column;gap:4px}
+.cm-app .id-card-title{appearance:none;border:0;background:transparent;font:inherit;font-size:13px;font-weight:500;color:var(--text);padding:0;border-radius:4px}
+.cm-app .id-card-title:focus{outline:1px solid var(--accent);outline-offset:2px}
+.cm-app .id-card-brand{font-size:11px;color:var(--muted)}
+.cm-app .id-card-actions{display:flex;gap:6px;margin-top:4px}
+
+/* ── Sketch overlay ── */
+.cm-app .sketch-wrap{display:flex;flex-direction:column;gap:8px}
+.cm-app .sketch-img{position:relative;width:100%;background:#0f172a;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.cm-app .sketch-img img{display:block;max-width:100%;max-height:70vh;object-fit:contain;user-select:none;-webkit-user-drag:none}
+.cm-app .sketch-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;touch-action:none}
+.cm-app .sketch-canvas.editing{pointer-events:auto;cursor:crosshair}
+.cm-app .sketch-toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px}
+.cm-app .sketch-colors{display:flex;gap:5px}
+.cm-app .sketch-color{width:22px;height:22px;border-radius:50%;border:2px solid #fff;outline:1px solid var(--border);cursor:pointer}
+.cm-app .sketch-color.active{outline:2px solid var(--accent)}
+.cm-app .sketch-width{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+.cm-app .sketch-width input{width:120px}
+.cm-app .sketch-actions{display:flex;gap:6px;margin-left:auto}
+
+/* ── Modal ── */
+.cm-app .id-modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(2px);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px}
+.cm-app .id-modal{background:#fff;border-radius:12px;box-shadow:0 24px 60px rgba(15,23,42,.25);width:min(1100px,100%);max-height:calc(100vh - 48px);overflow:hidden;display:flex;flex-direction:column}
+.cm-app .id-modal-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.cm-app .id-modal-title input{appearance:none;border:0;background:transparent;font:inherit;font-size:18px;font-weight:600;color:var(--text);padding:4px 6px;border-radius:6px;width:100%}
+.cm-app .id-modal-title input:focus{outline:1px solid var(--accent);outline-offset:2px}
+.cm-app .id-modal-actions{display:flex;gap:6px}
+.cm-app .id-modal-body{display:grid;grid-template-columns:minmax(0,1.6fr) 320px;gap:14px;padding:14px 16px;overflow:auto;flex:1;min-height:0}
+.cm-app .id-modal-img{min-width:0}
+.cm-app .id-modal-side{display:flex;flex-direction:column;gap:10px}
+.cm-app .id-modal-side .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-2)}
+.cm-app .id-modal-side .field span{font-weight:600;color:var(--text-2)}
+.cm-app .id-modal-side .field em{color:var(--muted);font-style:normal;font-weight:400}
+.cm-app .id-modal-side .field input,.cm-app .id-modal-side .field select,.cm-app .id-modal-side .field textarea{width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:6px;font:inherit;font-size:13px;background:var(--surface);color:var(--text)}
+.cm-app .id-modal-side .field textarea{resize:vertical;min-height:80px}
+@media(max-width:880px){.cm-app .id-modal-body{grid-template-columns:1fr}.cm-app .id-input-row{grid-template-columns:1fr}.cm-app .id-or{display:none}}
+
+/* ── Brands toolbar (header) ── */
+.cm-app .brands-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.cm-app .brands-toolbar .btn.danger{color:var(--danger);border-color:#fecaca;background:var(--danger-bg)}
+.cm-app .brands-toolbar .btn.danger:hover:not(:disabled){background:#fee2e2}
+
+/* ── Per-brand benchmark layout ── */
+.cm-app .bm-brands{display:flex;flex-direction:column;gap:14px}
+.cm-app .brand-section{padding:14px 16px}
+.cm-app .brand-section-head{display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.cm-app .brand-section-head:hover .brand-section-chev{color:var(--accent-strong)}
+.cm-app .brand-section-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:1;min-width:0}
+.cm-app .brand-section-title h3{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em;color:var(--text)}
+.cm-app .brand-section-chev{font-size:14px;color:var(--muted);transition:color .15s}
+.cm-app .brand-section-meta{font-size:12px;color:var(--muted)}
+.cm-app .brand-section-link{font-size:12px;color:var(--accent);text-decoration:none}
+.cm-app .brand-section-link:hover{text-decoration:underline}
+.cm-app .brand-section-notes{font-size:13px;color:var(--text-2);margin:8px 0 14px;line-height:1.5}
+.cm-app .brand-section-empty{font-size:12.5px;color:var(--muted);font-style:italic;padding:10px 0 4px}
+.cm-app .bm-product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+
+/* ── Per-product benchmark card (compact + expandable) ── */
+.cm-app .bm-product{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;transition:border-color .15s,box-shadow .15s}
+.cm-app .bm-product.open{border-color:var(--accent-border);background:var(--surface)}
+.cm-app .bm-product-head{appearance:none;border:0;background:transparent;padding:8px;display:grid;grid-template-columns:64px 1fr 14px;gap:10px;align-items:center;cursor:pointer;text-align:left;width:100%}
+.cm-app .bm-product-head:hover{background:var(--surface)}
+.cm-app .bm-product-thumb{width:64px;height:64px;border-radius:6px;background:#f1f5f9;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.cm-app .bm-product-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.cm-app .bm-product-thumb-empty{font-size:18px;color:var(--muted)}
+.cm-app .bm-product-info{min-width:0;display:flex;flex-direction:column;gap:2px}
+.cm-app .bm-product-name{font-size:13.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-app .bm-product-code{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.cm-app .bm-product-cat{font-size:10.5px;color:var(--accent-strong);background:var(--accent-bg);border:1px solid var(--accent-border);padding:1px 7px;border-radius:9px;align-self:flex-start;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.cm-app .bm-product-preview{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:2px}
+.cm-app .bm-product-spec-mini{font-size:11px;color:var(--text-2)}
+.cm-app .bm-product-spec-mini strong{color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;font-size:10px;margin-right:2px}
+.cm-app .bm-product-chev{color:var(--muted);font-size:12px}
+.cm-app .bm-product-body{padding:10px 12px 14px;border-top:1px solid var(--border);background:var(--surface-2)}
+.cm-app .bm-product-desc{font-size:12.5px;color:var(--text-2);margin:0 0 10px;line-height:1.5}
+.cm-app .bm-product-strip{display:flex;gap:6px;overflow-x:auto;margin:0 0 10px;padding-bottom:4px}
+.cm-app .bm-product-strip a{flex:0 0 64px;height:64px;border-radius:6px;overflow:hidden;background:#f1f5f9}
+.cm-app .bm-product-strip img{width:100%;height:100%;object-fit:cover;display:block}
+.cm-app .bm-product-specs{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0 0 10px;font-size:12.5px}
+.cm-app .bm-product-spec-row{display:contents}
+.cm-app .bm-product-spec-row dt{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;padding-top:3px;white-space:nowrap}
+.cm-app .bm-product-spec-row dd{margin:0;color:var(--text);font-weight:500;line-height:1.45}
+.cm-app .bm-specsheets{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 0 0;border-top:1px dashed var(--border);margin-top:6px}
+.cm-app .bm-specsheets strong{font-size:11px;color:var(--text-2);text-transform:uppercase;letter-spacing:.04em;margin-right:4px}
+.cm-app .bm-product-source{display:inline-block;font-size:12px;color:var(--accent);margin-top:8px}
+
+/* ── Ideation sticky notes (Miro-style text-only cards) ── */
+.cm-app .id-card-sticky{background:#fef9ec;border-color:#fde2a3;box-shadow:0 1px 3px rgba(180,83,9,.12)}
+.cm-app .id-card-sticky:hover{border-color:#f59e0b;box-shadow:0 4px 12px rgba(180,83,9,.18)}
+.cm-app .id-card-sticky-body{appearance:none;border:0;background:transparent;padding:14px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:6px;font:inherit;color:var(--text);min-height:140px;width:100%}
+.cm-app .id-card-sticky-mark{font-size:18px;color:var(--accent-strong);align-self:flex-start;line-height:1}
+.cm-app .id-card-sticky-text{margin:0;font-size:13.5px;line-height:1.45;color:var(--text);white-space:pre-wrap;word-break:break-word;flex:1}
+.cm-app .id-card-sticky-empty{color:var(--muted);font-style:italic}
+.cm-app .id-modal-sticky{height:100%;display:flex;align-items:stretch;justify-content:stretch;background:transparent;padding:6px}
+
+/* ── Summary drill-down modal ── */
+.cm-app .stat-row{display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center;width:100%;border:0;background:transparent;padding:0;font:inherit;text-align:left;color:inherit}
+.cm-app .stat-row-clickable{cursor:pointer;border-radius:5px;padding:1px 0}
+.cm-app .stat-row-clickable:hover{background:var(--accent-bg)}
+.cm-app .summary-drilldown-bg{position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(2px);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px}
+.cm-app .summary-drilldown{background:#fff;border-radius:12px;box-shadow:0 24px 60px rgba(15,23,42,.25);width:min(680px,100%);max-height:calc(100vh - 48px);overflow:hidden;display:flex;flex-direction:column}
+.cm-app .summary-drilldown-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border)}
+.cm-app .summary-drilldown-head h3{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em}
+.cm-app .summary-drilldown-body{padding:8px 12px 14px;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.cm-app .summary-drilldown-item{display:grid;grid-template-columns:auto 1fr 18px;gap:10px;align-items:center;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);cursor:pointer;text-align:left;font:inherit;color:inherit;transition:border-color .15s,background .15s}
+.cm-app .summary-drilldown-item:hover{border-color:var(--accent);background:var(--accent-bg)}
+.cm-app .summary-drilldown-brand{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.cm-app .summary-drilldown-name{font-size:13.5px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm-app .summary-drilldown-arrow{color:var(--accent);font-size:14px}
+
+/* ── Flash highlight when jumping to a product from Summary ── */
+.cm-app .bm-product-flash{animation:bm-flash 1.4s ease-out 1}
+@keyframes bm-flash{0%{box-shadow:0 0 0 0 rgba(180,83,9,.5)}50%{box-shadow:0 0 0 6px rgba(180,83,9,.18)}100%{box-shadow:0 0 0 0 rgba(180,83,9,0)}}
+
+/* ── Brand-section actions / extract bar ── */
+.cm-app .brand-section-actions{display:flex;align-items:center;gap:10px}
+.cm-app .bm-extract-bar{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px dashed var(--border);margin-top:8px}
+
+/* ── File listings (per-product + per-brand) ── */
+.cm-app .bm-files{padding:10px 0 0;border-top:1px dashed var(--border);margin-top:8px}
+.cm-app .bm-files-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.cm-app .bm-files-head strong{font-size:11.5px;color:var(--text);text-transform:uppercase;letter-spacing:.05em}
+.cm-app .bm-files-group{margin-bottom:8px}
+.cm-app .bm-files-group-h{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:4px}
+.cm-app .bm-files-list{display:flex;flex-direction:column;gap:4px}
+.cm-app .bm-file{display:grid;grid-template-columns:38px 1fr 18px;gap:8px;align-items:center;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);text-decoration:none;color:var(--text);font-size:12px;transition:border-color .15s,background .15s}
+.cm-app .bm-file:hover{border-color:var(--accent-border);background:var(--accent-bg)}
+.cm-app .bm-file-ext{display:inline-flex;align-items:center;justify-content:center;height:26px;border-radius:4px;background:#f1f5f9;font-size:9.5px;font-weight:700;color:var(--text-2);letter-spacing:.04em;text-transform:uppercase;padding:0 4px;text-align:center}
+.cm-app .bm-file-info{display:flex;flex-direction:column;min-width:0}
+.cm-app .bm-file-name{font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm-app .bm-file-meta{font-size:10.5px;color:var(--muted)}
+.cm-app .bm-file-dl{font-size:13px;color:var(--accent);justify-self:end}
+.cm-app .bm-file-row{display:flex;align-items:stretch;gap:4px}
+.cm-app .bm-file-row .bm-file{flex:1;min-width:0}
+.cm-app .bm-file-del{flex:0 0 auto;width:28px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);font-size:13px;line-height:1;cursor:pointer;transition:border-color .15s,background .15s,color .15s}
+.cm-app .bm-file-del:hover:not(:disabled){border-color:#fca5a5;background:#fef2f2;color:#b91c1c}
+.cm-app .bm-file-del:disabled{opacity:.5;cursor:wait}
+.cm-app .btn.xs{padding:2px 8px;font-size:11px;border-radius:5px;line-height:1.4}
+
+/* ── AddProductForm: user-curated entry at the top of Benchmark ── */
+.cm-app .add-product-trigger{display:flex;align-items:center;gap:14px;padding:14px 18px;margin:0 0 16px;border:1px dashed var(--border);border-radius:10px;background:var(--accent-bg, #f8fafc)}
+.cm-app .add-product-trigger .btn.primary{flex:0 0 auto}
+.cm-app .add-product-trigger-hint{color:var(--muted);font-size:12px}
+.cm-app .add-product-card{padding:16px 18px;margin:0 0 16px;border:1px solid var(--accent-border, var(--border));border-radius:10px;background:var(--surface);box-shadow:0 1px 3px rgba(15,23,42,.04)}
+.cm-app .add-product-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.cm-app .add-product-head strong{font-size:14px}
+.cm-app .add-product-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px}
+.cm-app .add-product-label{flex:0 0 130px;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;padding-top:7px}
+.cm-app .add-product-input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);transition:border-color .15s}
+.cm-app .add-product-input:focus{outline:none;border-color:var(--accent)}
+.cm-app .add-product-files{flex:1;min-width:0}
+.cm-app .add-product-files input[type=file]{font-size:12px;padding:4px 0}
+.cm-app .add-product-files-list{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:3px}
+.cm-app .add-product-files-list li{display:flex;align-items:center;gap:8px;padding:4px 8px;border:1px solid var(--border);border-radius:5px;font-size:12px;background:var(--accent-bg, #f8fafc)}
+.cm-app .add-product-files-list li>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-app .add-product-file-rm{flex:0 0 auto;border:none;background:transparent;color:var(--muted);font-size:13px;cursor:pointer;padding:0 4px;line-height:1}
+.cm-app .add-product-file-rm:hover:not(:disabled){color:#b91c1c}
+.cm-app .add-product-status{margin:6px 0;padding:7px 10px;border-radius:5px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:500}
+.cm-app .add-product-actions{display:flex;gap:8px;margin-top:10px}
+
+/* ── Inline image gallery on the expanded product card ── */
+.cm-app .bm-product-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin:0 0 12px}
+.cm-app .bm-product-gallery-tile{padding:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);cursor:pointer;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;transition:border-color .15s,transform .1s}
+.cm-app .bm-product-gallery-tile:hover{border-color:var(--accent);transform:translateY(-1px)}
+.cm-app .bm-product-gallery-tile img{width:100%;height:100%;object-fit:contain;display:block}
+.cm-app .bm-product-thumb.clickable{cursor:zoom-in}
+
+/* ── FilePreviewModal: dashboard-native preview for images + PDFs ── */
+.cm-app .fp-overlay{position:fixed;inset:0;z-index:1000;background:rgba(15,23,42,.78);display:flex;align-items:center;justify-content:center;padding:24px;animation:fp-fade .15s ease-out}
+@keyframes fp-fade{from{opacity:0}to{opacity:1}}
+.cm-app .fp-modal{position:relative;width:min(1200px,100%);height:min(900px,calc(100vh - 48px));background:var(--surface);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 48px rgba(15,23,42,.4)}
+.cm-app .fp-head{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface)}
+.cm-app .fp-title{display:flex;flex-direction:column;flex:1;min-width:0}
+.cm-app .fp-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm-app .fp-counter{font-size:11px;color:var(--muted)}
+.cm-app .fp-actions{display:flex;gap:6px;flex:0 0 auto}
+.cm-app .fp-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);text-decoration:none;font-size:14px;cursor:pointer;transition:border-color .15s,background .15s}
+.cm-app .fp-btn:hover{border-color:var(--accent);background:var(--accent-bg, #f8fafc)}
+.cm-app .fp-close{font-weight:700}
+.cm-app .fp-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#0f172a;position:relative;overflow:hidden}
+.cm-app .fp-image{max-width:100%;max-height:100%;object-fit:contain;display:block}
+.cm-app .fp-pdf{width:100%;height:100%;border:0;background:#fff}
+.cm-app .fp-other{color:#fff;text-align:center;padding:32px}
+.cm-app .fp-other p{margin:0 0 12px;font-size:14px}
+.cm-app .fp-other-actions{display:flex;gap:8px;justify-content:center;margin-top:14px}
+.cm-app .fp-nav{position:absolute;top:50%;transform:translateY(-50%);width:42px;height:42px;border-radius:50%;border:none;background:rgba(255,255,255,.18);color:#fff;font-size:24px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,opacity .15s}
+.cm-app .fp-nav:hover:not(:disabled){background:rgba(255,255,255,.34)}
+.cm-app .fp-nav:disabled{opacity:.3;cursor:not-allowed}
+.cm-app .fp-prev{left:14px}
+.cm-app .fp-next{right:14px}
+.cm-app .fp-strip{display:flex;gap:6px;padding:8px 14px;border-top:1px solid var(--border);background:var(--surface);overflow-x:auto;scrollbar-width:thin}
+.cm-app .fp-thumb{flex:0 0 60px;width:60px;height:60px;border:2px solid transparent;border-radius:5px;padding:0;background:#0f172a;cursor:pointer;overflow:hidden;display:flex;align-items:center;justify-content:center;transition:border-color .15s}
+.cm-app .fp-thumb.active{border-color:var(--accent)}
+.cm-app .fp-thumb:hover{border-color:var(--accent-border, var(--accent))}
+.cm-app .fp-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.cm-app .fp-thumb-ext{font-size:10px;color:#cbd5e1;font-weight:700;letter-spacing:.04em}
+
+/* ── Compact product card (whole card opens drawer on click) ── */
+.cm-app .bm-product-head.card-clickable{cursor:pointer;transition:border-color .15s,background .15s,transform .1s}
+.cm-app .bm-product-head.card-clickable:hover{border-color:var(--accent);background:var(--accent-bg, #f8fafc)}
+.cm-app .bm-product-head.card-clickable:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cm-app .bm-product-thumb{position:relative}
+.cm-app .bm-product-counts{display:inline-flex;gap:4px;margin-top:6px}
+.cm-app .bm-product-count{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;background:#f1f5f9;color:var(--text-2);border-radius:9px;font-size:11px;font-weight:600;letter-spacing:.02em}
+.cm-app .bm-count-icon{font-size:11px;line-height:1}
+.cm-app .bm-count-num{font-size:11px;line-height:1}
+
+/* ── ProductDetailDrawer: slide-in panel from the right ── */
+.cm-app .pd-overlay{position:fixed;inset:0;z-index:900;background:rgba(15,23,42,0);transition:background .22s ease-out;display:flex;justify-content:flex-end;align-items:stretch;pointer-events:none}
+.cm-app .pd-overlay.entered{background:rgba(15,23,42,.4);pointer-events:auto}
+.cm-app .pd-drawer{width:min(900px,92vw);background:var(--surface);box-shadow:-12px 0 32px rgba(15,23,42,.18);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .22s cubic-bezier(.32,.72,.0,1);will-change:transform;pointer-events:auto}
+.cm-app .pd-drawer.entered{transform:translateX(0)}
+.cm-app .pd-head{display:flex;align-items:flex-start;gap:12px;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surface);flex:0 0 auto}
+.cm-app .pd-close{flex:0 0 auto;width:32px;height:32px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:border-color .15s,background .15s}
+.cm-app .pd-close:hover{border-color:#fca5a5;background:#fef2f2;color:#b91c1c}
+.cm-app .pd-title{flex:1;min-width:0}
+.cm-app .pd-brand{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:2px}
+.cm-app .pd-name{margin:0 0 4px;font-size:18px;font-weight:600;color:var(--text);line-height:1.25}
+.cm-app .pd-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--muted)}
+.cm-app .pd-meta>span{padding:1px 7px;background:var(--accent-bg, #f1f5f9);border-radius:9px}
+.cm-app .pd-body{flex:1;overflow-y:auto;padding:16px 18px 28px;display:flex;flex-direction:column;gap:18px}
+.cm-app .pd-section{display:flex;flex-direction:column}
+.cm-app .pd-section-h{margin:0 0 10px;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+
+/* Hero image with prev/next */
+.cm-app .pd-gallery{display:flex;flex-direction:column;gap:10px}
+.cm-app .pd-hero{position:relative;background:#0f172a;border-radius:8px;overflow:hidden;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center}
+.cm-app .pd-hero-img{width:100%;height:100%;border:0;background:transparent;padding:0;cursor:zoom-in;display:flex;align-items:center;justify-content:center}
+.cm-app .pd-hero-img img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+.cm-app .pd-hero-nav{position:absolute;top:50%;transform:translateY(-50%);width:38px;height:38px;border-radius:50%;border:none;background:rgba(255,255,255,.18);color:#fff;font-size:22px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s}
+.cm-app .pd-hero-nav:hover{background:rgba(255,255,255,.34)}
+.cm-app .pd-hero-nav.pd-prev{left:10px}
+.cm-app .pd-hero-nav.pd-next{right:10px}
+.cm-app .pd-hero-counter{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.78);color:#fff;padding:2px 8px;border-radius:9px;font-size:11px;font-weight:600;letter-spacing:.02em}
+.cm-app .pd-thumbs{display:flex;gap:6px;overflow-x:auto;padding:2px 0;scrollbar-width:thin}
+.cm-app .pd-thumb{flex:0 0 56px;width:56px;height:56px;border:2px solid transparent;border-radius:5px;padding:0;background:#0f172a;cursor:pointer;overflow:hidden;transition:border-color .15s}
+.cm-app .pd-thumb:hover{border-color:var(--accent-border, var(--accent))}
+.cm-app .pd-thumb.active{border-color:var(--accent)}
+.cm-app .pd-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+
+/* Description */
+.cm-app .pd-desc{margin:0;font-size:13px;color:var(--text);line-height:1.55}
+
+/* Specs — grouped by section, two-column layout, prettier hierarchy */
+.cm-app .pd-spec-group{margin-bottom:18px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:linear-gradient(180deg,var(--surface),var(--surface) 60%,#fafbfc)}
+.cm-app .pd-spec-group:last-child{margin-bottom:0}
+.cm-app .pd-spec-group-h{display:flex;align-items:center;gap:10px;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid var(--border);position:relative}
+.cm-app .pd-spec-group-h::before{content:"";position:absolute;left:-16px;top:2px;bottom:8px;width:3px;border-radius:2px;background:var(--accent)}
+.cm-app .pd-spec-group-title{font-size:11.5px;color:var(--text);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+.cm-app .pd-spec-group-count{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--muted);padding:2px 7px;border-radius:9px;background:#f1f5f9}
+.cm-app .pd-specs{margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px 18px}
+.cm-app .pd-spec-row{display:grid;grid-template-columns:110px 1fr;gap:10px;align-items:baseline;padding:5px 0;border-bottom:1px dashed var(--border);min-height:26px}
+.cm-app .pd-spec-row:last-child{border-bottom:0}
+.cm-app .pd-spec-row dt{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;align-self:start;padding-top:1px}
+.cm-app .pd-spec-row dd{margin:0;min-width:0;font-size:13px;color:var(--text);line-height:1.45}
+.cm-app .pd-spec-value{font-weight:500;color:var(--text);word-break:break-word}
+.cm-app .pd-spec-empty{color:var(--muted);opacity:.45;font-size:13px}
+.cm-app .pd-spec-chips{display:flex;flex-wrap:wrap;gap:4px}
+.cm-app .pd-spec-chip{display:inline-flex;align-items:center;padding:2px 9px;background:var(--accent-bg, #f1f5f9);border:1px solid var(--accent-border, var(--border));border-radius:11px;font-size:11.5px;color:var(--text);font-weight:500;line-height:1.4;white-space:nowrap}
+.cm-app .pd-spec-row.pd-spec-row-empty{min-height:24px}
+
+/* Files */
+.cm-app .pd-files-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.cm-app .pd-files-count{font-size:11px;color:var(--muted);font-weight:500}
+.cm-app .pd-extract-bar{margin-bottom:10px}
+.cm-app .pd-empty{margin:0;font-size:12px;color:var(--muted);font-style:italic}
+.cm-app .pd-files{display:flex;flex-direction:column;gap:10px}
+.cm-app .pd-files-group-h{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:4px}
+.cm-app .pd-files-list{display:flex;flex-direction:column;gap:4px}
+.cm-app .pd-file-row{display:flex;align-items:stretch;gap:4px}
+.cm-app .pd-file-row .pd-file{flex:1;min-width:0}
+.cm-app .pd-file{display:grid;grid-template-columns:38px 1fr 22px;gap:8px;align-items:center;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:12px;text-align:left;cursor:pointer;transition:border-color .15s,background .15s}
+.cm-app .pd-file:hover{border-color:var(--accent);background:var(--accent-bg, #f8fafc)}
+.cm-app .pd-file-ext{display:inline-flex;align-items:center;justify-content:center;height:26px;border-radius:4px;background:#f1f5f9;font-size:9.5px;font-weight:700;color:var(--text-2);letter-spacing:.04em;text-transform:uppercase;padding:0 4px}
+.cm-app .pd-file-info{display:flex;flex-direction:column;min-width:0}
+.cm-app .pd-file-name{font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm-app .pd-file-meta{font-size:10.5px;color:var(--muted)}
+.cm-app .pd-file-eye{font-size:13px;color:var(--accent);justify-self:end}
+.cm-app .pd-file-del{flex:0 0 auto;width:28px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);font-size:13px;cursor:pointer;transition:border-color .15s,background .15s,color .15s}
+.cm-app .pd-file-del:hover:not(:disabled){border-color:#fca5a5;background:#fef2f2;color:#b91c1c}
+.cm-app .pd-file-del:disabled{opacity:.5;cursor:wait}
+.cm-app .pd-source{font-size:12.5px;color:var(--accent);text-decoration:none}
+.cm-app .pd-source:hover{text-decoration:underline}
+
+/* Drawer header actions: Edit, Delete, Save, Cancel */
+.cm-app .pd-head-actions{display:flex;gap:6px;flex:0 0 auto;align-self:flex-start;margin-left:8px}
+.cm-app .btn.pd-danger{color:#b91c1c;border-color:var(--border)}
+.cm-app .btn.pd-danger:hover:not(:disabled){background:#fef2f2;border-color:#fca5a5;color:#991b1b}
+
+/* Editable name input matches the static heading size */
+.cm-app .pd-name-input{width:100%;margin:0 0 4px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:18px;font-weight:600;color:var(--text);background:var(--surface);transition:border-color .15s}
+.cm-app .pd-name-input:focus{outline:none;border-color:var(--accent)}
+
+/* Edit form grid */
+.cm-app .pd-edit-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.cm-app .pd-edit-row{display:flex;flex-direction:column;gap:4px}
+.cm-app .pd-edit-row-full{grid-column:1 / -1}
+.cm-app .pd-edit-label{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.cm-app .pd-edit-hint{font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)}
+.cm-app .pd-edit-input{width:100%;padding:6px 9px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;background:var(--surface);color:var(--text);transition:border-color .15s}
+.cm-app .pd-edit-input:focus{outline:none;border-color:var(--accent)}
+.cm-app .pd-edit-textarea{width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;background:var(--surface);color:var(--text);font-family:inherit;line-height:1.5;resize:vertical;transition:border-color .15s}
+.cm-app .pd-edit-textarea:focus{outline:none;border-color:var(--accent)}
+
+/* ── Ideation: Pinterest input card ── */
+.cm-app .id-pinterest{padding:14px 16px;margin:0 0 12px;background:linear-gradient(135deg,#fef2f2 0%,#fff7f7 60%,#fff 100%);border:1px solid #fecaca;border-radius:10px}
+.cm-app .id-pinterest-h{margin:0 0 10px;font-size:14px;font-weight:600;color:#991b1b;display:flex;align-items:baseline;flex-wrap:wrap;gap:8px}
+.cm-app .id-pinterest-h-hint{font-weight:400;color:var(--muted);font-size:12px}
+.cm-app .id-pinterest-row{display:flex;gap:8px;margin-bottom:8px}
+.cm-app .id-pinterest-url{flex:1;padding:8px 11px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);transition:border-color .15s}
+.cm-app .id-pinterest-url:focus{outline:none;border-color:#dc2626}
+.cm-app .id-pinterest-url:disabled{opacity:.6}
+.cm-app .id-pinterest-comment{width:100%;padding:8px 11px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;background:var(--surface);color:var(--text);font-family:inherit;line-height:1.5;resize:vertical;transition:border-color .15s}
+.cm-app .id-pinterest-comment:focus{outline:none;border-color:#dc2626}
+
+/* ── Ideation: drop zone ── */
+.cm-app .id-drop{display:flex;align-items:center;justify-content:center;padding:18px 16px;margin:0 0 14px;border:1px dashed var(--border);border-radius:8px;background:var(--surface);color:var(--muted);font-size:12.5px;cursor:pointer;text-align:center;transition:border-color .15s,background .15s}
+.cm-app .id-drop:hover,.cm-app .id-drop.drag{border-color:var(--accent);background:var(--accent-bg, #f8fafc);color:var(--text)}
+.cm-app .id-drop strong{color:var(--text)}
+
+/* ── Ideation: toolbar ── */
+.cm-app .id-toolbar{display:flex;align-items:center;gap:10px;margin:0 0 14px}
+.cm-app .id-search{flex:1;padding:8px 11px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);transition:border-color .15s}
+.cm-app .id-search:focus{outline:none;border-color:var(--accent)}
+.cm-app .id-toolbar-count{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.cm-app .btn.id-delete-all{color:#b91c1c;border-color:var(--border)}
+.cm-app .btn.id-delete-all:hover:not(:disabled){background:#fef2f2;border-color:#fca5a5;color:#991b1b}
+
+/* ── Ideation: empty state ── */
+.cm-app .id-empty{padding:24px 16px;text-align:center;color:var(--muted)}
+.cm-app .id-empty p{margin:0;font-size:13px}
+
+/* ── Ideation: card grid ── */
+.cm-app .id-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin:0}
+.cm-app .id-card2{display:flex;flex-direction:column;padding:0;border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;text-align:left;cursor:pointer;transition:border-color .15s,transform .1s,box-shadow .15s}
+.cm-app .id-card2:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 6px 14px rgba(15,23,42,.08)}
+.cm-app .id-card2:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cm-app .id-card2-image{width:100%;background:#0f172a;display:flex;align-items:center;justify-content:center;overflow:hidden;aspect-ratio:1/1}
+.cm-app .id-card2-image img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s}
+.cm-app .id-card2:hover .id-card2-image img{transform:scale(1.03)}
+.cm-app .id-card2-info{padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px}
+.cm-app .id-card2-title{font-size:12.5px;font-weight:600;color:var(--text);line-height:1.3}
+.cm-app .id-card2-notes{margin:0;font-size:12px;color:var(--text-2);line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.cm-app .id-card2-tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:2px}
+.cm-app .id-card2-tag{display:inline-flex;align-items:center;padding:1px 7px;background:var(--accent-bg, #f1f5f9);border:1px solid var(--accent-border, var(--border));border-radius:9px;font-size:10.5px;color:var(--text-2);font-weight:500;line-height:1.4}
+.cm-app .id-card2-tag-more{font-size:10.5px;color:var(--muted);padding:1px 7px}
+
+/* ── Ideation drawer ── */
+.cm-app .id-drawer-image{padding:0;background:#0f172a;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;max-height:60vh}
+.cm-app .id-drawer-image img{max-width:100%;max-height:60vh;object-fit:contain;display:block}
+.cm-app .id-drawer-notes{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);font-family:inherit;line-height:1.5;resize:vertical;transition:border-color .15s}
+.cm-app .id-drawer-notes:focus{outline:none;border-color:var(--accent)}
+.cm-app .id-drawer-tags{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+.cm-app .id-drawer-tag{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:var(--accent-bg, #f1f5f9);border:1px solid var(--accent-border, var(--border));border-radius:11px;font-size:12px;color:var(--text);font-weight:500}
+.cm-app .id-drawer-tag-rm{border:none;background:transparent;color:var(--muted);font-size:11px;cursor:pointer;padding:0;line-height:1}
+.cm-app .id-drawer-tag-rm:hover{color:#b91c1c}
+.cm-app .id-drawer-tag-input{display:flex;gap:6px}
+.cm-app .id-drawer-tag-input input{flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;background:var(--surface);color:var(--text)}
+.cm-app .id-drawer-tag-input input:focus{outline:none;border-color:var(--accent)}
+
+/* ── Summary view: all-products card grid ── */
+.cm-app .sv-products{margin:0 0 24px}
+.cm-app .sv-products-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+.cm-app .sv-section-h{margin:0;font-size:13px;font-weight:600;color:var(--text);text-transform:uppercase;letter-spacing:.05em}
+.cm-app .sv-products-count{font-size:11.5px;color:var(--muted)}
+.cm-app .sv-product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.cm-app .sv-product-card{display:flex;flex-direction:column;gap:0;padding:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface);text-align:left;cursor:pointer;transition:border-color .15s,transform .1s,box-shadow .15s}
+.cm-app .sv-product-card:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 4px 10px rgba(15,23,42,.06)}
+.cm-app .sv-product-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cm-app .sv-product-thumb{width:100%;aspect-ratio:4/3;background:#0f172a;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.cm-app .sv-product-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.cm-app .sv-product-thumb-empty{font-size:28px;opacity:.5}
+.cm-app .sv-product-info{padding:10px 12px;display:flex;flex-direction:column;gap:3px}
+.cm-app .sv-product-brand{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.cm-app .sv-product-name{font-size:13px;font-weight:600;color:var(--text);line-height:1.3}
+.cm-app .sv-product-code{font-size:11px;color:var(--muted)}
+.cm-app .sv-product-key{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.cm-app .sv-product-key-row{font-size:11.5px;color:var(--text)}
+.cm-app .sv-product-key-row strong{color:var(--muted);font-weight:600;margin-right:3px}
+.cm-app .sv-product-counts{display:inline-flex;gap:4px;margin-top:6px}
+.cm-app .sv-product-count{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;background:#f1f5f9;color:var(--text-2);border-radius:9px;font-size:10.5px;font-weight:600}
 `;

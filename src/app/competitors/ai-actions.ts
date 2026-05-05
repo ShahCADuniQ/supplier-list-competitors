@@ -2,7 +2,10 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { competitors, competitorProducts } from "@/db/schema";
+import {
+  competitors,
+  competitorProducts,
+} from "@/db/schema";
 import {
   extractCompetitor,
   refineCompetitor,
@@ -15,6 +18,7 @@ import {
   canEdit,
   getOrCreateProfile,
 } from "@/lib/permissions";
+import { attachProductDocument } from "./_attachments";
 
 export type AiSourceUpload = {
   url: string;
@@ -75,27 +79,60 @@ function pickNewProducts(
 }
 
 /**
- * Bulk-insert AI-extracted products under a competitor. Returns the count of
- * rows created. Empty input is a no-op.
+ * Bulk-insert AI-extracted products under a competitor. Returns the inserted
+ * rows so callers can attach specsheets after the fact. Empty input is a no-op.
  */
 async function insertProducts(
   competitorId: number,
   products: CompetitorProductExtraction[],
+): Promise<Array<{ id: number; specsheetUrl: string }>> {
+  if (!products.length) return [];
+  const rows = await db
+    .insert(competitorProducts)
+    .values(
+      products.map((p) => ({
+        competitorId,
+        name: p.name,
+        productCode: p.productCode || null,
+        productCategory: p.productCategory || null,
+        description: p.description || null,
+        imageUrls: Array.isArray(p.imageUrls)
+          ? p.imageUrls.filter((u) => /^https?:\/\//i.test(u))
+          : [],
+        sourceUrl: p.sourceUrl || null,
+        specs: (p.specs ?? {}) as unknown as Record<string, string | string[]>,
+      })),
+    )
+    .returning({ id: competitorProducts.id });
+  return rows.map((r, i) => ({
+    id: r.id,
+    specsheetUrl: products[i].specsheetUrl ?? "",
+  }));
+}
+
+/**
+ * Fire-and-forget specsheet attachments for the given product rows. Bounded
+ * concurrency (3 in flight) so a website with 25 PDFs doesn't bury the event
+ * loop. Returns the count of successful attachments.
+ */
+async function attachSpecsheets(
+  rows: Array<{ id: number; specsheetUrl: string }>,
 ): Promise<number> {
-  if (!products.length) return 0;
-  await db.insert(competitorProducts).values(
-    products.map((p) => ({
-      competitorId,
-      name: p.name,
-      productCode: p.productCode || null,
-      productCategory: p.productCategory || null,
-      description: p.description || null,
-      imageUrls: Array.isArray(p.imageUrls) ? p.imageUrls.filter((u) => /^https?:\/\//i.test(u)) : [],
-      sourceUrl: p.sourceUrl || null,
-      specs: (p.specs ?? {}) as unknown as Record<string, string | string[]>,
-    })),
-  );
-  return products.length;
+  const targets = rows.filter((r) => r.specsheetUrl);
+  if (!targets.length) return 0;
+  let attached = 0;
+  const queue = [...targets];
+  const POOL = 3;
+  async function worker() {
+    while (queue.length) {
+      const r = queue.shift();
+      if (!r) return;
+      const ok = await attachProductDocument(r.id, r.specsheetUrl);
+      if (ok) attached++;
+    }
+  }
+  await Promise.all(Array.from({ length: POOL }, () => worker()));
+  return attached;
 }
 
 export async function aiGenerateCompetitor(input: {
@@ -118,15 +155,17 @@ export async function aiGenerateCompetitor(input: {
 /**
  * Persist AI-extracted products under a brand-new competitor created by the
  * client. Called from the save handler in CompetitorsView right after
- * `upsertCompetitor` returns the new id.
+ * `upsertCompetitor` returns the new id. Also fetches and attaches the
+ * specsheet PDF for every product where the extractor surfaced one.
  */
 export async function aiPersistProducts(input: {
   competitorId: number;
   products: CompetitorProductExtraction[];
-}): Promise<{ inserted: number }> {
+}): Promise<{ inserted: number; specsheetsAttached: number }> {
   await ensureEditor();
-  const inserted = await insertProducts(input.competitorId, input.products);
-  return { inserted };
+  const rows = await insertProducts(input.competitorId, input.products);
+  const specsheetsAttached = await attachSpecsheets(rows);
+  return { inserted: rows.length, specsheetsAttached };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,7 +221,9 @@ export async function aiRefineCompetitor(
     .from(competitorProducts)
     .where(eq(competitorProducts.competitorId, input.competitorId));
   const fresh = pickNewProducts(extraction.products ?? [], existing);
-  const productsInserted = await insertProducts(input.competitorId, fresh);
+  const insertedRows = await insertProducts(input.competitorId, fresh);
+  await attachSpecsheets(insertedRows);
+  const productsInserted = insertedRows.length;
 
   return { extraction, uploads: input.uploads, productsInserted };
 }

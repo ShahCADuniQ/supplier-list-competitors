@@ -322,6 +322,63 @@ export const competitorProductAttachments = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// COMPETITOR IDEATION — collection-scoped image board for brainstorming.
+// Each item is an image (uploaded or referenced via URL) with a title, free-form
+// notes, optional product/competitor link, and an optional sketch overlay. The
+// `annotations` blob is an array of stroke paths drawn on top of the image:
+//   { strokes: [{ color, width, points: [{x,y}] }] }
+// stored normalized 0-1 so it scales with any rendered size.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const competitorIdeationKind = pgEnum("competitor_ideation_kind", [
+  "reference",   // photo of a real product / market reference
+  "sketch",      // hand sketch / wireframe
+  "moodboard",   // texture/finish/color reference
+  "mounting",    // mounting detail
+  "ai-generated", // image generated from a prompt (future use)
+]);
+
+export const competitorIdeationItems = pgTable(
+  "competitor_ideation_items",
+  {
+    id: serial("id").primaryKey(),
+    collectionId: integer("collection_id")
+      .notNull()
+      .references(() => competitorCollections.id, { onDelete: "cascade" }),
+    title: text("title"),
+    notes: text("notes"),
+    imageUrl: text("image_url").notNull(),
+    blobPathname: text("blob_pathname"),
+    mimeType: text("mime_type"),
+    size: bigint("size", { mode: "number" }).notNull().default(0),
+    kind: competitorIdeationKind("kind").notNull().default("reference"),
+    // Optional links — when set, this item is associated with a specific brand
+    // or product so it shows up alongside that brand's benchmark view.
+    competitorId: integer("competitor_id").references(
+      () => competitors.id,
+      { onDelete: "set null" },
+    ),
+    productId: integer("product_id").references(
+      () => competitorProducts.id,
+      { onDelete: "set null" },
+    ),
+    // Sketch strokes drawn over the image. Shape: { strokes: Stroke[] }.
+    annotations: jsonb("annotations").$type<Record<string, unknown>>().notNull().default({}),
+    // Free-form tag list — e.g. "mounting", "finish", "asymmetric"
+    tags: text("tags").array().notNull().default(sql`ARRAY[]::text[]`),
+    sortOrder: integer("sort_order").notNull().default(0),
+    addedByClerkId: text("added_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    collectionIdx: index("competitor_ideation_collection_idx").on(t.collectionId),
+    competitorIdx: index("competitor_ideation_competitor_idx").on(t.competitorId),
+    productIdx: index("competitor_ideation_product_idx").on(t.productId),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HANDBOOK REVISIONS — snapshots of the interactive Process Handbook content
 // for a given user. Each row holds the full {data, itemState, _uid} blob from
 // the in-page editor. Drafts can be saved repeatedly; submitting flips status
@@ -391,6 +448,25 @@ export const competitorCollectionsRelations = relations(
   competitorCollections,
   ({ many }) => ({
     competitors: many(competitors),
+    ideationItems: many(competitorIdeationItems),
+  }),
+);
+
+export const competitorIdeationItemsRelations = relations(
+  competitorIdeationItems,
+  ({ one }) => ({
+    collection: one(competitorCollections, {
+      fields: [competitorIdeationItems.collectionId],
+      references: [competitorCollections.id],
+    }),
+    competitor: one(competitors, {
+      fields: [competitorIdeationItems.competitorId],
+      references: [competitors.id],
+    }),
+    product: one(competitorProducts, {
+      fields: [competitorIdeationItems.productId],
+      references: [competitorProducts.id],
+    }),
   }),
 );
 
@@ -454,3 +530,5 @@ export type NewCompetitorProduct = typeof competitorProducts.$inferInsert;
 export type CompetitorProductAttachment = typeof competitorProductAttachments.$inferSelect;
 export type HandbookRevision = typeof handbookRevisions.$inferSelect;
 export type NewHandbookRevision = typeof handbookRevisions.$inferInsert;
+export type CompetitorIdeationItem = typeof competitorIdeationItems.$inferSelect;
+export type NewCompetitorIdeationItem = typeof competitorIdeationItems.$inferInsert;

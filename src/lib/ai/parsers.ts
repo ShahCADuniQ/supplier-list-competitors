@@ -19,6 +19,25 @@ function clip(text: string): string {
   return text.slice(0, MAX_TEXT_CHARS) + "\n\n…[content truncated]";
 }
 
+/**
+ * fetch() with a hard timeout via AbortController. Default 12s — long enough
+ * for CDNs that take a while to warm up, short enough that a hung connection
+ * doesn't stall the whole deep-extract pipeline.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = 12000,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Extract text from a PDF buffer. Returns an empty string for scanned PDFs. */
 export async function pdfBufferToText(buf: Buffer | Uint8Array): Promise<string> {
   const parser = new PDFParse({ data: new Uint8Array(buf) });
@@ -50,22 +69,50 @@ export function xlsxBufferToText(buf: Buffer | Uint8Array, hint?: string): strin
 
 /** Fetch a URL and crudely strip HTML to readable text. */
 export async function fetchUrlAsText(url: string): Promise<string> {
-  const res = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "User-Agent": "Mozilla/5.0 Lightbase Supplier Manager",
+  const { text } = await fetchUrlWithLinks(url);
+  return text;
+}
+
+/**
+ * Fetch a URL and return raw HTML + readable text + every anchor link.
+ * Same fetch underpins fetchUrlAsText / fetchUrlWithLinks / extractDocumentLinks
+ * — exposed separately so the deep crawler can do all three in one HTTP call.
+ */
+export async function fetchUrlFully(url: string): Promise<{
+  html: string;
+  text: string;
+  links: Array<{ href: string; text: string }>;
+}> {
+  // Use a real browser UA — most enterprise lighting brand sites are behind
+  // Cloudflare / Akamai / Imperva and reject custom UAs with 403/406.
+  const res = await fetchWithTimeout(
+    url,
+    {
+      redirect: "follow",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
+          "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
     },
-  });
+    12000,
+  );
   if (!res.ok) {
     throw new Error(`Fetch failed (${res.status}) for ${url}`);
   }
   const ct = res.headers.get("content-type") ?? "";
-  // Treat non-HTML/text responses as opaque — fall back to filename only.
   if (!ct.includes("text") && !ct.includes("json") && !ct.includes("xml")) {
-    return `[Binary content at ${url} — content-type ${ct}]`;
+    return {
+      html: "",
+      text: `[Binary content at ${url} — content-type ${ct}]`,
+      links: [],
+    };
   }
   const html = await res.text();
-  // Strip script/style/nav blocks completely, then tags.
+  const links = extractLinks(html, url);
   const stripped = html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
@@ -80,7 +127,868 @@ export async function fetchUrlAsText(url: string): Promise<string> {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
-  return clip(stripped);
+  return { html, text: clip(stripped), links };
+}
+
+/**
+ * Fetch a URL and return both readable text AND every anchor link with its
+ * label (resolved against the page's URL). Used by the deep crawler to walk a
+ * brand's website looking for product / category pages in a niche.
+ */
+export async function fetchUrlWithLinks(url: string): Promise<{
+  text: string;
+  links: Array<{ href: string; text: string }>;
+}> {
+  const res = await fetchWithTimeout(
+    url,
+    {
+      redirect: "follow",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
+          "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    },
+    12000,
+  );
+  if (!res.ok) {
+    throw new Error(`Fetch failed (${res.status}) for ${url}`);
+  }
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("text") && !ct.includes("json") && !ct.includes("xml")) {
+    return {
+      text: `[Binary content at ${url} — content-type ${ct}]`,
+      links: [],
+    };
+  }
+  const html = await res.text();
+  const links = extractLinks(html, url);
+  const stripped = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  return { text: clip(stripped), links };
+}
+
+/**
+ * Pull product-image URLs out of a page's raw HTML.
+ *
+ * Strict whitelist policy — to avoid pulling banner / lifestyle / related-product
+ * images, we ONLY accept images that match BOTH:
+ *   1. og:image (the brand's hero shot — always the actual product), AND
+ *   2. images that share the og:image's CDN directory prefix (i.e. live in the
+ *      same /products/<sku>/ folder as the hero shot).
+ *
+ * If there's no og:image we fall back to a much narrower image bucket: only
+ * <img> tags whose src contains a path segment matching the page's last URL
+ * segment (e.g. for /linear-cove/lumenline-cove, only images whose path
+ * includes "lumenline" or "lumenline-cove").
+ */
+export function extractImageUrls(html: string, baseUrl: string): string[] {
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return [];
+  }
+  const pageSlug = (base.pathname.split("/").filter(Boolean).pop() ?? "")
+    .toLowerCase();
+
+  const seen = new Set<string>();
+  function tryAbsolute(raw: string | undefined | null): string | null {
+    if (!raw) return null;
+    const t = raw.trim();
+    if (!t || t.startsWith("data:")) return null;
+    let abs: URL;
+    try {
+      abs = new URL(t, base);
+    } catch {
+      return null;
+    }
+    if (abs.protocol !== "https:" && abs.protocol !== "http:") return null;
+    const fullLower = abs.toString().toLowerCase();
+    const path = abs.pathname.toLowerCase();
+    if (path.endsWith(".svg")) return null;
+    if (
+      /\b(favicon|sprite|spinner|loading|placeholder|blank|logo|wordmark|monogram|nav-?icon|menu-?icon|social|share|fb_share|twitter_card|email_icon|skip|chevron|arrow|caret|hamburger|close|search-icon|footer|header|banner|hero-bg|page-bg|background|page-?header|cover|related|carousel-arrow|cookie)\b/.test(
+        path,
+      )
+    ) return null;
+    if (/[-_](thumb|thumbnail|small|tiny|mini|xs|icon|16x16|24x24|32x32|48x48|64x64|96x96|150x150)\b/.test(path)) return null;
+    if (/\.(gif)$/i.test(path) && /\/(pixel|track|beacon|analytics)/i.test(fullLower)) return null;
+    if (!/\.(jpe?g|png|webp|gif|avif)(\?|$)/i.test(fullLower)) return null;
+    // Reject images explicitly resized small via URL query (Optimizely DAM,
+    // Sitecore, Cloudinary, imgix patterns) — these are nav icons / logos /
+    // thumbnails the page renders inline, not the product hero shot.
+    const widthMatch = abs.search.match(/[?&](?:width|w|maxwidth|mw)=(\d+)/i);
+    if (widthMatch) {
+      const w = parseInt(widthMatch[1], 10);
+      if (!isNaN(w) && w < 200) return null;
+    }
+    // Optimizely / Episerver "globalassets" carries BOTH brand chrome (logos,
+    // header tiles) AND legitimate product images (e.g. iGuzzini's
+    // /globalassets/products/{indoor|outdoor}/...). Only reject the chrome
+    // sub-folders; let everything else through and let downstream slug /
+    // gallery filtering pick the right hero.
+    if (/\/globalassets\/(?:header|footer|nav|chrome|menu|brand|logos?)\//i.test(path)) {
+      return null;
+    }
+    abs.hash = "";
+    return abs.toString();
+  }
+
+  // 1) Pull og:image first — this anchors what counts as an "in-gallery" image.
+  const ogRe = /<meta\b[^>]*property=["']og:image["'][^>]*content=(?:"([^"]+)"|'([^']+)')/gi;
+  const ogTwitterRe = /<meta\b[^>]*name=["']twitter:image[^"']*["'][^>]*content=(?:"([^"]+)"|'([^']+)')/gi;
+  let ogImage: string | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = ogRe.exec(html)) !== null) {
+    const u = tryAbsolute(m[1] ?? m[2]);
+    if (u) {
+      ogImage = u;
+      break;
+    }
+  }
+  if (!ogImage) {
+    while ((m = ogTwitterRe.exec(html)) !== null) {
+      const u = tryAbsolute(m[1] ?? m[2]);
+      if (u) {
+        ogImage = u;
+        break;
+      }
+    }
+  }
+
+  // Compute the og:image's directory prefix so we can keep gallery siblings.
+  // For "https://media.lumenpulse.com/cdn/lumenline-cove/hero.jpg" the prefix
+  // is "https://media.lumenpulse.com/cdn/lumenline-cove/".
+  let ogDirPrefix = "";
+  if (ogImage) {
+    try {
+      const u = new URL(ogImage);
+      const lastSlash = u.pathname.lastIndexOf("/");
+      if (lastSlash > 0) {
+        u.pathname = u.pathname.slice(0, lastSlash + 1);
+        u.search = "";
+        u.hash = "";
+        ogDirPrefix = u.toString();
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2) Walk all <img> tags + <source srcset> + background-image and keep ONLY
+  // images that pass the strict relevance test below.
+  const candidates: string[] = [];
+  function addCandidate(raw: string | undefined | null) {
+    const u = tryAbsolute(raw);
+    if (u) candidates.push(u);
+  }
+
+  const imgRe = /<img\b[^>]*?>/gi;
+  while ((m = imgRe.exec(html)) !== null) {
+    const tag = m[0];
+    const attrs = [
+      tag.match(/\bsrc=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i),
+      tag.match(/\bdata-src=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i),
+      tag.match(/\bdata-lazy-src=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i),
+      tag.match(/\bdata-original=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i),
+      tag.match(/\bdata-img-src=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i),
+      tag.match(/\bdata-large=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i),
+      tag.match(/\bdata-zoom-image=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i),
+    ];
+    for (const c of attrs) {
+      if (!c) continue;
+      addCandidate(c[1] ?? c[2] ?? c[3]);
+    }
+    const srcset = tag.match(/\b(?:srcset|data-srcset|data-lazy-srcset)=(?:"([^"]+)"|'([^']+)')/i);
+    if (srcset) {
+      const raw = srcset[1] ?? srcset[2] ?? "";
+      const parts = raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((p) => {
+          const tokens = p.split(/\s+/);
+          const url = tokens[0];
+          const desc = tokens[1] ?? "";
+          const w = parseInt(desc, 10);
+          return { url, width: isNaN(w) ? (desc === "2x" ? 2 : 1) : w };
+        })
+        .sort((a, b) => b.width - a.width);
+      // Take the largest variant only, to avoid duplicates of the same image.
+      if (parts[0]) addCandidate(parts[0].url);
+    }
+  }
+
+  const sourceRe = /<source\b[^>]*?>/gi;
+  while ((m = sourceRe.exec(html)) !== null) {
+    const tag = m[0];
+    const srcset = tag.match(/\bsrcset=(?:"([^"]+)"|'([^']+)')/i);
+    if (!srcset) continue;
+    const raw = srcset[1] ?? srcset[2] ?? "";
+    const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts[0]) {
+      const url = parts[0].split(/\s+/)[0];
+      addCandidate(url);
+    }
+  }
+
+  // STRICT FILTER: keep only candidates that are clearly product-gallery
+  // images for this exact product page. Then rank by relevance to the page
+  // slug so the most variant-specific image is FIRST (vision verifier only
+  // sees the top few).
+  const accepted: Array<{ url: string; score: number; rank: number }> = [];
+  // Dedupe by stripped URL (no query string) — sites serve the same image at
+  // multiple sizes via ?width= variants, no need to double-count for vision.
+  const acceptedKey = new Set<string>();
+  function baseKey(u: string): string {
+    try {
+      const x = new URL(u);
+      x.search = "";
+      x.hash = "";
+      return x.toString().toLowerCase();
+    } catch {
+      return u.toLowerCase();
+    }
+  }
+  const slugTokens = pageSlug && pageSlug.length >= 4
+    ? pageSlug.split(/[-_]/).filter((t) => t.length >= 4)
+    : [];
+  function scoreOf(url: string): number {
+    const cl = url.toLowerCase();
+    let s = 0;
+    for (const t of slugTokens) if (cl.includes(t)) s += 2;
+    // Bonus signal: legitimate product asset paths.
+    if (/\/products?\//i.test(cl)) s += 1;
+    if (/\/(media|gallery|hero|product-image)/i.test(cl)) s += 1;
+    return s;
+  }
+  function tryAdd(u: string, rank: number) {
+    const k = baseKey(u);
+    if (acceptedKey.has(k)) return;
+    acceptedKey.add(k);
+    accepted.push({ url: u, score: scoreOf(u), rank });
+  }
+
+  if (ogImage) tryAdd(ogImage, 0);
+
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    if (accepted.length >= 12) break;
+    // Pass A: same gallery directory as og:image (e.g. /products/<sku>/*)
+    if (ogDirPrefix && c.startsWith(ogDirPrefix)) {
+      tryAdd(c, i + 1);
+      continue;
+    }
+    // Pass B: URL path mentions the page slug — e.g. /linear-cove/ in the
+    // image URL when we're on /linear-cove. Catches sites where og:image is
+    // hosted on a different CDN than the rest of the gallery.
+    if (slugTokens.length > 0) {
+      const cl = c.toLowerCase();
+      if (slugTokens.some((t) => cl.includes(t))) {
+        tryAdd(c, i + 1);
+        continue;
+      }
+    }
+    // Otherwise — DROP. We'd rather have 1 correct image than 5 lifestyle/
+    // banner shots from elsewhere on the page.
+  }
+
+  // Highest score first; ties broken by DOM order (rank).
+  accepted.sort((a, b) => b.score - a.score || a.rank - b.rank);
+  return accepted.map((a) => a.url).slice(0, 10);
+}
+
+/**
+ * Pull every downloadable-document anchor out of a page's HTML. Filters by
+ * file extension AND content-type-ish hints (data attributes etc.). Used by
+ * the deep crawler so we don't depend on the AI to surface documents — every
+ * spec PDF / IES / drawing / BIM file linked from the product page is fetched.
+ *
+ * Returns absolute URLs (resolved against baseUrl), deduped, with a guess at
+ * the document kind so callers can attach with the right `kind` value.
+ */
+export type DocumentLink = {
+  href: string;
+  text: string;
+  kind: "datasheet" | "ies" | "drawing" | "image" | "other";
+};
+
+const DOC_TEXT_PATTERNS: Array<{ regex: RegExp; kind: DocumentLink["kind"] }> = [
+  { regex: /\b(spec(?:ification)?\s?sheet|cut\s?sheet|datasheet|tech\s?(?:nical)?\s?sheet|product\s?sheet|specsheet)\b/i, kind: "datasheet" },
+  { regex: /\b(brochure|catalog(?:ue)?|family\s?brochure|leaflet)\b/i, kind: "datasheet" },
+  { regex: /\b(installation|install\s?guide|installation\s?instructions?|user\s?guide|operating|warranty)\b/i, kind: "datasheet" },
+  { regex: /\b(ies\s?file|photometric|ldt\s?file|ldt|ies)\b/i, kind: "ies" },
+  { regex: /\b(bim|revit|rfa|family\s?file|3d\s?model|step|sketch\s?up|skp)\b/i, kind: "drawing" },
+  { regex: /\b(drawing|cad|dwg|dxf|dimension(?:al)?\s?drawing|technical\s?drawing|line\s?drawing)\b/i, kind: "drawing" },
+];
+
+function kindFromPathExtension(path: string): DocumentLink["kind"] | null {
+  if (path.endsWith(".pdf")) return "datasheet";
+  if (path.endsWith(".ies") || path.endsWith(".ldt")) return "ies";
+  if (
+    path.endsWith(".dwg") || path.endsWith(".dxf") ||
+    path.endsWith(".rfa") || path.endsWith(".rvt") ||
+    path.endsWith(".skp") || path.endsWith(".step") ||
+    path.endsWith(".stp") || path.endsWith(".obj") ||
+    path.endsWith(".3ds")
+  ) return "drawing";
+  if (/\.(jpe?g|png|webp|gif)$/i.test(path)) return "image";
+  return null;
+}
+
+export function extractDocumentLinks(
+  html: string,
+  baseUrl: string,
+): DocumentLink[] {
+  const out: DocumentLink[] = [];
+  const seen = new Set<string>();
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return out;
+  }
+
+  // Pass A: anchors. Matches BOTH by URL extension AND by anchor text.
+  const aRe = /<a\b[^>]*?href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = aRe.exec(html)) !== null) {
+    const rawHref = (m[1] ?? m[2] ?? m[3] ?? "").trim();
+    if (!rawHref || rawHref.startsWith("#") || rawHref.startsWith("javascript:") ||
+        rawHref.startsWith("mailto:") || rawHref.startsWith("tel:")) continue;
+    let abs: URL;
+    try {
+      abs = new URL(rawHref, base);
+    } catch {
+      continue;
+    }
+    abs.hash = "";
+    const norm = abs.toString();
+    const path = abs.pathname.toLowerCase();
+    const text = m[4]
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
+
+    // Skip same-page navigation (the page that's being parsed).
+    let kind = kindFromPathExtension(path);
+
+    // Match by anchor text — catches /download/abc123 style URLs that don't
+    // expose a PDF extension on the public URL.
+    if (!kind && text) {
+      for (const p of DOC_TEXT_PATTERNS) {
+        if (p.regex.test(text)) {
+          kind = p.kind;
+          break;
+        }
+      }
+      // Don't follow text-matched links that look like full HTML pages — only
+      // download / file / asset / media-style routes.
+      if (kind && !/(\/download|\/file|\/asset|\/media|\/uploads|\/wp-content|\/_files|\/cdn-cgi|\/get|\?download)/i.test(norm)) {
+        kind = null;
+      }
+    }
+
+    // Special case: ZIP archives are documents only when text suggests so.
+    if (
+      !kind &&
+      path.endsWith(".zip") &&
+      /(spec|cut[- ]?sheet|datasheet|drawing|ies|photometric|install|bim|revit)/i.test(text)
+    ) {
+      kind = "drawing";
+    }
+
+    if (!kind) continue;
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push({ href: norm, text, kind });
+  }
+
+  // Pass B: <link rel="alternate" type="application/pdf"> and similar.
+  const linkRe = /<link\b[^>]*?>/gi;
+  while ((m = linkRe.exec(html)) !== null) {
+    const tag = m[0];
+    const typeAttr = tag.match(/\btype=(?:"([^"]+)"|'([^']+)')/i);
+    if (!typeAttr) continue;
+    const t = (typeAttr[1] ?? typeAttr[2] ?? "").toLowerCase();
+    if (!t.includes("pdf")) continue;
+    const hrefAttr = tag.match(/\bhref=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+    if (!hrefAttr) continue;
+    const raw = hrefAttr[1] ?? hrefAttr[2] ?? hrefAttr[3] ?? "";
+    let abs: URL;
+    try {
+      abs = new URL(raw, base);
+    } catch {
+      continue;
+    }
+    abs.hash = "";
+    const norm = abs.toString();
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push({ href: norm, text: "Linked PDF", kind: "datasheet" });
+  }
+
+  return out;
+}
+
+/**
+ * STRICT MODE — given a brand's category landing page (e.g.
+ * lumenpulse.com/products/linear-cove), return every anchor whose pathname is
+ * a SUB-PATH of the category's pathname. No keyword-based fallbacks; we trust
+ * that the category page upstream was vetted as in-niche, and that products
+ * linked from it which live under its path are in-niche.
+ *
+ * Excludes navigational sub-paths (downloads / blog / search / etc.) and any
+ * URL ending in a file extension.
+ */
+export function extractProductPageLinks(
+  html: string,
+  categoryUrl: string,
+  // Kept for backwards compatibility; ignored in strict mode.
+  _nicheKeywords: string[] = DEFAULT_NICHE_KEYWORDS,
+): string[] {
+  void _nicheKeywords;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let base: URL;
+  try {
+    base = new URL(categoryUrl);
+  } catch {
+    return [];
+  }
+  const host = base.host.replace(/^www\./, "");
+  const catPath = base.pathname.replace(/\/+$/, "");
+  if (!catPath) return [];
+
+  function isExcludedPath(path: string, sub: string): boolean {
+    if (/\.(pdf|ies|ldt|dwg|dxf|rfa|rvt|skp|step|stp|obj|3ds|zip|jpe?g|png|webp|gif|svg|mp4|webm)$/i.test(path)) {
+      return true;
+    }
+    if (
+      /\/(downloads?|resources?|documents?|files?|literature|spec[- ]?sheets?|datasheets?|cad|bim|photometrics?|news|press|blog|case-stud|contact|about|careers?|search|results|page\/\d+|tags?|filter|sort|compare|shop|cart|checkout|login|signin|signup|register|account|favorite|wishlist|admin|preview|video)(\/|$)/i.test(
+        "/" + sub,
+      )
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  const aRe = /<a\b[^>]*?href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = aRe.exec(html)) !== null) {
+    const rawHref = (m[1] ?? m[2] ?? m[3] ?? "").trim();
+    if (!rawHref || rawHref.startsWith("#") || rawHref.startsWith("javascript:") ||
+        rawHref.startsWith("mailto:") || rawHref.startsWith("tel:")) continue;
+    let abs: URL;
+    try {
+      abs = new URL(rawHref, base);
+    } catch {
+      continue;
+    }
+    if (abs.host.replace(/^www\./, "") !== host) continue;
+    abs.hash = "";
+    abs.search = "";
+    const path = abs.pathname.replace(/\/+$/, "");
+    if (path === catPath) continue;
+    if (path === "" || path === "/") continue;
+
+    // STRICT: anchor must be a sub-path of the category URL.
+    if (!path.startsWith(catPath + "/")) continue;
+    const sub = path.slice(catPath.length + 1);
+    if (!sub) continue;
+    if (isExcludedPath(path, sub)) continue;
+
+    const norm = abs.toString();
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(norm);
+    if (out.length >= 500) break;
+  }
+  return out;
+}
+
+/**
+ * Recursively walk a brand's sitemap (sitemap.xml, sitemap_index.xml, or any
+ * sitemap discoverable from /robots.txt) and return every URL on the host.
+ *
+ * Sitemaps are the most-thorough way to enumerate every URL a brand publishes
+ * — they're how Google, Bing, and Lumenpulse's own search rely on indexing
+ * their own catalogs. If a sitemap exists, we use it as the source of truth
+ * (then filter by niche keywords).
+ *
+ * Returns up to 5000 URLs deduped, plus the list of sitemap URLs we visited.
+ */
+export async function crawlSitemapUrls(
+  rootUrl: string,
+  options: { wallclockMs?: number; maxSitemaps?: number } = {},
+): Promise<{
+  urls: string[];
+  sitemapsVisited: string[];
+}> {
+  const wallclockMs = options.wallclockMs ?? 30_000;
+  const maxSitemaps = options.maxSitemaps ?? 12;
+  const startedAt = Date.now();
+
+  const out = new Set<string>();
+  const visited = new Set<string>();
+  let host: string;
+  let origin: string;
+  try {
+    const u = new URL(rootUrl);
+    host = u.host.replace(/^www\./, "");
+    origin = u.origin;
+  } catch {
+    return { urls: [], sitemapsVisited: [] };
+  }
+
+  // Discover candidate sitemap URLs.
+  const candidates = new Set<string>();
+  candidates.add(`${origin}/sitemap.xml`);
+  candidates.add(`${origin}/sitemap_index.xml`);
+  candidates.add(`${origin}/sitemap-index.xml`);
+  candidates.add(`${origin}/sitemaps.xml`);
+  candidates.add(`${origin}/wp-sitemap.xml`);
+  // Try /robots.txt for additional sitemap hints (with timeout).
+  try {
+    const r = await fetchWithTimeout(
+      `${origin}/robots.txt`,
+      {
+        redirect: "follow",
+        headers: { "User-Agent": BROWSER_UA },
+      },
+      6000,
+    );
+    if (r.ok) {
+      const txt = await r.text();
+      const sitemapLines = txt.match(/(?:^|\n)\s*sitemap:\s*(\S+)/gi);
+      if (sitemapLines) {
+        for (const line of sitemapLines) {
+          const m = line.match(/sitemap:\s*(\S+)/i);
+          if (m) {
+            try {
+              const su = new URL(m[1].trim(), origin);
+              if (su.host.replace(/^www\./, "") === host) {
+                candidates.add(su.toString());
+              }
+            } catch {
+              // skip
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // robots.txt missing or timed out, no problem
+  }
+
+  const queue = [...candidates];
+  while (queue.length && visited.size < maxSitemaps) {
+    if (Date.now() - startedAt > wallclockMs) {
+      console.warn(`[crawlSitemapUrls] wallclock budget hit (${wallclockMs}ms), stopping`);
+      break;
+    }
+    const sitemapUrl = queue.shift();
+    if (!sitemapUrl || visited.has(sitemapUrl)) continue;
+    visited.add(sitemapUrl);
+    try {
+      const r = await fetchWithTimeout(
+        sitemapUrl,
+        {
+          redirect: "follow",
+          headers: {
+            "User-Agent": BROWSER_UA,
+            Accept: "application/xml, text/xml, */*",
+          },
+        },
+        8000,
+      );
+      if (!r.ok) continue;
+      const xml = await r.text();
+      // Sitemap-index file: <sitemap><loc>...</loc></sitemap>
+      const sitemapLocs: string[] = [];
+      const sitemapRe = /<sitemap\b[^>]*>[\s\S]*?<loc>([^<]+)<\/loc>[\s\S]*?<\/sitemap>/gi;
+      let mm: RegExpExecArray | null;
+      while ((mm = sitemapRe.exec(xml)) !== null) {
+        sitemapLocs.push(mm[1].trim());
+      }
+      // Push nested sitemaps onto the queue.
+      for (const u of sitemapLocs) {
+        try {
+          const su = new URL(u);
+          if (su.host.replace(/^www\./, "") !== host) continue;
+          if (!visited.has(su.toString())) queue.push(su.toString());
+        } catch {
+          // skip
+        }
+      }
+      // URL entries: <url><loc>...</loc></url>
+      const urlRe = /<url\b[^>]*>[\s\S]*?<loc>([^<]+)<\/loc>[\s\S]*?<\/url>/gi;
+      while ((mm = urlRe.exec(xml)) !== null) {
+        const raw = mm[1].trim();
+        try {
+          const u = new URL(raw);
+          if (u.host.replace(/^www\./, "") !== host) continue;
+          // Skip non-page assets explicitly.
+          if (/\.(pdf|ies|ldt|dwg|dxf|jpe?g|png|gif|webp|mp4|webm|zip|xml)$/i.test(u.pathname)) continue;
+          u.hash = "";
+          // Strip tracking params but keep meaningful query strings.
+          ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref"].forEach(
+            (k) => u.searchParams.delete(k),
+          );
+          out.add(u.toString());
+          if (out.size >= 5000) break;
+        } catch {
+          // skip
+        }
+      }
+      if (out.size >= 5000) break;
+    } catch {
+      // sitemap missing / invalid — try next candidate
+    }
+  }
+  return { urls: [...out], sitemapsVisited: [...visited] };
+}
+
+const BROWSER_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
+  "(KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+
+const DEFAULT_NICHE_KEYWORDS = [
+  "linear",
+  "cove",
+  "grazing",
+  "graze",
+  "wallwash",
+  "wall-wash",
+  "wash",
+  "asymmetric",
+  "symmetric",
+  "indirect",
+  "direct",
+  "pendant",
+  "suspended",
+  "recessed",
+  "slot",
+  "surface",
+  "wall",
+  "system",
+  "inground",
+  "underwater",
+  "facade",
+  "lumenline",
+  "lumenfacade",
+  "lumencove",
+  "lumenfocus",
+  "lumenfacet",
+  "lumenframe",
+  "lumenbasic",
+  "lumenarc",
+];
+
+/**
+ * Extract document URLs from JSON blobs embedded in a page's HTML.
+ *
+ * Many SPA-style brand sites (Lumenpulse, Cooper, Acuity Visual Lighting,
+ * Brightgreen, etc.) inject the rendered product data directly into the
+ * page as an HTML-entity-encoded JSON blob — e.g. on Lumenpulse the page
+ * contains a structure like:
+ *
+ *   [{"id":1,"category":"Specification Sheets","files":[
+ *      {"id":"5242:t22545","title":"Short Specsheet - Metric",
+ *       "file":{"url":"https://...pdf","extension":"pdf",...},
+ *       "file_type":"pdf","file_size":367701, ...
+ *      }, ...
+ *   ]}, ...]
+ *
+ * This function extracts every `(category, title, url, extension)` tuple
+ * from such blobs. Returns an empty array if no recognizable structure is
+ * found — callers can fall back to the anchor-based parser.
+ */
+export type EmbeddedDocument = {
+  category: string;
+  title: string;
+  url: string;
+  ext: string;
+  size: number;
+};
+
+export function extractEmbeddedDocuments(html: string): EmbeddedDocument[] {
+  // HTML-decode entities that the JSON blob is wrapped in.
+  const decoded = html
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;/g, "'");
+
+  const out: EmbeddedDocument[] = [];
+  const seen = new Set<string>();
+
+  // Match each `"category":"<name>","files":[ ... ]` and bracket-balance
+  // walk the array.
+  const catRe = /"category"\s*:\s*"([^"]+)"\s*,\s*"files"\s*:\s*(\[)/g;
+  let cm: RegExpExecArray | null;
+  while ((cm = catRe.exec(decoded)) !== null) {
+    const arrStart = cm.index + cm[0].length - 1;
+    let depth = 0;
+    let i = arrStart;
+    let inString = false;
+    let escape = false;
+    for (; i < decoded.length; i++) {
+      const c = decoded[i];
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === "[") depth++;
+      else if (c === "]") { depth--; if (depth === 0) { i++; break; } }
+    }
+    const filesJson = decoded.slice(arrStart, i);
+    let files: unknown;
+    try {
+      files = JSON.parse(filesJson);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(files)) continue;
+    for (const f of files as Array<Record<string, unknown>>) {
+      const fileNode = (f.file ?? {}) as Record<string, unknown>;
+      const url =
+        (typeof fileNode.url === "string" ? fileNode.url : "") ||
+        (typeof f.url === "string" ? (f.url as string) : "") ||
+        "";
+      if (!url || !/^https?:\/\//i.test(url)) continue;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      const title = String(f.title ?? f.name ?? "").trim();
+      const ext =
+        String(fileNode.extension ?? f.file_type ?? "").trim().toLowerCase() ||
+        (url.split("?")[0].split(".").pop() ?? "").toLowerCase();
+      const size = Number(f.file_size ?? fileNode.size ?? 0) || 0;
+      out.push({
+        category: cm[1].trim(),
+        title,
+        url,
+        ext,
+        size,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Find sub-page links labeled "Downloads" / "Resources" / "Documents" / "Files"
+ * inside a product page so the deep crawler can follow them and harvest more
+ * documents. Many enterprise lighting brands hide PDFs behind a "Downloads"
+ * accordion that loads via JS, but the link to the standalone Downloads page
+ * is usually still in the static HTML.
+ */
+export function extractDownloadSubpageLinks(
+  html: string,
+  baseUrl: string,
+  sameHostOnly = true,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return [];
+  }
+  const aRe = /<a\b[^>]*?href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = aRe.exec(html)) !== null) {
+    const rawHref = (m[1] ?? m[2] ?? m[3] ?? "").trim();
+    if (!rawHref) continue;
+    if (rawHref.startsWith("#") || rawHref.startsWith("javascript:")) continue;
+    let abs: URL;
+    try {
+      abs = new URL(rawHref, base);
+    } catch {
+      continue;
+    }
+    if (sameHostOnly && abs.host.replace(/^www\./, "") !== base.host.replace(/^www\./, "")) continue;
+    const text = m[4]
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    if (
+      !/^(downloads?|resources?|documents?|files|literature|spec\s?sheets?|data\s?sheets?|photometrics?|technical(?:\s?(?:downloads?|files|documents?))?|cad(?:\s?files)?|bim(?:\s?files)?)$/i.test(
+        text,
+      )
+    ) continue;
+    abs.hash = "";
+    const norm = abs.toString();
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(norm);
+  }
+  return out;
+}
+
+function extractLinks(
+  html: string,
+  baseUrl: string,
+): Array<{ href: string; text: string }> {
+  const out: Array<{ href: string; text: string }> = [];
+  const seen = new Set<string>();
+  // Match <a ... href="..."> ...inner... </a>. Greedy enough to capture nested
+  // text but cheap to compute.
+  const re = /<a\b[^>]*?href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return out;
+  }
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const rawHref = (m[1] ?? m[2] ?? m[3] ?? "").trim();
+    if (!rawHref) continue;
+    if (rawHref.startsWith("#") || rawHref.startsWith("javascript:") ||
+        rawHref.startsWith("mailto:") || rawHref.startsWith("tel:")) continue;
+    let abs: string;
+    try {
+      abs = new URL(rawHref, base).toString();
+    } catch {
+      continue;
+    }
+    // Strip fragment and trailing slashes for de-dup
+    const u = new URL(abs);
+    u.hash = "";
+    const norm = u.toString().replace(/\/+$/, "");
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    const text = m[4]
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    out.push({ href: abs, text });
+  }
+  return out;
 }
 
 export function isPdf(mime: string, name: string): boolean {

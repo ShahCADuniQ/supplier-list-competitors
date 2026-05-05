@@ -36,6 +36,13 @@
       "when": 1777833684228,
       "tag": "0004_cloudy_chronomancer",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777914120783,
+      "tag": "0005_worthless_satana",
+      "breakpoints": true
     }
   ]
 }

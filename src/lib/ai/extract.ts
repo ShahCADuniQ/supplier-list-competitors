@@ -275,18 +275,59 @@ export type CompetitorProductExtraction = {
   description: string;
   imageUrls: string[];
   sourceUrl: string;
+  // Direct URL to a specsheet PDF when one is published on the source page —
+  // the server uses this to fetch and attach the PDF on the product.
+  specsheetUrl: string;
+  // Additional document URLs to fetch as attachments — IES files, dimension
+  // drawings, install instructions, etc. Each is a direct link.
+  documentUrls: string[];
   specs: {
+    // Geometry
     dimensions: string;
-    colors: string[];
-    finishes: string[];
-    certifications: string[];
-    cct: string;
+    maxLength: string;
+    length: string;
+    profileFaceSize: string;
+    cutout: string;
+    weight: string;
+    // Photometry
     lumens: string;
     wattage: string;
+    efficacy: string;
+    cct: string;
     cri: string;
+    r9: string;
+    sdcm: string;
     beamAngle: string;
+    opticType: string;
+    ugr: string;
+    // Electrical
     voltage: string;
+    powerFactor: string;
+    inrushCurrent: string;
+    driverLocation: string;
+    driverType: string;
+    dimming: string;
+    // Mounting & form
+    mounting: string;
+    orientation: string;
+    lensType: string;
+    housingMaterial: string;
+    finishes: string[];
+    colors: string[];
+    // Environment & safety
     ipRating: string;
+    ikRating: string;
+    operatingTemp: string;
+    // Lifecycle
+    lifespan: string;
+    warranty: string;
+    countryOfOrigin: string;
+    // Standards
+    certifications: string[];
+    // Customisation
+    customization: string[];
+    accessories: string[];
+    // Catch-all
     notes: string;
   };
 };
@@ -320,27 +361,77 @@ const PRODUCT_SCHEMA = {
       description: "Absolute URLs to product photos (only when extracting from a website with visible images).",
     },
     sourceUrl: { type: "string", description: "Direct link to the product page if known, else empty." },
+    specsheetUrl: { type: "string", description: "Direct URL to a downloadable PDF specsheet/datasheet for the product, if one is linked on the source page. Empty if not visible." },
+    documentUrls: {
+      type: "array",
+      items: { type: "string" },
+      description: "Other downloadable docs linked on the source page — IES files, dimension drawings, install instructions, BIM/Revit, etc. Direct URLs only.",
+    },
     specs: {
       type: "object",
       additionalProperties: false,
       properties: {
-        dimensions: { type: "string", description: "Free-form, include units. e.g. '1200×25×25 mm', '4 ft', '2x4'." },
-        colors: { type: "array", items: { type: "string" }, description: "Available housing/finish colors. e.g. 'White', 'Black', 'Bronze'." },
-        finishes: { type: "array", items: { type: "string" }, description: "Material/finish options. e.g. 'Anodized aluminum', 'Powder coat'." },
-        certifications: { type: "array", items: { type: "string" }, description: "e.g. 'UL', 'DLC', 'CE', 'IP65', 'cULus'." },
-        cct: { type: "string", description: "Color temperature options. e.g. '3000K, 3500K, 4000K' or 'Tunable 2700-6500K'." },
-        lumens: { type: "string", description: "Lumen output range." },
-        wattage: { type: "string", description: "Wattage options." },
-        cri: { type: "string", description: "Color rendering index. e.g. 'CRI 90+'." },
-        beamAngle: { type: "string", description: "Beam angle if applicable." },
-        voltage: { type: "string", description: "Input voltage. e.g. '120-277V'." },
-        ipRating: { type: "string", description: "IP rating if listed." },
-        notes: { type: "string", description: "Anything else worth recording (driver type, dimming protocol, mounting, etc.)." },
+        // Geometry
+        dimensions: { type: "string", description: "Free-form full dimensions with units. e.g. '1200×25×25 mm', '4 ft', '2x4'." },
+        maxLength: { type: "string", description: "Longest single / continuous run available with units. e.g. '12 ft (continuous run)'." },
+        length: { type: "string", description: "Per-section lengths the product ships in, comma list. e.g. '2 ft, 4 ft, 8 ft'." },
+        profileFaceSize: { type: "string", description: "Linear profile face / cross-section dimensions. e.g. '25×25 mm'. Empty for non-linear." },
+        cutout: { type: "string", description: "Recessed / trimless cut-out dimensions. e.g. 'Ø 100 mm', '1200×25 mm'." },
+        weight: { type: "string", description: "Fixture weight per unit / per ft / per metre. e.g. '1.4 kg/m'." },
+        // Photometry
+        lumens: { type: "string", description: "Lumen output range or per-CCT values." },
+        wattage: { type: "string", description: "Wattage option(s)." },
+        efficacy: { type: "string", description: "Lumens-per-watt. e.g. '120 lm/W'." },
+        cct: { type: "string", description: "Color temperature option(s). e.g. '3000K, 4000K' or 'Tunable 2700-6500K'." },
+        cri: { type: "string", description: "Color rendering index. e.g. 'CRI > 90'." },
+        r9: { type: "string", description: "R9 (red) rendering. e.g. 'R9 > 50'. Empty if unstated." },
+        sdcm: { type: "string", description: "MacAdam ellipse / colour consistency. e.g. '3 SDCM'. Empty if unstated." },
+        beamAngle: { type: "string", description: "Beam angle(s) — comma list when multiple optics." },
+        opticType: { type: "string", description: "Optic / reflector type. e.g. 'Reflector', 'TIR lens', 'Wall-wash optic'." },
+        ugr: { type: "string", description: "Unified Glare Rating. e.g. 'UGR < 19'. Empty if unstated." },
+        // Electrical
+        voltage: { type: "string", description: "Input voltage. e.g. '120-277V', '24VDC'." },
+        powerFactor: { type: "string", description: "Power factor. e.g. 'PF > 0.9'. Empty if unstated." },
+        inrushCurrent: { type: "string", description: "Inrush current. e.g. '14A peak / 250µs'. Empty if unstated." },
+        driverLocation: { type: "string", description: "'Internal', 'External', 'Both', or empty." },
+        driverType: { type: "string", description: "Driver model / brand. e.g. 'Tridonic LCO'. Empty if unstated." },
+        dimming: { type: "string", description: "Dimming protocols comma-separated. e.g. '0-10V, DALI-2, TRIAC, Casambi'." },
+        // Mounting & form
+        mounting: { type: "string", description: "Mounting types comma-separated. Use canonical: Surface, Suspended, Recessed, Wall, Cove, Track, Inground, Pole, Stem, Magnetic." },
+        orientation: { type: "string", description: "'Direct', 'Indirect', 'Direct/Indirect', or empty (mostly relevant for pendants)." },
+        lensType: { type: "string", description: "Lens / diffuser type comma-separated. Use canonical: Frosted, Prismatic, Asymmetric, Symmetric, Clear, Opal, Microprismatic, Honeycomb-Louver, Diffuser, Cluster, Lambertian, Linear, Wall-Wash." },
+        housingMaterial: { type: "string", description: "Housing material. e.g. 'Anodized aluminum extrusion'." },
+        finishes: { type: "array", items: { type: "string" }, description: "Finish options (anodised, powder-coat, etc.)." },
+        colors: { type: "array", items: { type: "string" }, description: "Available colors." },
+        // Environment & safety
+        ipRating: { type: "string", description: "IP rating. e.g. 'IP20', 'IP65'." },
+        ikRating: { type: "string", description: "IK impact rating. e.g. 'IK08'. Empty if unstated." },
+        operatingTemp: { type: "string", description: "Ambient operating temperature range. e.g. '-20°C to +40°C'." },
+        // Lifecycle
+        lifespan: { type: "string", description: "Rated life. e.g. 'L70 50,000 hrs', 'L80B10 60,000 hrs'." },
+        warranty: { type: "string", description: "Warranty terms. e.g. '5 years', '10 years on driver'." },
+        countryOfOrigin: { type: "string", description: "Where the product is made. e.g. 'Italy'." },
+        // Standards
+        certifications: { type: "array", items: { type: "string" }, description: "Standards / certifications. e.g. ['UL', 'DLC Premium', 'CE', 'RoHS']." },
+        // Customisation
+        customization: { type: "array", items: { type: "string" }, description: "Custom options offered." },
+        accessories: { type: "array", items: { type: "string" }, description: "Accessories sold/compatible." },
+        // Catch-all
+        notes: { type: "string", description: "Anything else worth recording." },
       },
-      required: ["dimensions", "colors", "finishes", "certifications", "cct", "lumens", "wattage", "cri", "beamAngle", "voltage", "ipRating", "notes"],
+      required: [
+        "dimensions", "maxLength", "length", "profileFaceSize", "cutout", "weight",
+        "lumens", "wattage", "efficacy", "cct", "cri", "r9", "sdcm", "beamAngle",
+        "opticType", "ugr",
+        "voltage", "powerFactor", "inrushCurrent", "driverLocation", "driverType", "dimming",
+        "mounting", "orientation", "lensType", "housingMaterial", "finishes", "colors",
+        "ipRating", "ikRating", "operatingTemp",
+        "lifespan", "warranty", "countryOfOrigin",
+        "certifications", "customization", "accessories", "notes",
+      ],
     },
   },
-  required: ["name", "productCode", "productCategory", "description", "imageUrls", "sourceUrl", "specs"],
+  required: ["name", "productCode", "productCategory", "description", "imageUrls", "sourceUrl", "specsheetUrl", "documentUrls", "specs"],
 };
 
 const COMPETITOR_SCHEMA = {
@@ -393,15 +484,41 @@ Rules for "products":
 - Each product is a real SKU or named product line (e.g. "Slot 4", "BLT-200W", "Define").
 - "imageUrls" must be ABSOLUTE URLs to product images visible in the source. Skip if absent — never invent URLs.
 - "sourceUrl" is the canonical product page URL if you can identify one.
+- "specsheetUrl" is the direct URL to a PDF datasheet/specsheet linked on the source page (often in a "Downloads" / "Documents" / "Spec Sheet" link). Must end in .pdf or otherwise clearly point to a PDF. Empty if not visible.
+- "documentUrls": every other downloadable document URL on the source page (IES, drawings, install guide, BIM/Revit). Include ALL of them — they're auto-attached.
 - "specs.dimensions" should include units. If only some specs are given, fill those and leave the rest as empty strings/arrays.
+- "specs.maxLength": the single longest length offered (e.g. "8 ft" or "2400 mm"). For modular/joiner-based runs that can be continuous, capture that, e.g. "12 ft (continuous run)". Empty if not stated.
+- "specs.length": the discrete per-section lengths the product is sold in (e.g. "2 ft, 4 ft, 8 ft" or "600 / 1200 / 2400 mm"). For modular runs, list every published section size. Empty if not stated.
+- "specs.profileFaceSize": the linear extrusion's face / cross-section dimensions — what an architect cares about for fitting it into a channel or recess. e.g. "25×25 mm", "35×80 mm", "60×60 mm", "1.4" wide". Empty for non-linear products.
 - "specs.colors" / "finishes" / "certifications" are arrays — list every option mentioned, deduped.
+- "specs.mounting": comma-separated mounting options listed for this product. Use canonical terms: Surface, Suspended/Pendant, Recessed, Wall, Cove, Track, Inground, Pole, Stem, Magnetic.
+- "specs.lensType": comma-separated lens/diffuser types. Use canonical terms: Frosted, Prismatic, Asymmetric, Symmetric, Clear, Opal, Microprismatic, Honeycomb/Louver, Diffuser, Cluster, Lambertian, Linear (LL), Wall-Wash.
+- "specs.orientation": "Direct", "Indirect", "Direct/Indirect", or "" — apply only when relevant (mostly suspended pendants).
+- "specs.driverLocation": "Internal" if the driver is built-in / integrated, "External" if remote / sold separately, "Both" if either option is offered, "" if unstated.
+- "specs.dimming": comma-separated protocols (e.g. "0-10V, DALI-2, TRIAC, Bluetooth Casambi").
+- "specs.efficacy": "120 lm/W" style — only if explicitly stated.
+- "specs.customization": list every customization option called out (e.g. "Custom length", "Custom CCT", "RAL finish", "Custom optic", "Special voltage"). Empty if not offered.
+- "specs.accessories": list every accessory mentioned (e.g. "End caps", "Aircraft cable kit", "Plaster trim", "Joiners", "Recess kit"). Empty if not listed.
 - Be precise: do not guess a wattage or lumen number that isn't in the source.
 - If the input clearly isn't a catalog (e.g. a corporate-overview page), return an empty products array.`;
 
-export async function extractCompetitor(input: SourceInput): Promise<CompetitorExtraction> {
-  const sources = await buildContext(input);
+export async function extractCompetitor(
+  input: SourceInput & {
+    /** Optional collection-niche prompt — when set, the extractor only keeps
+     *  products that match the niche (e.g. "Linear Lighting" for Lumenpulse,
+     *  ignoring downlights / exterior). */
+    niche?: string;
+    /** Already-fetched sources — when provided, skips the buildContext fetch.
+     *  Useful for the deep crawler that does its own page selection. */
+    presourced?: ParsedSource[];
+  } = {},
+): Promise<CompetitorExtraction> {
+  const sources = input.presourced ?? (await buildContext(input));
+  const systemPrompt = input.niche
+    ? `${COMPETITOR_PROMPT}\n\nNICHE FILTER (very important): we are populating a "${input.niche}" collection. Only extract products that fit this niche. Skip every product that's clearly outside it (e.g. for a Linear Lighting niche, skip downlights, recessed cans, exterior bollards, troffers that aren't linear, etc.). If a brand has 80 products and only 10 are in the niche, return those 10 — empty products is preferable to off-niche noise.`
+    : COMPETITOR_PROMPT;
   return callJsonSchema<CompetitorExtraction>({
-    systemPrompt: COMPETITOR_PROMPT,
+    systemPrompt,
     userContent: buildUserContent(sources),
     schemaName: "competitor_extraction",
     schema: COMPETITOR_SCHEMA,
@@ -578,5 +695,188 @@ export async function webResearchWebsite(
 ): Promise<{ website: string; sources: string[] }> {
   const result = await webResearchSupplier(supplier);
   return { website: result.website, sources: result.sources };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SINGLE-PRODUCT EXTRACTION — runs the product schema against ONE product page
+// at a time. Used by the deep crawler so each product gets focused attention
+// (instead of a 30-product bulk extraction where details get squashed).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SINGLE_PRODUCT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    product: PRODUCT_SCHEMA,
+  },
+  required: ["product"],
+} as const;
+
+export type SingleProductExtraction = {
+  product: CompetitorProductExtraction;
+};
+
+export async function extractSingleProduct(input: {
+  pageText: string;
+  pageUrl: string;
+  /** Niche label is provided as a HINT for the model to know what kind of
+   *  vocabulary to use, NOT as a filter. Niche filtering happens upstream. */
+  niche: string;
+  hintName?: string;
+}): Promise<SingleProductExtraction> {
+  const systemPrompt = `You are extracting one product's full spec sheet from a single product page.
+
+You will be given:
+- The cleaned text of one product page (URL: ${input.pageUrl})
+${input.hintName ? `- The product's known name: "${input.hintName}"` : ""}
+- A NICHE LABEL: "${input.niche}". This is a HINT about the kind of luminaire family on this page so you use the right vocabulary. It is NOT a filter — the URL has already been vetted upstream. Do NOT exclude products.
+
+Return JSON: { "product": { ...productSchema... } }.
+
+Always return a product. Even if the page seems like a family overview rather than a single SKU, extract whatever name and specs you can. The caller handles deduping.
+
+For the product:
+- "name" must be the actual brand-given product name (e.g. "Lumenline", "Lumenfacade Indirect"). Use the hint if it matches what's on the page.
+- "sourceUrl" must be the page URL exactly as given.
+- "specsheetUrl" — direct PDF URL on this page that's clearly the spec sheet (look for words like "Spec Sheet", "Cut Sheet", "Datasheet"). Empty if not visible.
+- "documentUrls" — every other downloadable doc URL on the page (IES, drawings, install guide, BIM/Revit, brochure). Include them ALL.
+- "imageUrls" — absolute URLs to product photos visible on the page.
+- "specs" — fill EVERY field that the page actually states. Use canonical vocab:
+    mounting: Surface / Suspended / Recessed / Wall / Cove / Track / Inground / Pole / Stem / Magnetic
+    lensType: Frosted / Prismatic / Asymmetric / Symmetric / Clear / Opal / Microprismatic / Honeycomb-Louver / Diffuser / Cluster / Lambertian / Linear / Wall-Wash
+    orientation: Direct / Indirect / Direct/Indirect
+    driverLocation: Internal / External / Both
+    dimming: 0-10V, DALI-2, TRIAC, Casambi, Bluetooth, etc. — comma list
+    length: discrete per-section sizes the product is sold in, comma list (e.g. "2 ft, 4 ft, 8 ft" or "600 / 1200 / 2400 mm"). For continuous runs, capture both the section sizes AND the max continuous length.
+    profileFaceSize: cross-section / face dimensions of the extrusion — most-asked spec for architectural linears (e.g. "25×25 mm", "35×80 mm", "1.4\" wide"). Empty for non-linear products.
+    customization: every custom option ("Custom length", "Custom CCT", "RAL finish", "Custom optic", "Special voltage")
+    accessories: every accessory listed ("End caps", "Aircraft cable kit", "Plaster trim", "Joiners", "Recess kit")
+- For arrays, list every option mentioned. Don't summarize.
+- Don't invent values that aren't in the page text.`;
+
+  const userContent: ChatCompletionContentPart[] = [
+    {
+      type: "text",
+      text: `=== Page text from ${input.pageUrl} ===\n${input.pageText}`,
+    },
+  ];
+
+  return callJsonSchema<SingleProductExtraction>({
+    systemPrompt,
+    userContent,
+    schemaName: "single_product_extraction",
+    schema: SINGLE_PRODUCT_SCHEMA,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NICHE VERIFICATION (vision)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// URL slugs lie. iGuzzini's "Laser Blade" sounds linear but is actually a
+// multi-cell DOWNLIGHT family — only "Linear Laser Blade" is the linear
+// version. To distinguish reliably we hand the product image + a short text
+// snippet to GPT-4o vision and ask point-blank whether the product belongs to
+// the user's niche. Conservative: when the model isn't sure, say no.
+
+export type NicheVerification = {
+  matches: boolean;
+  productType: string;
+  reason: string;
+  confidence: "high" | "medium" | "low";
+};
+
+const NICHE_VERIFICATION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    matches: {
+      type: "boolean",
+      description:
+        "true ONLY if this product is unambiguously in the user's niche. When unsure, return false.",
+    },
+    productType: {
+      type: "string",
+      description:
+        "What this product actually IS, in 2-6 words (e.g. 'recessed multi-cell downlight', 'linear cove luminaire', 'outdoor pole light').",
+    },
+    reason: {
+      type: "string",
+      description:
+        "1-2 sentences explaining the call. Cite what's visible in the image and the relevant niche scope.",
+    },
+    confidence: { type: "string", enum: ["high", "medium", "low"] },
+  },
+  required: ["matches", "productType", "reason", "confidence"],
+} as const;
+
+/**
+ * Verify a candidate product against a user-defined niche using GPT-4o vision.
+ *
+ * Sends product image(s) + name + description and returns a structured verdict
+ * (matches / doesn't match the niche, plus reason and confidence). When images
+ * are missing, falls back to text-only verification — better than no check at
+ * all since the URL still carries signal.
+ */
+export async function verifyProductMatchesNiche(input: {
+  niche: string;
+  productName: string;
+  productDescription?: string;
+  pageText?: string;
+  pageUrl: string;
+  imageUrls: string[];
+}): Promise<NicheVerification> {
+  const { niche, productName, productDescription, pageText, pageUrl, imageUrls } =
+    input;
+  // Up to 5 images (variants + family hero + lifestyle). detail=high lets
+  // vision see the actual form factor — at low detail GPT-4o cannot reliably
+  // tell a linear channel from a multi-cell downlight grid.
+  const cleanImages = imageUrls
+    .filter((u) => /^https?:\/\//i.test(u))
+    .slice(0, 5);
+
+  const systemPrompt = `You verify whether a lighting product matches a user-defined niche. You will REJECT products that don't unambiguously match.
+
+GROUND TRUTH = the IMAGE. URL slugs and product names are misleading more often than not:
+  - "Laser Blade" by iGuzzini is a MULTI-CELL DOWNLIGHT GRID (small spot cells in a row inside a recessed frame) — NOT a linear light. Only "Linear Laser Blade" is actually linear.
+  - "Linealuce", "Underscore", "Lumenline", "iN60", "Linear Cove" — these ARE linear.
+  - "downlight", "spot", "projector", "bollard", "in-ground", "pole", "facade", "wall sconce" — these are NOT linear (regardless of niche scope).
+  - Outdoor products have weatherproof housings, IP66+ ratings, ground stakes, fins, bollard bases, asymmetric facade optics.
+
+To match "indoor linear" the image MUST show a CONTINUOUS-LENGTH luminaire — a long thin channel, strip, profile, or cove. Aspect ratio is unmistakable: at least 4:1 length-to-width when on a wall/ceiling, or a continuous extruded profile.
+
+Be STRICT. If the image shows:
+  - A round/square recessed can → matches=false (downlight)
+  - A grid of cells → matches=false (cellular downlight, even if marketed as "linear-ish")
+  - A spotlight, projector, or adjustable head → matches=false
+  - An accessory, driver, end-cap, mounting bracket → matches=false
+  - An outdoor luminaire (weatherproof body, fin housing, in-ground sleeve) → matches=false
+  - Multiple unrelated products / a category collage → matches=false (can't verify a single SKU)
+  - A loading skeleton / placeholder / blank → matches=false (confidence=low)
+
+Match only when the image is UNAMBIGUOUSLY a linear-form indoor luminaire and confidence is high or medium.`;
+
+  const userText = `Niche: "${niche}"
+
+Product name: ${productName || "(unknown)"}
+${productDescription ? `Description: ${productDescription}\n` : ""}${pageText ? `Page text excerpt:\n${pageText.slice(0, 1500)}\n\n` : ""}Source URL: ${pageUrl}
+
+${cleanImages.length === 0 ? "(No image was extractable — judge from text + URL only, and lean toward matches=false unless the niche is unmistakable in the description.)" : `Look at the attached image(s) — that's ground truth. Reject if the form factor or scope doesn't match "${niche}".`}
+
+Return JSON.`;
+
+  const parts: ChatCompletionContentPart[] = [{ type: "text", text: userText }];
+  for (const url of cleanImages) {
+    parts.push({
+      type: "image_url",
+      image_url: { url, detail: "high" },
+    });
+  }
+  return callJsonSchema<NicheVerification>({
+    systemPrompt,
+    userContent: parts,
+    schemaName: "niche_verification",
+    schema: NICHE_VERIFICATION_SCHEMA as Record<string, unknown>,
+  });
 }
 

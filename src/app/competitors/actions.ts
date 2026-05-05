@@ -351,3 +351,21 @@ export async function deleteProductAttachment(id: number) {
   await db.delete(competitorProductAttachments).where(eq(competitorProductAttachments.id, id));
   revalidatePath("/competitors");
 }
+
+export async function deleteAllProductAttachments(productId: number) {
+  await requireCompetitorEditor();
+  const rows = await db
+    .select()
+    .from(competitorProductAttachments)
+    .where(eq(competitorProductAttachments.productId, productId));
+  for (const r of rows) {
+    if (r.blobPathname) {
+      try { await del(r.url); } catch (e) { console.error("Blob del failed", r.blobPathname, e); }
+    }
+  }
+  await db
+    .delete(competitorProductAttachments)
+    .where(eq(competitorProductAttachments.productId, productId));
+  revalidatePath("/competitors");
+  return { deleted: rows.length };
+}
