@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   applyTheme,
   readStoredTheme,
@@ -21,11 +21,13 @@ const NEXT: Record<ThemeChoice, ThemeChoice> = {
 };
 
 export default function ThemeToggle() {
-  const [choice, setChoice] = useState<ThemeChoice>(() => {
+  const [choice, setChoice] = useState<ThemeChoice>("system");
+
+  useEffect(() => {
     const stored = readStoredTheme();
+    setChoice(stored);
     applyTheme(stored);
-    return stored;
-  });
+  }, []);
 
   function cycle() {
     const next = NEXT[choice];
