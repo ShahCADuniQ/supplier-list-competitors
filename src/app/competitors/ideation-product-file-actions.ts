@@ -7,24 +7,11 @@ import { db } from "@/db";
 import { ideationProductFiles } from "@/db/schema";
 import { requireCompetitorEditor } from "@/lib/permissions";
 
-// Slots used by the IdeationProductDrawer. The DB column is plain text so
-// we can add new categories without a schema change, but we keep this
-// registry so the UI and validation stay in sync.
-export const PRODUCT_FILE_KINDS = [
-  "image",
-  "design_drawing",
-  "specsheet",
-  "installation_manual",
-  "assembly_manual",
-  "specification_table",
-  "bom",
-  "arborescence",
-] as const;
-export type ProductFileKind = (typeof PRODUCT_FILE_KINDS)[number];
-
-// Collection-level slots. Currently only one — Product Collection Brochure.
-export const COLLECTION_FILE_KINDS = ["collection_brochure"] as const;
-export type CollectionFileKind = (typeof COLLECTION_FILE_KINDS)[number];
+// Slots used by the IdeationProductDrawer are defined inline in that
+// component (the DB column is plain text so we can add new kinds without
+// touching this file). Server action files can only export async
+// functions per Next.js — exporting the const array / type union here
+// produced a build-time "use server" error.
 
 function cleanString(v: unknown): string | null {
   if (typeof v !== "string") return null;
