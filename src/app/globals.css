@@ -48,116 +48,141 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ─── shadcn vars (light mode — fallback when .dark is not applied) ──────
+   We default to dark via the no-FOUC script in <head>, but keep light as
+   a coherent secondary mode users can opt into via the theme toggle. */
 :root {
-  --background: #fafafa;
-  --foreground: #0a0a0a;
+  --background: #f6f7fb;
+  --foreground: #0a0b10;
   --card: #ffffff;
-  --card-foreground: #0a0a0a;
+  --card-foreground: #0a0b10;
   --popover: #ffffff;
-  --popover-foreground: #0a0a0a;
-  --primary: #18181b;
-  --primary-foreground: #fafafa;
-  --secondary: #f4f4f5;
-  --secondary-foreground: #18181b;
-  --muted: #f4f4f5;
-  --muted-foreground: #52525b;
-  --accent: #f4f4f5;
-  --accent-foreground: #18181b;
-  --destructive: #ef4444;
-  --border: rgba(0, 0, 0, 0.08);
-  --input: rgba(0, 0, 0, 0.16);
-  --ring: rgba(24, 24, 27, 0.18);
-  --chart-1: #3b82f6;
-  --chart-2: #10b981;
-  --chart-3: #f59e0b;
-  --chart-4: #ef4444;
+  --popover-foreground: #0a0b10;
+  --primary: #2563ff;
+  --primary-foreground: #ffffff;
+  --secondary: #eef0f6;
+  --secondary-foreground: #0a0b10;
+  --muted: #eef0f6;
+  --muted-foreground: #5a6072;
+  --accent: #eef0f6;
+  --accent-foreground: #0a0b10;
+  --destructive: #ff4d2e;
+  --border: rgba(10, 11, 16, 0.08);
+  --input: rgba(10, 11, 16, 0.16);
+  --ring: rgba(37, 99, 255, 0.32);
+  --chart-1: #2563ff;
+  --chart-2: #34d399;
+  --chart-3: #ff4d2e;
+  --chart-4: #fbbf24;
   --chart-5: #8b5cf6;
-  --radius: 0.5rem;
+  --radius: 1rem;
   --sidebar: #ffffff;
-  --sidebar-foreground: #0a0a0a;
-  --sidebar-primary: #18181b;
-  --sidebar-primary-foreground: #fafafa;
-  --sidebar-accent: #f4f4f5;
-  --sidebar-accent-foreground: #18181b;
-  --sidebar-border: rgba(0, 0, 0, 0.08);
-  --sidebar-ring: rgba(24, 24, 27, 0.18);
+  --sidebar-foreground: #0a0b10;
+  --sidebar-primary: #2563ff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef0f6;
+  --sidebar-accent-foreground: #0a0b10;
+  --sidebar-border: rgba(10, 11, 16, 0.08);
+  --sidebar-ring: rgba(37, 99, 255, 0.32);
 }
 
 .dark {
-  --background: #0a0a0a;
-  --foreground: #fafafa;
-  --card: #141414;
-  --card-foreground: #fafafa;
-  --popover: #141414;
-  --popover-foreground: #fafafa;
-  --primary: #fafafa;
-  --primary-foreground: #0a0a0a;
-  --secondary: #1f1f1f;
-  --secondary-foreground: #fafafa;
-  --muted: #1f1f1f;
-  --muted-foreground: #a1a1aa;
-  --accent: #1f1f1f;
-  --accent-foreground: #fafafa;
-  --destructive: #f87171;
-  --border: rgba(255, 255, 255, 0.08);
-  --input: rgba(255, 255, 255, 0.16);
-  --ring: rgba(250, 250, 250, 0.18);
-  --chart-1: #60a5fa;
-  --chart-2: #34d399;
-  --chart-3: #fbbf24;
-  --chart-4: #f87171;
+  --background: #0c0d11;
+  --foreground: #ffffff;
+  --card: #1a1c22;
+  --card-foreground: #ffffff;
+  --popover: #1a1c22;
+  --popover-foreground: #ffffff;
+  --primary: #2563ff;
+  --primary-foreground: #ffffff;
+  --secondary: #20232b;
+  --secondary-foreground: #ffffff;
+  --muted: #20232b;
+  --muted-foreground: #a0a3ad;
+  --accent: #20232b;
+  --accent-foreground: #ffffff;
+  --destructive: #ff4d2e;
+  --border: rgba(255, 255, 255, 0.06);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: rgba(37, 99, 255, 0.45);
+  --chart-1: #2563ff;
+  --chart-2: #4ade80;
+  --chart-3: #ff4d2e;
+  --chart-4: #fbbf24;
   --chart-5: #a78bfa;
-  --sidebar: #141414;
-  --sidebar-foreground: #fafafa;
-  --sidebar-primary: #fafafa;
-  --sidebar-primary-foreground: #0a0a0a;
-  --sidebar-accent: #1f1f1f;
-  --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: rgba(250, 250, 250, 0.18);
+  --sidebar: #0c0d11;
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: #2563ff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #20232b;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-ring: rgba(37, 99, 255, 0.45);
 }
 
-/* ─── Industrial / operational design tokens ─────────────────────────────
+/* ─── Modern SaaS dashboard tokens ────────────────────────────────────
    Source of truth for all visuals. Helper classes below consume these,
-   shadcn vars above mirror them. */
+   shadcn vars above mirror them. Default mode is dark; light mode kept
+   as a coherent toggle option. */
 :root {
-  /* Surfaces */
-  --lb-bg: #fafafa;
+  /* Surfaces (light mode) */
+  --lb-bg: #f6f7fb;
   --lb-bg-elev: #ffffff;
-  --lb-bg-sunken: #f4f4f5;
+  --lb-bg-sunken: #eef0f6;
 
   /* Text */
-  --lb-text: #0a0a0a;
-  --lb-text-2: #52525b;
-  --lb-text-3: #71717a;
+  --lb-text: #0a0b10;
+  --lb-text-2: #5a6072;
+  --lb-text-3: #8a90a0;
 
   /* Borders */
-  --lb-border: rgba(0, 0, 0, 0.08);
-  --lb-border-strong: rgba(0, 0, 0, 0.16);
+  --lb-border: rgba(10, 11, 16, 0.08);
+  --lb-border-strong: rgba(10, 11, 16, 0.16);
 
-  /* Accent (near-monochrome by intent) */
-  --lb-accent: #18181b;
-  --lb-accent-fg: #fafafa;
-  --lb-accent-hover: #27272a;
-  --lb-accent-active: #09090b;
+  /* Accent — vivid cobalt blue (primary CTA across the app) */
+  --lb-accent: #2563ff;
+  --lb-accent-fg: #ffffff;
+  --lb-accent-hover: #1d4eff;
+  --lb-accent-active: #1740d4;
+
+  /* Vivid hero card colors (used as full-bleed card backgrounds) */
+  --lb-vivid-orange: #ff4d2e;
+  --lb-vivid-orange-fg: #ffffff;
+  --lb-vivid-blue: #2563ff;
+  --lb-vivid-blue-fg: #ffffff;
+  --lb-vivid-violet: #8b5cf6;
+  --lb-vivid-violet-fg: #ffffff;
+  --lb-vivid-teal: #14b8a6;
+  --lb-vivid-teal-fg: #ffffff;
 
   /* Status */
-  --lb-success: #10b981;
-  --lb-warning: #f59e0b;
-  --lb-danger: #ef4444;
-  --lb-info: #3b82f6;
+  --lb-success: #34d399;
+  --lb-warning: #fbbf24;
+  --lb-danger: #ff4d2e;
+  --lb-info: #2563ff;
 
-  /* Shadows */
-  --lb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --lb-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --lb-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  /* Chart palette — bar gradient (top → bottom), donut shades, etc. */
+  --lb-chart-bar-top: #4ade80;
+  --lb-chart-bar-bottom: #1740d4;
+  --lb-chart-line-1: #4ade80;
+  --lb-chart-line-2: #2563ff;
+  --lb-chart-line-3: #ff4d2e;
+  --lb-chart-line-4: #fbbf24;
+  --lb-chart-line-5: #a78bfa;
 
-  /* Radii — sharper than before, no pills */
-  --lb-radius-xs: 4px;
-  --lb-radius-sm: 6px;
-  --lb-radius: 8px;
-  --lb-radius-lg: 12px;
-  --lb-radius-pill: 6px; /* legacy alias — collapsed to sm so stale uses still feel industrial */
+  /* Shadows (subtle on light mode) */
+  --lb-shadow-sm: 0 1px 2px rgba(10, 11, 16, 0.06);
+  --lb-shadow: 0 4px 16px rgba(10, 11, 16, 0.08);
+  --lb-shadow-lg: 0 16px 40px rgba(10, 11, 16, 0.12);
+  --lb-glow-accent: 0 0 0 3px rgba(37, 99, 255, 0.32);
+
+  /* Radii — rounded SaaS feel; pill restored for inline controls */
+  --lb-radius-xs: 8px;
+  --lb-radius-sm: 12px;
+  --lb-radius: 18px;        /* default card radius */
+  --lb-radius-lg: 22px;     /* big cards */
+  --lb-radius-xl: 28px;     /* hero cards */
+  --lb-radius-pill: 9999px; /* pill controls (search, dropdowns, primary CTA) */
 
   /* Type */
   --lb-font-display: "Geist", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -173,37 +198,49 @@
   --lb-text-22: 22px;
   --lb-text-32: 32px;
 
-  /* Layout */
-  --lb-sidebar-w: 240px;
-  --lb-sidebar-collapsed-w: 56px;
-  --lb-topbar-h: 48px;
+  /* Layout — fixed narrow icon rail, taller top bar for the pill controls */
+  --lb-sidebar-w: 80px;            /* current expanded == collapsed; rail is fixed */
+  --lb-sidebar-collapsed-w: 80px;
+  --lb-topbar-h: 72px;
 }
+
 .dark,
 html.dark {
-  --lb-bg: #0a0a0a;
-  --lb-bg-elev: #141414;
-  --lb-bg-sunken: #050505;
+  /* Surfaces — near-black with subtle cool tint */
+  --lb-bg: #0c0d11;
+  --lb-bg-elev: #1a1c22;
+  --lb-bg-sunken: #16181d;
 
-  --lb-text: #fafafa;
-  --lb-text-2: #a1a1aa;
-  --lb-text-3: #71717a;
+  /* Text */
+  --lb-text: #ffffff;
+  --lb-text-2: #a0a3ad;
+  --lb-text-3: #6e7280;
 
-  --lb-border: rgba(255, 255, 255, 0.08);
-  --lb-border-strong: rgba(255, 255, 255, 0.16);
+  /* Borders */
+  --lb-border: rgba(255, 255, 255, 0.06);
+  --lb-border-strong: rgba(255, 255, 255, 0.12);
 
-  --lb-accent: #fafafa;
-  --lb-accent-fg: #0a0a0a;
-  --lb-accent-hover: #e4e4e7;
-  --lb-accent-active: #d4d4d8;
+  /* Accent stays vivid in both modes */
+  --lb-accent: #2563ff;
+  --lb-accent-fg: #ffffff;
+  --lb-accent-hover: #3a76ff;
+  --lb-accent-active: #1d4eff;
 
-  --lb-success: #34d399;
+  /* Vivid hero colors stay the same hue, slightly tuned for dark contrast */
+  --lb-vivid-orange: #ff4d2e;
+  --lb-vivid-blue: #2563ff;
+
+  /* Status (slightly brighter in dark) */
+  --lb-success: #4ade80;
   --lb-warning: #fbbf24;
-  --lb-danger: #f87171;
-  --lb-info: #60a5fa;
+  --lb-danger: #ff4d2e;
+  --lb-info: #3a76ff;
 
+  /* Shadows — heavier in dark mode for depth on dark surfaces */
   --lb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --lb-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --lb-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --lb-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --lb-shadow-lg: 0 24px 48px rgba(0, 0, 0, 0.6);
+  --lb-glow-accent: 0 0 0 3px rgba(37, 99, 255, 0.45);
 }
 
 @layer base {
@@ -216,18 +253,20 @@ html.dark {
     font-family: var(--lb-font-text);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: "ss01","cv11";
-    letter-spacing: -.01em;
+    font-feature-settings: "ss01", "cv11";
+    letter-spacing: -0.01em;
   }
   html {
     font-family: var(--lb-font-text);
   }
-  h1,h2,h3,h4{font-family:var(--lb-font-display);letter-spacing:-.022em;font-weight:600}
+  h1, h2, h3, h4 {
+    font-family: var(--lb-font-display);
+    letter-spacing: -0.022em;
+    font-weight: 700;
+  }
 }
 
-/* ─── Reusable industrial primitives ────────────────────────────────────
-   Helper classes pages can use directly. Subsequent plans will replace
-   most usages with React primitives in src/components/ui/. */
+/* ─── Reusable SaaS dashboard primitives ───────────────────────────── */
 
 .lb-glass {
   background: var(--lb-bg-elev);
@@ -241,13 +280,27 @@ html.dark {
   box-shadow: var(--lb-shadow-sm);
 }
 
+/* Vivid hero card — full-bleed solid color background, light text */
+.lb-card-vivid {
+  border-radius: var(--lb-radius-lg);
+  border: none;
+  box-shadow: var(--lb-shadow);
+  color: #ffffff;
+  padding: 24px;
+}
+.lb-card-vivid-orange { background: var(--lb-vivid-orange); }
+.lb-card-vivid-blue { background: var(--lb-vivid-blue); }
+.lb-card-vivid-violet { background: var(--lb-vivid-violet); }
+.lb-card-vivid-teal { background: var(--lb-vivid-teal); }
+
+/* Pill button — rounded, modern, default ghost-on-elevated */
 .lb-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: var(--lb-radius-sm);
+  gap: 8px;
+  padding: 0 16px;
+  border-radius: var(--lb-radius-pill);
   font-family: var(--lb-font-text);
   font-size: var(--lb-text-13);
   font-weight: 500;
@@ -255,16 +308,16 @@ html.dark {
   background: var(--lb-bg-elev);
   color: var(--lb-text);
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 100ms ease;
   letter-spacing: -0.005em;
-  height: 32px;
+  height: 36px;
+  white-space: nowrap;
 }
 .lb-btn:hover {
   background: var(--lb-bg-sunken);
 }
 .lb-btn:active {
-  background: var(--lb-bg-sunken);
-  border-color: var(--lb-border-strong);
+  transform: scale(0.98);
 }
 .lb-btn:disabled {
   opacity: 0.5;
@@ -272,7 +325,7 @@ html.dark {
 }
 .lb-btn:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lb-accent) 22%, transparent);
+  box-shadow: var(--lb-glow-accent);
 }
 
 .lb-btn-primary {
@@ -294,27 +347,31 @@ html.dark {
   background: transparent;
 }
 .lb-btn-ghost:hover {
-  background: var(--lb-bg-sunken);
+  background: color-mix(in srgb, var(--lb-text) 8%, transparent);
 }
 
+/* Pill input — rounded, slightly taller, soft bg */
 .lb-input {
   width: 100%;
   box-sizing: border-box;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--lb-border-strong);
-  border-radius: var(--lb-radius-xs);
-  background: var(--lb-bg-elev);
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--lb-border);
+  border-radius: var(--lb-radius-pill);
+  background: var(--lb-bg-sunken);
   color: var(--lb-text);
   font-family: var(--lb-font-text);
-  font-size: var(--lb-text-13);
+  font-size: var(--lb-text-14);
   letter-spacing: -0.005em;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.lb-input::placeholder {
+  color: var(--lb-text-3);
 }
 .lb-input:focus {
   outline: none;
   border-color: var(--lb-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lb-accent) 18%, transparent);
+  box-shadow: var(--lb-glow-accent);
 }
 
 .lb-label {
@@ -324,8 +381,24 @@ html.dark {
   letter-spacing: -0.005em;
 }
 
+/* All-caps section title — used for "PRODUCT", "PROJECTS TIMELINE", etc. */
+.lb-section-title {
+  font-family: var(--lb-font-display);
+  font-size: var(--lb-text-15);
+  font-weight: 700;
+  color: var(--lb-text);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 /* Mono utility — for SKUs, IDs, codes */
 .lb-mono {
   font-family: var(--lb-font-mono);
   font-feature-settings: "tnum" 1;
+}
+
+/* Bar-chart gradient utility — apply as `background` to an svg <rect> via fill,
+   or as a CSS gradient on a div bar. */
+.lb-bar-gradient {
+  background: linear-gradient(180deg, var(--lb-chart-bar-top) 0%, var(--lb-chart-bar-bottom) 100%);
 }
