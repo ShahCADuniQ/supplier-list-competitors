@@ -10,12 +10,22 @@ export default async function HandbookPage() {
   if (!profile) redirect("/sign-in");
   if (!canViewHandbook(profile)) redirect("/");
 
+  // The iframe content is owned separately (public/handbook.html) and uses
+  // its own light styling. We wrap it in a rounded card so it sits naturally
+  // inside the dark SaaS shell without bleeding to the edges.
   return (
-    <iframe
-      src="/handbook.html"
-      title="Lightbase Process Handbook"
-      className="flex-1 w-full border-0 bg-white"
-      style={{ height: "calc(100vh - 57px)" }}
-    />
+    <div className="px-6 py-6 h-full" style={{ background: "var(--lb-bg)" }}>
+      <div
+        className="lb-card overflow-hidden h-full"
+        style={{ borderRadius: "var(--lb-radius-lg)" }}
+      >
+        <iframe
+          src="/handbook.html"
+          title="Lightbase Process Handbook"
+          className="w-full h-full border-0"
+          style={{ background: "#ffffff" }}
+        />
+      </div>
+    </div>
   );
 }
