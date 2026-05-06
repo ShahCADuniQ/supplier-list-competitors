@@ -49,72 +49,161 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --background: #fafafa;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #18181b;
+  --primary-foreground: #fafafa;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #52525b;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+  --destructive: #ef4444;
+  --border: rgba(0, 0, 0, 0.08);
+  --input: rgba(0, 0, 0, 0.16);
+  --ring: rgba(24, 24, 27, 0.18);
+  --chart-1: #3b82f6;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #8b5cf6;
+  --radius: 0.5rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #18181b;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-accent-foreground: #18181b;
+  --sidebar-border: rgba(0, 0, 0, 0.08);
+  --sidebar-ring: rgba(24, 24, 27, 0.18);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --card: #141414;
+  --card-foreground: #fafafa;
+  --popover: #141414;
+  --popover-foreground: #fafafa;
+  --primary: #fafafa;
+  --primary-foreground: #0a0a0a;
+  --secondary: #1f1f1f;
+  --secondary-foreground: #fafafa;
+  --muted: #1f1f1f;
+  --muted-foreground: #a1a1aa;
+  --accent: #1f1f1f;
+  --accent-foreground: #fafafa;
+  --destructive: #f87171;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.16);
+  --ring: rgba(250, 250, 250, 0.18);
+  --chart-1: #60a5fa;
+  --chart-2: #34d399;
+  --chart-3: #fbbf24;
+  --chart-4: #f87171;
+  --chart-5: #a78bfa;
+  --sidebar: #141414;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #fafafa;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #1f1f1f;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: rgba(250, 250, 250, 0.18);
+}
+
+/* ─── Industrial / operational design tokens ─────────────────────────────
+   Source of truth for all visuals. Helper classes below consume these,
+   shadcn vars above mirror them. */
+:root {
+  /* Surfaces */
+  --lb-bg: #fafafa;
+  --lb-bg-elev: #ffffff;
+  --lb-bg-sunken: #f4f4f5;
+
+  /* Text */
+  --lb-text: #0a0a0a;
+  --lb-text-2: #52525b;
+  --lb-text-3: #71717a;
+
+  /* Borders */
+  --lb-border: rgba(0, 0, 0, 0.08);
+  --lb-border-strong: rgba(0, 0, 0, 0.16);
+
+  /* Accent (near-monochrome by intent) */
+  --lb-accent: #18181b;
+  --lb-accent-fg: #fafafa;
+  --lb-accent-hover: #27272a;
+  --lb-accent-active: #09090b;
+
+  /* Status */
+  --lb-success: #10b981;
+  --lb-warning: #f59e0b;
+  --lb-danger: #ef4444;
+  --lb-info: #3b82f6;
+
+  /* Shadows */
+  --lb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --lb-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --lb-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* Radii — sharper than before, no pills */
+  --lb-radius-xs: 4px;
+  --lb-radius-sm: 6px;
+  --lb-radius: 8px;
+  --lb-radius-lg: 12px;
+  --lb-radius-pill: 6px; /* legacy alias — collapsed to sm so stale uses still feel industrial */
+
+  /* Type */
+  --lb-font-display: "Geist", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --lb-font-text: "Geist", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --lb-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Type scale */
+  --lb-text-12: 12px;
+  --lb-text-13: 13px;
+  --lb-text-14: 14px;
+  --lb-text-15: 15px;
+  --lb-text-18: 18px;
+  --lb-text-22: 22px;
+  --lb-text-32: 32px;
+
+  /* Layout */
+  --lb-sidebar-w: 240px;
+  --lb-sidebar-collapsed-w: 56px;
+  --lb-topbar-h: 48px;
+}
+.dark,
+html.dark {
+  --lb-bg: #0a0a0a;
+  --lb-bg-elev: #141414;
+  --lb-bg-sunken: #050505;
+
+  --lb-text: #fafafa;
+  --lb-text-2: #a1a1aa;
+  --lb-text-3: #71717a;
+
+  --lb-border: rgba(255, 255, 255, 0.08);
+  --lb-border-strong: rgba(255, 255, 255, 0.16);
+
+  --lb-accent: #fafafa;
+  --lb-accent-fg: #0a0a0a;
+  --lb-accent-hover: #e4e4e7;
+  --lb-accent-active: #d4d4d8;
+
+  --lb-success: #34d399;
+  --lb-warning: #fbbf24;
+  --lb-danger: #f87171;
+  --lb-info: #60a5fa;
+
+  --lb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --lb-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --lb-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
 }
 
 @layer base {
@@ -122,9 +211,115 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    background: var(--lb-bg);
+    color: var(--lb-text);
+    font-family: var(--lb-font-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "ss01","cv11";
+    letter-spacing: -.01em;
   }
   html {
-    @apply font-sans;
+    font-family: var(--lb-font-text);
   }
+  h1,h2,h3,h4{font-family:var(--lb-font-display);letter-spacing:-.022em;font-weight:600}
+}
+
+/* ─── Reusable industrial primitives ────────────────────────────────────
+   Helper classes pages can use directly. Subsequent plans will replace
+   most usages with React primitives in src/components/ui/. */
+
+.lb-glass {
+  background: var(--lb-bg-elev);
+  border-bottom: 1px solid var(--lb-border);
+}
+
+.lb-card {
+  background: var(--lb-bg-elev);
+  border: 1px solid var(--lb-border);
+  border-radius: var(--lb-radius);
+  box-shadow: var(--lb-shadow-sm);
+}
+
+.lb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--lb-radius-sm);
+  font-family: var(--lb-font-text);
+  font-size: var(--lb-text-13);
+  font-weight: 500;
+  border: 1px solid var(--lb-border-strong);
+  background: var(--lb-bg-elev);
+  color: var(--lb-text);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  letter-spacing: -0.005em;
+  height: 32px;
+}
+.lb-btn:hover {
+  background: var(--lb-bg-sunken);
+}
+.lb-btn:active {
+  background: var(--lb-bg-sunken);
+  border-color: var(--lb-border-strong);
+}
+.lb-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lb-btn-primary {
+  background: var(--lb-accent);
+  border-color: var(--lb-accent);
+  color: var(--lb-accent-fg);
+}
+.lb-btn-primary:hover {
+  background: var(--lb-accent-hover);
+  border-color: var(--lb-accent-hover);
+}
+.lb-btn-primary:active {
+  background: var(--lb-accent-active);
+}
+
+.lb-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+.lb-btn-ghost:hover {
+  background: var(--lb-bg-sunken);
+}
+
+.lb-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--lb-border-strong);
+  border-radius: var(--lb-radius-xs);
+  background: var(--lb-bg-elev);
+  color: var(--lb-text);
+  font-family: var(--lb-font-text);
+  font-size: var(--lb-text-13);
+  letter-spacing: -0.005em;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.lb-input:focus {
+  outline: none;
+  border-color: var(--lb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lb-accent) 18%, transparent);
+}
+
+.lb-label {
+  font-size: var(--lb-text-12);
+  font-weight: 500;
+  color: var(--lb-text-2);
+  letter-spacing: -0.005em;
+}
+
+/* Mono utility — for SKUs, IDs, codes */
+.lb-mono {
+  font-family: var(--lb-font-mono);
+  font-feature-settings: "tnum" 1;
 }
