@@ -283,7 +283,7 @@ export default function IdeationProductDrawer({
                     style={{
                       position: "relative",
                       aspectRatio: "1 / 1",
-                      background: "var(--surface-2)",
+                      background: "#0f172a",
                       borderRadius: 8,
                       overflow: "hidden",
                       border: "1px solid var(--border)",
@@ -291,6 +291,9 @@ export default function IdeationProductDrawer({
                       cursor: "pointer",
                       fontFamily: "inherit",
                       transition: "border-color 160ms ease, transform 100ms ease",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
                     }}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -299,9 +302,11 @@ export default function IdeationProductDrawer({
                       alt={it.title ?? ""}
                       loading="lazy"
                       style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
+                        maxWidth: "100%",
+                        maxHeight: "100%",
+                        width: "auto",
+                        height: "auto",
+                        objectFit: "contain",
                         display: "block",
                       }}
                       onError={(e) => {
@@ -449,10 +454,13 @@ function FileSlot({
               style={{
                 position: "relative",
                 aspectRatio: "1 / 1",
-                background: "var(--surface-2)",
+                background: "#0f172a",
                 borderRadius: 8,
                 overflow: "hidden",
                 border: "1px solid var(--border)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -460,9 +468,11 @@ function FileSlot({
                 src={f.url}
                 alt={f.name}
                 style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  width: "auto",
+                  height: "auto",
+                  objectFit: "contain",
                   display: "block",
                 }}
               />
