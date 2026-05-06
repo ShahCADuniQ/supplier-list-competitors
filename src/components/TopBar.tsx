@@ -6,7 +6,7 @@ import ThemeToggle from "./ThemeToggle";
 
 const TITLE_BY_PREFIX: { prefix: string; title: string }[] = [
   { prefix: "/suppliers", title: "INVENTORY" },
-  { prefix: "/competitors", title: "COMPETITORS" },
+  { prefix: "/competitors", title: "COMPETITORS & MARKET RESEARCH" },
   { prefix: "/handbook", title: "PROCESS" },
   { prefix: "/engineering", title: "ENGINEERING" },
   { prefix: "/admin", title: "ADMIN" },
