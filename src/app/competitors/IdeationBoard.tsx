@@ -125,58 +125,71 @@ export default function IdeationBoard({
     return { perProduct: counts, globalCount };
   }, [items, linkageMap]);
 
-  // ── Add product flow ──────────────────────────────────────────────────
+  // ── Product modals ──────────────────────────────────────────────────
+  // Three modal states, mutually exclusive: add a new product, edit an
+  // existing one (name + color), or confirm deletion. Replaces the old
+  // window.prompt / window.confirm flows so input stays in the dashboard.
+  type ProductModalState =
+    | { kind: "closed" }
+    | { kind: "add" }
+    | { kind: "edit"; product: IdeationProduct }
+    | { kind: "delete"; product: IdeationProduct };
+  const [productModal, setProductModal] = useState<ProductModalState>({ kind: "closed" });
   const [productBusy, setProductBusy] = useState(false);
-  async function handleAddProduct() {
-    if (!canEdit) return;
-    const name = window.prompt(
-      "Product name (e.g. Lightcove v2, Pendant Slim, Outdoor Bollard):",
-    );
-    if (!name || !name.trim()) return;
+
+  async function submitAddProduct(name: string, color: string) {
     setProductBusy(true);
     try {
       await addIdeationProduct({
         collectionId: collection.id,
-        name: name.trim(),
+        name,
+        color,
       });
       router.refresh();
-      onToast(`Added product "${name.trim()}"`);
+      onToast(`Added product "${name}"`);
+      setProductModal({ kind: "closed" });
     } catch (e) {
-      onToast(e instanceof Error ? e.message : "Add product failed", true);
+      const msg = e instanceof Error ? e.message : "Add product failed";
+      // Translate Postgres' "relation does not exist" into a path-forward.
+      const hint = /ideation_products.*does not exist|relation .* does not exist/i.test(msg)
+        ? "Database migration 0007 hasn't been applied. Run: npm run db:apply"
+        : msg;
+      onToast(hint, true);
     } finally {
       setProductBusy(false);
     }
   }
 
-  async function handleRenameProduct(p: IdeationProduct) {
-    if (!canEdit) return;
-    const next = window.prompt("Rename product:", p.name);
-    if (!next || !next.trim() || next.trim() === p.name) return;
+  async function submitEditProduct(
+    product: IdeationProduct,
+    name: string,
+    color: string,
+  ) {
+    setProductBusy(true);
     try {
-      await updateIdeationProduct({ id: p.id, name: next.trim() });
+      await updateIdeationProduct({ id: product.id, name, color });
       router.refresh();
-      onToast("Renamed");
+      onToast("Saved");
+      setProductModal({ kind: "closed" });
     } catch (e) {
-      onToast(e instanceof Error ? e.message : "Rename failed", true);
+      onToast(e instanceof Error ? e.message : "Save failed", true);
+    } finally {
+      setProductBusy(false);
     }
   }
 
-  async function handleDeleteProduct(p: IdeationProduct) {
-    if (!canEdit) return;
-    if (
-      !window.confirm(
-        `Delete product "${p.name}"? Existing ideas linked to it will lose this specific link (they aren't deleted).`,
-      )
-    ) {
-      return;
-    }
+  async function submitDeleteProduct(product: IdeationProduct) {
+    setProductBusy(true);
     try {
-      await deleteIdeationProduct(p.id);
+      await deleteIdeationProduct(product.id);
       router.refresh();
-      onToast(`Deleted "${p.name}"`);
-      if (productFilter === p.id) setProductFilter(null);
+      onToast(`Deleted "${product.name}"`);
+      if (productFilter === product.id) setProductFilter(null);
+      setProductModal({ kind: "closed" });
     } catch (e) {
       onToast(e instanceof Error ? e.message : "Delete failed", true);
+    } finally {
+      setProductBusy(false);
     }
   }
 
@@ -496,9 +509,9 @@ export default function IdeationBoard({
                 <span className="id-product-pill-acts">
                   <button
                     type="button"
-                    title="Rename"
-                    aria-label={`Rename ${p.name}`}
-                    onClick={() => handleRenameProduct(p)}
+                    title="Edit"
+                    aria-label={`Edit ${p.name}`}
+                    onClick={() => setProductModal({ kind: "edit", product: p })}
                   >
                     ✎
                   </button>
@@ -506,7 +519,7 @@ export default function IdeationBoard({
                     type="button"
                     title="Delete"
                     aria-label={`Delete ${p.name}`}
-                    onClick={() => handleDeleteProduct(p)}
+                    onClick={() => setProductModal({ kind: "delete", product: p })}
                   >
                     ✕
                   </button>
@@ -535,11 +548,11 @@ export default function IdeationBoard({
           <button
             type="button"
             className="id-product-add"
-            onClick={handleAddProduct}
+            onClick={() => setProductModal({ kind: "add" })}
             disabled={productBusy}
             title="Add a product you're developing"
           >
-            {productBusy ? "Adding…" : "+ Add product"}
+            + Add product
           </button>
         )}
       </div>
@@ -686,6 +699,268 @@ export default function IdeationBoard({
           onClose={() => setOpenItemId(null)}
         />
       )}
+
+      {productModal.kind === "add" && (
+        <ProductFormModal
+          mode="add"
+          existingColors={products.map((p) => p.color)}
+          busy={productBusy}
+          onCancel={() => setProductModal({ kind: "closed" })}
+          onSubmit={(name, color) => submitAddProduct(name, color)}
+        />
+      )}
+      {productModal.kind === "edit" && (
+        <ProductFormModal
+          mode="edit"
+          initial={productModal.product}
+          existingColors={products
+            .filter((p) => p.id !== productModal.product.id)
+            .map((p) => p.color)}
+          busy={productBusy}
+          onCancel={() => setProductModal({ kind: "closed" })}
+          onSubmit={(name, color) =>
+            submitEditProduct(productModal.product, name, color)
+          }
+        />
+      )}
+      {productModal.kind === "delete" && (
+        <ConfirmModal
+          title={`Delete "${productModal.product.name}"?`}
+          body="Existing ideas linked to this product will lose this specific link, but the ideas themselves are not deleted. You can re-link them to other products at any time."
+          confirmLabel="Delete product"
+          danger
+          busy={productBusy}
+          onCancel={() => setProductModal({ kind: "closed" })}
+          onConfirm={() => submitDeleteProduct(productModal.product)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Product modals — in-app form for add / edit and a confirm dialog for
+// delete. All three replace the previous window.prompt / window.confirm
+// flows so input stays inside the dashboard.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRODUCT_PRESET_COLORS = [
+  "#2563ff",
+  "#4ade80",
+  "#ff4d2e",
+  "#fbbf24",
+  "#a78bfa",
+  "#22d3ee",
+  "#f472b6",
+  "#34d399",
+  "#60a5fa",
+  "#f97316",
+];
+
+function ProductFormModal({
+  mode,
+  initial,
+  existingColors,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  mode: "add" | "edit";
+  initial?: IdeationProduct;
+  existingColors: string[];
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (name: string, color: string) => void;
+}) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [color, setColor] = useState(
+    initial?.color ??
+      PRODUCT_PRESET_COLORS.find((c) => !existingColors.includes(c)) ??
+      PRODUCT_PRESET_COLORS[0],
+  );
+
+  const trimmed = name.trim();
+  const canSubmit = trimmed.length > 0 && !busy;
+
+  function handleSubmit() {
+    if (!canSubmit) return;
+    onSubmit(trimmed, color);
+  }
+
+  return (
+    <div
+      className="modal-overlay show"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !busy) onCancel();
+      }}
+    >
+      <div className="modal" style={{ width: 480 }}>
+        <div className="modal-head">
+          <h2>{mode === "add" ? "Add product" : "Edit product"}</h2>
+        </div>
+        <div className="modal-body">
+          <div className="form-grid" style={{ gridTemplateColumns: "1fr" }}>
+            <div className="form-group">
+              <label>Product name</label>
+              <input
+                className="form-input"
+                placeholder="e.g. Lightcove v2, Pendant Slim, Outdoor Bollard"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleSubmit();
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    onCancel();
+                  }
+                }}
+                autoFocus
+                disabled={busy}
+              />
+            </div>
+            <div className="form-group">
+              <label>Color</label>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  alignItems: "center",
+                }}
+              >
+                {PRODUCT_PRESET_COLORS.map((c) => {
+                  const selected = c === color;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setColor(c)}
+                      aria-label={`Color ${c}`}
+                      aria-pressed={selected}
+                      disabled={busy}
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 9999,
+                        background: c,
+                        border: selected
+                          ? "3px solid var(--text)"
+                          : "1px solid var(--border-strong)",
+                        cursor: busy ? "not-allowed" : "pointer",
+                        padding: 0,
+                        flexShrink: 0,
+                      }}
+                    />
+                  );
+                })}
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                  disabled={busy}
+                  style={{
+                    width: 36,
+                    height: 28,
+                    padding: 0,
+                    border: "1px solid var(--border-strong)",
+                    borderRadius: 6,
+                    background: "transparent",
+                    cursor: busy ? "not-allowed" : "pointer",
+                  }}
+                  title="Custom color"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="modal-foot">
+          <button
+            type="button"
+            className="btn"
+            onClick={onCancel}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+          >
+            {busy
+              ? mode === "add"
+                ? "Adding…"
+                : "Saving…"
+              : mode === "add"
+                ? "Add product"
+                : "Save changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmModal({
+  title,
+  body,
+  confirmLabel,
+  danger,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  danger?: boolean;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="modal-overlay show"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !busy) onCancel();
+      }}
+    >
+      <div className="modal" style={{ width: 460 }}>
+        <div className="modal-head">
+          <h2>{title}</h2>
+        </div>
+        <div className="modal-body">
+          <p style={{ margin: 0, color: "var(--text-2)", lineHeight: 1.55 }}>
+            {body}
+          </p>
+        </div>
+        <div className="modal-foot">
+          <button
+            type="button"
+            className="btn"
+            onClick={onCancel}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={danger ? "btn btn-danger" : "btn primary"}
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? "Working…" : confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

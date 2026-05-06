@@ -51,8 +51,13 @@ export default async function CompetitorsPage() {
     db.select().from(competitorProductAttachments).orderBy(desc(competitorProductAttachments.addedAt)),
   ]);
 
-  // Ideation items live in a table added by migration 0005. If that hasn't been
-  // applied yet we render the page without them (Ideation tab shows empty).
+  // Ideation items live in a table added by migration 0005. The is_global
+  // column was added in 0007. If 0007 hasn't been applied yet, the full
+  // SELECT fails on the missing column — we fall back to selecting only the
+  // pre-V10 columns and stamp isGlobal=true onto each row so existing
+  // Pinterest cards keep rendering. The Ideation board treats them as
+  // applying to every product (the V10 default), and the user can re-link
+  // individual cards once they've migrated.
   let ideationItems: Array<typeof competitorIdeationItems.$inferSelect> = [];
   try {
     ideationItems = await db
@@ -60,7 +65,37 @@ export default async function CompetitorsPage() {
       .from(competitorIdeationItems)
       .orderBy(asc(competitorIdeationItems.sortOrder), asc(competitorIdeationItems.id));
   } catch (e) {
-    console.warn("competitor_ideation_items not available yet:", e);
+    console.warn("Full ideation_items select failed; trying pre-V10 columns only:", e);
+    try {
+      const rows = await db
+        .select({
+          id: competitorIdeationItems.id,
+          collectionId: competitorIdeationItems.collectionId,
+          title: competitorIdeationItems.title,
+          notes: competitorIdeationItems.notes,
+          imageUrl: competitorIdeationItems.imageUrl,
+          blobPathname: competitorIdeationItems.blobPathname,
+          mimeType: competitorIdeationItems.mimeType,
+          size: competitorIdeationItems.size,
+          kind: competitorIdeationItems.kind,
+          competitorId: competitorIdeationItems.competitorId,
+          productId: competitorIdeationItems.productId,
+          annotations: competitorIdeationItems.annotations,
+          tags: competitorIdeationItems.tags,
+          sortOrder: competitorIdeationItems.sortOrder,
+          addedByClerkId: competitorIdeationItems.addedByClerkId,
+          createdAt: competitorIdeationItems.createdAt,
+          updatedAt: competitorIdeationItems.updatedAt,
+        })
+        .from(competitorIdeationItems)
+        .orderBy(
+          asc(competitorIdeationItems.sortOrder),
+          asc(competitorIdeationItems.id),
+        );
+      ideationItems = rows.map((r) => ({ ...r, isGlobal: true }));
+    } catch (e2) {
+      console.warn("competitor_ideation_items not available yet:", e2);
+    }
   }
 
   // Ideation products + linkages live in tables added by migration 0007.

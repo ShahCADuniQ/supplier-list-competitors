@@ -57,13 +57,29 @@ export default async function Home() {
         : Promise.resolve([]),
       comp ? safeQuery(() => db.select().from(competitors)) : Promise.resolve([]),
       comp
-        ? safeQuery(() =>
-            db
-              .select()
-              .from(competitorIdeationItems)
-              .orderBy(desc(competitorIdeationItems.id))
-              .limit(8),
-          )
+        ? (async () => {
+            // Same pre-V10 fallback as the competitors page: if the
+            // is_global column is missing the full SELECT fails, so retry
+            // with only the original columns.
+            try {
+              return await db
+                .select()
+                .from(competitorIdeationItems)
+                .orderBy(desc(competitorIdeationItems.id))
+                .limit(8);
+            } catch {
+              return safeQuery(() =>
+                db
+                  .select({
+                    id: competitorIdeationItems.id,
+                    title: competitorIdeationItems.title,
+                  })
+                  .from(competitorIdeationItems)
+                  .orderBy(desc(competitorIdeationItems.id))
+                  .limit(8),
+              );
+            }
+          })()
         : Promise.resolve([]),
       comp
         ? safeQuery(() => db.select().from(competitorCollections).limit(50))
