@@ -32,6 +32,7 @@ import type {
   CompetitorIdeationItem,
   IdeationProduct,
   IdeationItemProduct,
+  IdeationProductFile,
 } from "@/db/schema";
 import BenchmarkView from "./BenchmarkView";
 import IdeationBoard from "./IdeationBoard";
@@ -92,6 +93,7 @@ export default function CompetitorsView({
   ideationItems,
   ideationProducts,
   ideationItemProducts,
+  ideationProductFiles,
   canEdit,
 }: {
   collections: CompetitorCollection[];
@@ -99,6 +101,7 @@ export default function CompetitorsView({
   ideationItems: CompetitorIdeationItem[];
   ideationProducts: IdeationProduct[];
   ideationItemProducts: IdeationItemProduct[];
+  ideationProductFiles: IdeationProductFile[];
   canEdit: boolean;
 }) {
   const router = useRouter();
@@ -143,6 +146,13 @@ export default function CompetitorsView({
     );
     return ideationItemProducts.filter((l) => itemIdsInColl.has(l.ideationItemId));
   }, [ideationItems, ideationItemProducts, activeCollectionId]);
+  const collIdeationFiles = useMemo(
+    () =>
+      activeCollectionId
+        ? ideationProductFiles.filter((f) => f.collectionId === activeCollectionId)
+        : [],
+    [ideationProductFiles, activeCollectionId],
+  );
 
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState<Set<string>>(new Set());
@@ -659,6 +669,7 @@ export default function CompetitorsView({
               items={collIdeation}
               products={collIdeationProducts}
               linkages={collIdeationLinkages}
+              files={collIdeationFiles}
               canEdit={canEdit}
               onToast={toast}
             />

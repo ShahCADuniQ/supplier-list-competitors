@@ -21,13 +21,19 @@ import {
   deleteIdeationProduct,
   updateIdeationProduct,
 } from "./ideation-product-actions";
+import {
+  replaceCollectionBrochure,
+  deleteCollectionBrochure,
+} from "./ideation-product-file-actions";
 import IdeationDetailDrawer from "./IdeationDetailDrawer";
+import IdeationProductDrawer from "./IdeationProductDrawer";
 import type {
   CompetitorCollection,
   Competitor,
   CompetitorIdeationItem,
   IdeationProduct,
   IdeationItemProduct,
+  IdeationProductFile,
 } from "@/db/schema";
 
 function safeFileName(name: string) {
@@ -65,6 +71,7 @@ export default function IdeationBoard({
   items,
   products,
   linkages,
+  files,
   canEdit,
   onToast,
 }: {
@@ -73,11 +80,40 @@ export default function IdeationBoard({
   items: CompetitorIdeationItem[];
   products: IdeationProduct[];
   linkages: IdeationItemProduct[];
+  files: IdeationProductFile[];
   canEdit: boolean;
   onToast: (msg: string, err?: boolean) => void;
 }) {
   void _brands;
   const router = useRouter();
+
+  // ── Files split: collection brochure + per-product files ──────────────
+  // ideation_product_files holds both. productId === null + kind ===
+  // "collection_brochure" is the brochure row; everything else has a
+  // productId pointing at an ideation product.
+  const collectionBrochure =
+    files.find(
+      (f) => f.productId === null && f.fileKind === "collection_brochure",
+    ) ?? null;
+  const filesByProduct = useMemo(() => {
+    const m = new Map<number, IdeationProductFile[]>();
+    for (const f of files) {
+      if (f.productId == null) continue;
+      const list = m.get(f.productId) ?? [];
+      list.push(f);
+      m.set(f.productId, list);
+    }
+    return m;
+  }, [files]);
+
+  // ── Product detail drawer ────────────────────────────────────────────
+  // Opening: clicking a product pill filters AND opens the drawer.
+  // Closing: drawer's own close button. The filter stays selected until
+  // the user picks another pill or clicks "All ideas".
+  const [drawerProductId, setDrawerProductId] = useState<number | null>(null);
+  const drawerProduct = drawerProductId
+    ? products.find((p) => p.id === drawerProductId) ?? null
+    : null;
 
   // ── Product filter ─────────────────────────────────────────────────────
   // null  = "All ideas" (no product filter)
@@ -185,6 +221,7 @@ export default function IdeationBoard({
       router.refresh();
       onToast(`Deleted "${product.name}"`);
       if (productFilter === product.id) setProductFilter(null);
+      if (drawerProductId === product.id) setDrawerProductId(null);
       setProductModal({ kind: "closed" });
     } catch (e) {
       onToast(e instanceof Error ? e.message : "Delete failed", true);
@@ -458,6 +495,14 @@ export default function IdeationBoard({
         </div>
       </div>
 
+      <CollectionBrochureCard
+        collection={collection}
+        brochure={collectionBrochure}
+        canEdit={canEdit}
+        onToast={onToast}
+        onChange={() => router.refresh()}
+      />
+
       {/* Products row — pills to filter ideas by which product they apply to.
           "All ideas" (default) shows everything; clicking a product pill shows
           ideas linked to that product (plus any flagged is_global). */}
@@ -495,11 +540,14 @@ export default function IdeationBoard({
                 type="button"
                 role="tab"
                 aria-selected={active}
-                onClick={() => setProductFilter(p.id)}
+                onClick={() => {
+                  setProductFilter(p.id);
+                  setDrawerProductId(p.id);
+                }}
                 className="id-product-pill"
                 data-active={active}
                 style={{ "--pill-color": p.color } as React.CSSProperties}
-                title={p.description ?? p.name}
+                title={`${p.name} — click to view details and files`}
               >
                 <span className="id-product-pill-dot" aria-hidden />
                 {p.name}
@@ -700,6 +748,20 @@ export default function IdeationBoard({
         />
       )}
 
+      {drawerProduct && (
+        <IdeationProductDrawer
+          product={drawerProduct}
+          files={filesByProduct.get(drawerProduct.id) ?? []}
+          canEdit={canEdit}
+          onEdit={() => setProductModal({ kind: "edit", product: drawerProduct })}
+          onDelete={() =>
+            setProductModal({ kind: "delete", product: drawerProduct })
+          }
+          onToast={onToast}
+          onClose={() => setDrawerProductId(null)}
+        />
+      )}
+
       {productModal.kind === "add" && (
         <ProductFormModal
           mode="add"
@@ -792,11 +854,39 @@ function ProductFormModal({
       className="modal-overlay show"
       role="dialog"
       aria-modal="true"
+      // Inline styles so we don't depend on the .modal-overlay CSS class
+      // that lives in SuppliersView's CSS string. This file is mounted
+      // inside CompetitorsView's scope where that class isn't defined,
+      // which previously caused the modal to render at the bottom of the
+      // page rather than centered.
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
       onClick={(e) => {
         if (e.target === e.currentTarget && !busy) onCancel();
       }}
     >
-      <div className="modal" style={{ width: 480 }}>
+      <div
+        className="modal"
+        style={{
+          width: 480,
+          maxWidth: "100%",
+          maxHeight: "90vh",
+          overflowY: "auto",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--lb-radius-lg)",
+          boxShadow: "var(--lb-shadow-lg)",
+          color: "var(--text)",
+        }}
+      >
         <div className="modal-head">
           <h2>{mode === "add" ? "Add product" : "Edit product"}</h2>
         </div>
@@ -929,11 +1019,32 @@ function ConfirmModal({
       className="modal-overlay show"
       role="dialog"
       aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
       onClick={(e) => {
         if (e.target === e.currentTarget && !busy) onCancel();
       }}
     >
-      <div className="modal" style={{ width: 460 }}>
+      <div
+        className="modal"
+        style={{
+          width: 460,
+          maxWidth: "100%",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--lb-radius-lg)",
+          boxShadow: "var(--lb-shadow-lg)",
+          color: "var(--text)",
+        }}
+      >
         <div className="modal-head">
           <h2>{title}</h2>
         </div>
@@ -1055,5 +1166,201 @@ function IdeationCard({
         </div>
       )}
     </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Collection brochure card — single-file slot (Product Collection Brochure)
+// for the entire collection. Sits at the top of the Ideation board so it's
+// always visible. Replaces the existing brochure on each upload (the action
+// drops the old blob server-side).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CollectionBrochureCard({
+  collection,
+  brochure,
+  canEdit,
+  onToast,
+  onChange,
+}: {
+  collection: CompetitorCollection;
+  brochure: IdeationProductFile | null;
+  canEdit: boolean;
+  onToast: (msg: string, err?: boolean) => void;
+  onChange: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function handleUpload(files: FileList | File[]) {
+    if (!canEdit) return;
+    const f = Array.from(files)[0];
+    if (!f) return;
+    setBusy(true);
+    try {
+      const safeName = f.name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "file";
+      const pathname = `competitors/ideation-collections/${collection.id}/brochure/${crypto.randomUUID()}/${safeName}`;
+      const blob = await upload(pathname, f, {
+        access: "public",
+        handleUploadUrl: "/api/blob/upload",
+        contentType: f.type || undefined,
+      });
+      await replaceCollectionBrochure({
+        collectionId: collection.id,
+        name: f.name,
+        size: f.size,
+        mimeType: f.type || null,
+        url: blob.url,
+        blobPathname: blob.pathname,
+      });
+      onChange();
+      onToast(brochure ? "Brochure replaced" : "Brochure uploaded");
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Upload failed", true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!canEdit || !brochure) return;
+    if (!confirm(`Delete "${brochure.name}"?`)) return;
+    setBusy(true);
+    try {
+      await deleteCollectionBrochure(collection.id);
+      onChange();
+      onToast("Brochure deleted");
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Delete failed", true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function fmtBytes(n: number) {
+    if (!n) return "";
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  return (
+    <section
+      className="d-card"
+      style={{
+        marginBottom: 12,
+        padding: 16,
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        flexWrap: "wrap",
+      }}
+    >
+      <div style={{ flexShrink: 0 }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            color: "var(--text-2)",
+          }}
+        >
+          {collection.name} Collection
+        </div>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 600,
+            color: "var(--text)",
+            marginTop: 2,
+          }}
+        >
+          Product Collection Brochure
+        </div>
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {brochure ? (
+          <a
+            href={brochure.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "10px 14px",
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--lb-radius-sm)",
+              color: "var(--text)",
+              textDecoration: "none",
+              fontSize: 13,
+            }}
+            title={brochure.name}
+          >
+            <span aria-hidden style={{ fontSize: 16 }}>📄</span>
+            <span
+              style={{
+                flex: 1,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                fontWeight: 500,
+              }}
+            >
+              {brochure.name}
+            </span>
+            <span style={{ fontSize: 11, color: "var(--muted)", flexShrink: 0 }}>
+              {fmtBytes(brochure.size ?? 0)}
+            </span>
+          </a>
+        ) : (
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--muted)",
+              fontStyle: "italic",
+            }}
+          >
+            No brochure uploaded yet.
+          </div>
+        )}
+      </div>
+
+      {canEdit && (
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <label
+            className="btn primary sm"
+            style={{
+              cursor: busy ? "not-allowed" : "pointer",
+              opacity: busy ? 0.6 : 1,
+            }}
+          >
+            {busy ? "Uploading…" : brochure ? "Replace" : "Upload brochure"}
+            <input
+              type="file"
+              style={{ display: "none" }}
+              disabled={busy}
+              onChange={(e) => {
+                if (e.target.files?.length) handleUpload(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {brochure && (
+            <button
+              type="button"
+              className="btn sm danger"
+              onClick={handleDelete}
+              disabled={busy}
+              title="Delete brochure"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

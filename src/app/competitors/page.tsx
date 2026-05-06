@@ -10,6 +10,7 @@ import {
   competitorIdeationItems,
   ideationProducts,
   ideationItemProducts,
+  ideationProductFiles,
 } from "@/db/schema";
 import {
   getOrCreateProfile,
@@ -113,6 +114,17 @@ export default async function CompetitorsPage() {
     console.warn("ideation_products / ideation_item_products not available yet:", e);
   }
 
+  // Files for the product drawer + collection brochure (migration 0008).
+  let ideationProductFileRows: Array<typeof ideationProductFiles.$inferSelect> = [];
+  try {
+    ideationProductFileRows = await db
+      .select()
+      .from(ideationProductFiles)
+      .orderBy(desc(ideationProductFiles.addedAt));
+  } catch (e) {
+    console.warn("ideation_product_files not available yet:", e);
+  }
+
   const attsByComp = new Map<number, typeof atts>();
   atts.forEach((a) => {
     const list = attsByComp.get(a.competitorId) ?? [];
@@ -145,6 +157,7 @@ export default async function CompetitorsPage() {
       ideationItems={ideationItems}
       ideationProducts={ideationProductRows}
       ideationItemProducts={ideationItemProductRows}
+      ideationProductFiles={ideationProductFileRows}
       canEdit={canEdit(profile)}
     />
   );

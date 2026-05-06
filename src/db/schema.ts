@@ -436,6 +436,43 @@ export const ideationItemProducts = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// IDEATION PRODUCT FILES — uploads attached to either a specific ideation
+// product (productId set) or to the collection itself (productId null).
+// fileKind is a free-form text slot so we can grow categories without a
+// schema change. Current product slots: image, design_drawing, specsheet,
+// installation_manual, assembly_manual, specification_table, bom,
+// arborescence. Collection slot: collection_brochure (one row per
+// collection by convention; UI replaces the existing row when a new
+// brochure is uploaded).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ideationProductFiles = pgTable(
+  "ideation_product_files",
+  {
+    id: serial("id").primaryKey(),
+    collectionId: integer("collection_id")
+      .notNull()
+      .references(() => competitorCollections.id, { onDelete: "cascade" }),
+    productId: integer("product_id").references(() => ideationProducts.id, {
+      onDelete: "cascade",
+    }),
+    fileKind: text("file_kind").notNull(),
+    name: text("name").notNull(),
+    size: bigint("size", { mode: "number" }).notNull().default(0),
+    mimeType: text("mime_type"),
+    url: text("url").notNull(),
+    blobPathname: text("blob_pathname"),
+    uploaderClerkId: text("uploader_clerk_id"),
+    addedAt: timestamp("added_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    productIdx: index("ideation_product_files_product_idx").on(t.productId),
+    collectionIdx: index("ideation_product_files_collection_idx").on(t.collectionId),
+    kindIdx: index("ideation_product_files_kind_idx").on(t.fileKind),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HANDBOOK REVISIONS — snapshots of the interactive Process Handbook content
 // for a given user. Each row holds the full {data, itemState, _uid} blob from
 // the in-page editor. Drafts can be saved repeatedly; submitting flips status
@@ -592,3 +629,5 @@ export type NewCompetitorIdeationItem = typeof competitorIdeationItems.$inferIns
 export type IdeationProduct = typeof ideationProducts.$inferSelect;
 export type NewIdeationProduct = typeof ideationProducts.$inferInsert;
 export type IdeationItemProduct = typeof ideationItemProducts.$inferSelect;
+export type IdeationProductFile = typeof ideationProductFiles.$inferSelect;
+export type NewIdeationProductFile = typeof ideationProductFiles.$inferInsert;
