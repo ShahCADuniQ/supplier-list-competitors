@@ -391,6 +391,8 @@ export default function BenchmarkView({
     }
   }
 
+  const brandsWithProducts = brands.filter((b) => b.products.length > 0);
+
   return (
     <div className="bm-wrap">
       {canEdit && (
@@ -407,13 +409,13 @@ export default function BenchmarkView({
           <div className="d-eyebrow">Benchmark</div>
           <h1 className="d-title">{collection.name}</h1>
           <p className="d-sub">
-            Per-brand product catalogs · {brands.length} brand{brands.length === 1 ? "" : "s"} ·{" "}
+            Per-brand product catalogs · {brandsWithProducts.length} brand{brandsWithProducts.length === 1 ? "" : "s"} ·{" "}
             {totalProducts} product{totalProducts === 1 ? "" : "s"}. Updates as you add products — new brands appear automatically.
           </p>
         </div>
       </div>
 
-      {brands.length === 0 ? (
+      {brandsWithProducts.length === 0 ? (
         <div className="d-card" style={{ padding: 24, textAlign: "center" }}>
           <h4 style={{ marginTop: 0 }}>No brands yet in this collection</h4>
           <p style={{ color: "var(--muted)", fontSize: 13, margin: "6px 0 16px" }}>
@@ -424,7 +426,7 @@ export default function BenchmarkView({
         </div>
       ) : (
         <div className="bm-brands">
-          {brands.map((b) => (
+          {brandsWithProducts.map((b) => (
             <BrandSection key={b.id} brand={b} canEdit={canEdit} onToast={onToast} />
           ))}
         </div>
