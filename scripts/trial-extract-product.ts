@@ -59,11 +59,12 @@ async function main() {
     );
     const t1 = Date.now();
     try {
+      // Match production (aiAddProductFromInput) settings exactly.
       const rendered = await renderPageHtml(url, {
         waitUntil: "networkidle",
-        timeoutMs: 30_000,
-        blockResources: false,
-        scrollPasses: 2,
+        timeoutMs: 25_000,
+        blockResources: true,
+        scrollPasses: 3,
         clickToReveal: true,
       });
       if (rendered.html) {

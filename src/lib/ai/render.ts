@@ -93,7 +93,62 @@ export type RenderResult = {
  * Returns an empty `html` string and `status: 0` if the render failed (timeout,
  * navigation error, etc.) — the caller decides whether to fall back further.
  */
+/**
+ * Heuristic — does this rendered HTML look like a bot-challenge interstitial
+ * (Cloudflare "Just a moment...", Akamai/Imperva CAPTCHA wall) rather than
+ * the real page? When TRUE, the caller should retry without resource blocking
+ * — these challenges run JS that needs stylesheets/cookie scripts to execute.
+ */
+function looksLikeBotChallenge(html: string): boolean {
+  if (!html) return true;
+  // Cloudflare's challenge page is consistently small (< 60 KB) and contains
+  // these signatures.
+  if (html.length > 80_000) return false;
+  const sig = [
+    "Just a moment",
+    "Performing security verification",
+    "challenges.cloudflare.com",
+    "cf-browser-verification",
+    "Checking if the site connection is secure",
+    "Please enable JS and disable any ad blocker",
+    "/cdn-cgi/challenge-platform/",
+    "Imperva",
+    "Distil Networks",
+    "_Incapsula_Resource",
+    "AkamaiBot",
+  ];
+  return sig.some((s) => html.includes(s));
+}
+
 export async function renderPageHtml(
+  url: string,
+  options: RenderOptions = {},
+): Promise<RenderResult> {
+  const r = await renderPageHtmlInner(url, options);
+  // If we got a bot-challenge interstitial AND we were blocking resources,
+  // retry once with resources unblocked. Cloudflare/Akamai's JS challenges
+  // need stylesheets and tracking-script subrequests to complete.
+  if (
+    r.html &&
+    looksLikeBotChallenge(r.html) &&
+    (options.blockResources ?? true)
+  ) {
+    console.warn(
+      `[renderPageHtml] bot-challenge interstitial detected for ${url}; retrying with resources unblocked`,
+    );
+    const retry = await renderPageHtmlInner(url, {
+      ...options,
+      blockResources: false,
+      // Give the challenge JS a bit more wallclock to redirect.
+      timeoutMs: Math.max(options.timeoutMs ?? 25_000, 35_000),
+    });
+    if (retry.html && !looksLikeBotChallenge(retry.html)) return retry;
+    return retry.html ? retry : r;
+  }
+  return r;
+}
+
+async function renderPageHtmlInner(
   url: string,
   options: RenderOptions = {},
 ): Promise<RenderResult> {
