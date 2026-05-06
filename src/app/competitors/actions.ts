@@ -10,6 +10,7 @@ import {
   competitorAttachments,
   competitorProducts,
   competitorProductAttachments,
+  suppliers,
 } from "@/db/schema";
 import { requireCompetitorEditor } from "@/lib/permissions";
 
@@ -23,6 +24,58 @@ function cleanString(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const t = v.trim();
   return t.length ? t : null;
+}
+
+// ─── Competitor → Supplier mirror ─────────────────────────────────────────
+// Every competitor row is mirrored as a supplier with category="Competitor"
+// and a competitor_id link. The supplier row carries the contact bits the
+// supplier list cares about (name, website, origin, notes); supplier-only
+// fields (KPIs, lead times, projects, attachments) are added by the user
+// inside the Suppliers UI and are NEVER overwritten by this sync.
+//
+// On DELETE the FK constraint cascades the supplier row out automatically.
+async function syncSupplierFromCompetitor(competitorId: number) {
+  const [c] = await db
+    .select()
+    .from(competitors)
+    .where(eq(competitors.id, competitorId))
+    .limit(1);
+  if (!c) return;
+  const [existing] = await db
+    .select({ id: suppliers.id })
+    .from(suppliers)
+    .where(eq(suppliers.competitorId, competitorId))
+    .limit(1);
+  if (existing) {
+    // Sync only the columns we own — leave KPIs, manufacturing tags,
+    // lead times, etc. alone.
+    await db
+      .update(suppliers)
+      .set({
+        name: c.name,
+        website: c.website,
+        origin: c.country,
+        category: "Competitor",
+        subCategory: c.segment,
+        products: c.productLines,
+        updatedAt: new Date(),
+      })
+      .where(eq(suppliers.id, existing.id));
+  } else {
+    await db.insert(suppliers).values({
+      name: c.name,
+      website: c.website,
+      origin: c.country,
+      category: "Competitor",
+      subCategory: c.segment,
+      products: c.productLines,
+      notes: c.notes,
+      status: "Active",
+      competitorId,
+    });
+  }
+  // The Suppliers page reads from server, so revalidate that route too.
+  revalidatePath("/suppliers");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,8 +205,10 @@ export async function upsertCompetitor(input: CompetitorInput) {
 
   if (input.id) {
     await db.update(competitors).set(values).where(eq(competitors.id, input.id));
+    await syncSupplierFromCompetitor(input.id);
   } else {
     const [row] = await db.insert(competitors).values(values).returning();
+    await syncSupplierFromCompetitor(row.id);
     revalidatePath("/competitors");
     return row;
   }
@@ -181,14 +236,17 @@ export async function duplicateCompetitor(id: number) {
       capabilities: src.capabilities,
     })
     .returning();
+  await syncSupplierFromCompetitor(row.id);
   revalidatePath("/competitors");
   return row;
 }
 
 export async function deleteCompetitor(id: number) {
   await requireCompetitorEditor();
+  // FK ON DELETE CASCADE removes the mirror supplier automatically.
   await db.delete(competitors).where(eq(competitors.id, id));
   revalidatePath("/competitors");
+  revalidatePath("/suppliers");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -66,6 +66,7 @@ const SCORE_WEIGHTS = {
 
 const CATEGORIES = [
   "Acoustics", "Agency", "Agriculture/Tech", "Building Materials", "Buy/Sell Distribution",
+  "Competitor",
   "Design Services", "Digital Services", "Distribution", "Drivers/Power", "Electrical",
   "Electronics", "Equipment", "Exhibition/Display", "Flooring", "Furniture", "Hardware",
   "LED/Components", "LED/Lighting", "Logistics/Freight", "Manufacturing",

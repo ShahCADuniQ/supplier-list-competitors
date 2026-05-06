@@ -596,12 +596,10 @@ export default function CompetitorsView({
             >
               Benchmark<span className="ct">{collBrands.length}</span>
             </button>
-            <button
-              className={`view-tab ${view === "brands" ? "active" : ""}`}
-              onClick={() => setView("brands")}
-            >
-              Brands
-            </button>
+            {/* Brands tab removed from the visible strip — competitors are
+                now managed in the Suppliers section under category "Competitor".
+                The brands view itself is still reachable via setView("brands")
+                if a future entry point needs it. */}
             <button
               className={`view-tab ${view === "summary" ? "active" : ""}`}
               onClick={() => setView("summary")}

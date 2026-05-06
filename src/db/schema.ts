@@ -85,6 +85,12 @@ export const suppliers = pgTable(
       .array()
       .notNull()
       .default(sql`ARRAY[]::text[]`),
+    // When set, this row is the supplier mirror of a competitor brand.
+    // The category column is automatically "Competitor" for these rows.
+    // ON DELETE CASCADE so removing the competitor also removes its
+    // mirror; user can re-add it as a regular supplier afterwards if
+    // they still want to keep the contact.
+    competitorId: integer("competitor_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -92,6 +98,7 @@ export const suppliers = pgTable(
     nameIdx: index("suppliers_name_idx").on(t.name),
     categoryIdx: index("suppliers_category_idx").on(t.category),
     originIdx: index("suppliers_origin_idx").on(t.origin),
+    competitorIdx: uniqueIndex("suppliers_competitor_idx").on(t.competitorId),
   }),
 );
 
