@@ -2,6 +2,7 @@
 
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
+import SubNav from "./SubNav";
 
 type Props = {
   email: string | null;
@@ -40,6 +41,11 @@ export default function AppShell({
       />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar />
+        <SubNav
+          canViewCompetitors={canViewCompetitors}
+          canViewHandbook={canViewHandbook}
+          canViewEngineering={canViewEngineering}
+        />
         <main className="flex-1 overflow-auto">{children}</main>
       </div>
     </div>
