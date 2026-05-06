@@ -26,7 +26,7 @@ import {
   deleteCollectionBrochure,
 } from "./ideation-product-file-actions";
 import IdeationDetailDrawer from "./IdeationDetailDrawer";
-import IdeationProductDrawer, { ImageLightbox } from "./IdeationProductDrawer";
+import IdeationProductDrawer from "./IdeationProductDrawer";
 import type {
   CompetitorCollection,
   Competitor,
@@ -383,14 +383,13 @@ export default function IdeationBoard({
     return m;
   }, [items]);
 
-  // ── Drawer + lightbox ──
-  // Click on a card opens the lightbox first (full-pic preview). The
-  // lightbox has an "Edit details" button that swaps to the IdeationDetailDrawer
-  // when the user wants to change the title/notes/tags/products.
+  // ── Drawer ──
+  // Click on a card opens the IdeationDetailDrawer for editing title /
+  // notes / category / product linkage. The drawer also shows the full
+  // image at the top so the user has both the preview and the editor in
+  // one place.
   const [openItemId, setOpenItemId] = useState<number | null>(null);
   const openItem = items.find((i) => i.id === openItemId) ?? null;
-  const [lightboxItemId, setLightboxItemId] = useState<number | null>(null);
-  const lightboxItem = items.find((i) => i.id === lightboxItemId) ?? null;
 
   return (
     <div className="bm-wrap">
@@ -736,29 +735,10 @@ export default function IdeationBoard({
               item={it}
               products={products}
               linkedProductIds={linkageMap.get(it.id) ?? new Set()}
-              onOpen={() => setLightboxItemId(it.id)}
+              onOpen={() => setOpenItemId(it.id)}
             />
           ))}
         </div>
-      )}
-
-      {lightboxItem && (
-        <ImageLightbox
-          url={lightboxItem.imageUrl}
-          alt={lightboxItem.title ?? ""}
-          onClose={() => setLightboxItemId(null)}
-          extraButton={
-            canEdit
-              ? {
-                  label: "Edit details",
-                  onClick: () => {
-                    setLightboxItemId(null);
-                    setOpenItemId(lightboxItem.id);
-                  },
-                }
-              : undefined
-          }
-        />
       )}
 
       {openItem && (
@@ -789,7 +769,7 @@ export default function IdeationBoard({
           onDelete={() =>
             setProductModal({ kind: "delete", product: drawerProduct })
           }
-          onOpenItem={(itemId) => setLightboxItemId(itemId)}
+          onOpenItem={(itemId) => setOpenItemId(itemId)}
           onToast={onToast}
           onClose={() => setDrawerProductId(null)}
         />
