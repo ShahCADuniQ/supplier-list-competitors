@@ -280,6 +280,12 @@ export default function IdeationDetailDrawer({
       className={`pd-overlay${entered ? " entered" : ""}`}
       role="dialog"
       aria-modal="true"
+      // Higher z-index than the IdeationProductDrawer (.pd-overlay defaults
+      // to 900) so when the user opens this drawer from a thumbnail inside
+      // the product drawer, it stacks on top correctly. Both drawers are
+      // siblings in IdeationBoard's tree but JSX source order puts this
+      // one first, which would otherwise paint it underneath.
+      style={{ zIndex: 950 }}
       // Backdrop click-to-close removed: user reported losing in-progress
       // edits when they accidentally clicked outside the drawer. Use the
       // ✕ button or Esc to close.
