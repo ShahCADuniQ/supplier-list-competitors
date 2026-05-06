@@ -2056,23 +2056,97 @@ const COMPETITOR_CSS = `
 .cm-app .id-card2-prod-all{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#fff;padding:0 4px;line-height:1.4}
 .cm-app .id-card2-prod-more{font-size:9.5px;font-weight:600;color:#fff;line-height:1.4}
 
-/* Products row — pills above the upload zone for filtering + add product. */
-.cm-app .id-products-row{display:flex;align-items:center;gap:8px;margin:14px 0 4px;flex-wrap:wrap;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--lb-radius)}
-.cm-app .id-product-pill-wrap{display:inline-flex;align-items:center;gap:0;border-radius:var(--lb-radius-pill);overflow:hidden}
-.cm-app .id-product-pill-wrap[data-active="true"]{box-shadow:0 0 0 2px color-mix(in srgb, var(--pill-color, var(--accent)) 40%, transparent)}
-.cm-app .id-product-pill{display:inline-flex;align-items:center;gap:8px;padding:0 14px;height:32px;border-radius:var(--lb-radius-pill);background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-size:12.5px;font-weight:500;cursor:pointer;font-family:inherit;letter-spacing:-.005em;transition:background 160ms ease, border-color 160ms ease, color 160ms ease;white-space:nowrap}
+/* Products row — pills above the upload zone for filtering + add product.
+   Outer container stays a single flex row that wraps gracefully. Each
+   editable product is wrapped in .id-product-pill-wrap; the wrap stays
+   inline-flex with consistent gap (no negative margins, no overflow
+   tricks) so the edit + delete buttons sit cleanly to the right of the
+   pill on hover and never collide with the pill's count badge. */
+.cm-app .id-products-row{
+  display:flex;align-items:center;gap:10px;
+  margin:14px 0 4px;flex-wrap:wrap;
+  padding:12px 14px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--lb-radius);
+}
+.cm-app .id-product-pill-wrap{
+  display:inline-flex;align-items:center;gap:4px;
+  /* No overflow:hidden — that was clipping the action buttons. */
+}
+.cm-app .id-product-pill{
+  display:inline-flex;align-items:center;gap:8px;
+  height:32px;padding:0 14px;
+  border-radius:var(--lb-radius-pill);
+  background:var(--surface-2);border:1px solid var(--border);
+  color:var(--text);
+  font-family:inherit;font-size:12.5px;font-weight:500;letter-spacing:-.005em;
+  cursor:pointer;white-space:nowrap;
+  transition:background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
 .cm-app .id-product-pill:hover{background:var(--surface);border-color:var(--border-strong)}
-.cm-app .id-product-pill[data-active="true"]{background:var(--pill-color, var(--accent));border-color:var(--pill-color, var(--accent));color:#fff}
-.cm-app .id-product-pill-dot{display:inline-block;width:8px;height:8px;border-radius:9999px;background:var(--pill-color, var(--accent));border:1px solid color-mix(in srgb, var(--pill-color, var(--accent)) 80%, transparent);flex-shrink:0}
-.cm-app .id-product-pill[data-active="true"] .id-product-pill-dot{background:#fff;border-color:rgba(255,255,255,0.7)}
-.cm-app .id-product-pill-ct{padding:1px 7px;border-radius:9999px;background:rgba(0,0,0,0.10);font-size:11px;font-weight:600;color:var(--text-2);line-height:1.4}
-.cm-app .id-product-pill[data-active="true"] .id-product-pill-ct{background:rgba(255,255,255,0.22);color:#fff}
-.cm-app .id-product-pill-acts{display:inline-flex;align-items:center;gap:2px;margin-left:-8px;padding:0 4px;opacity:0;transition:opacity 160ms ease}
-.cm-app .id-product-pill-wrap:hover .id-product-pill-acts,.cm-app .id-product-pill-wrap[data-active="true"] .id-product-pill-acts{opacity:1}
-.cm-app .id-product-pill-acts button{background:transparent;border:none;padding:4px 6px;cursor:pointer;color:var(--text-3);font-size:11px;line-height:1;font-family:inherit;border-radius:6px}
-.cm-app .id-product-pill-acts button:hover{color:var(--text);background:var(--surface-2)}
-.cm-app .id-product-add{display:inline-flex;align-items:center;gap:4px;padding:0 14px;height:32px;border:1px dashed var(--border-strong);background:transparent;border-radius:var(--lb-radius-pill);color:var(--text-2);font-size:12.5px;font-weight:500;cursor:pointer;font-family:inherit;transition:border-color 160ms ease, color 160ms ease, background 160ms ease}
-.cm-app .id-product-add:hover{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb, var(--accent) 8%, transparent)}
+.cm-app .id-product-pill[data-active="true"]{
+  background:var(--pill-color, var(--accent));
+  border-color:var(--pill-color, var(--accent));
+  color:#fff;
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--pill-color, var(--accent)) 28%, transparent);
+}
+.cm-app .id-product-pill-dot{
+  display:inline-block;width:8px;height:8px;border-radius:9999px;
+  background:var(--pill-color, var(--accent));
+  border:1px solid color-mix(in srgb, var(--pill-color, var(--accent)) 80%, transparent);
+  flex-shrink:0;
+}
+.cm-app .id-product-pill[data-active="true"] .id-product-pill-dot{
+  background:#fff;border-color:rgba(255,255,255,0.7);
+}
+.cm-app .id-product-pill-ct{
+  padding:1px 7px;border-radius:9999px;
+  background:rgba(0,0,0,0.10);
+  font-size:11px;font-weight:600;color:var(--text-2);line-height:1.4;
+  flex-shrink:0;
+}
+.cm-app .id-product-pill[data-active="true"] .id-product-pill-ct{
+  background:rgba(255,255,255,0.22);color:#fff;
+}
+/* Edit / delete buttons: hidden by default, fade in on wrap hover or
+   when the matching pill is active. They sit *next to* the pill — same
+   row, gap-spaced — never on top of it. */
+.cm-app .id-product-pill-acts{
+  display:inline-flex;align-items:center;gap:2px;
+  opacity:0;pointer-events:none;
+  transition:opacity 160ms ease;
+}
+.cm-app .id-product-pill-wrap:hover .id-product-pill-acts,
+.cm-app .id-product-pill-wrap:focus-within .id-product-pill-acts,
+.cm-app .id-product-pill-wrap[data-active="true"] .id-product-pill-acts{
+  opacity:1;pointer-events:auto;
+}
+.cm-app .id-product-pill-acts button{
+  width:28px;height:28px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:var(--surface-2);border:1px solid var(--border);
+  color:var(--text-2);
+  font-size:11px;line-height:1;font-family:inherit;
+  border-radius:9999px;cursor:pointer;
+  transition:background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+.cm-app .id-product-pill-acts button:hover{
+  background:var(--surface);border-color:var(--border-strong);color:var(--text);
+}
+.cm-app .id-product-add{
+  display:inline-flex;align-items:center;gap:4px;
+  height:32px;padding:0 14px;
+  border:1px dashed var(--border-strong);background:transparent;
+  border-radius:var(--lb-radius-pill);
+  color:var(--text-2);
+  font-family:inherit;font-size:12.5px;font-weight:500;
+  cursor:pointer;
+  transition:border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+.cm-app .id-product-add:hover{
+  border-color:var(--accent);color:var(--accent);
+  background:color-mix(in srgb, var(--accent) 8%, transparent);
+}
 .cm-app .id-product-add:disabled{opacity:.5;cursor:not-allowed}
 
 /* Drawer Products section — toggle + checkbox list. */
