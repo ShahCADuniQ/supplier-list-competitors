@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getOrCreateProfile, canViewHandbook } from "@/lib/permissions";
+import ThemedIframe from "@/components/ThemedIframe";
 
 export const metadata = {
   title: "Handbook — Lightbase",
@@ -10,20 +11,20 @@ export default async function HandbookPage() {
   if (!profile) redirect("/sign-in");
   if (!canViewHandbook(profile)) redirect("/");
 
-  // The iframe content is owned separately (public/handbook.html) and uses
-  // its own light styling. We wrap it in a rounded card so it sits naturally
-  // inside the dark SaaS shell without bleeding to the edges.
+  // Iframe content lives in public/handbook.html and renders its own theme
+  // (light + dark) using --lb-* tokens mirrored into local CSS variables.
+  // ThemedIframe pipes the parent app's theme into it via query param +
+  // postMessage so the embedded handbook follows the global preference.
   return (
     <div className="px-6 py-6 h-full" style={{ background: "var(--lb-bg)" }}>
       <div
         className="lb-card overflow-hidden h-full"
         style={{ borderRadius: "var(--lb-radius-lg)" }}
       >
-        <iframe
+        <ThemedIframe
           src="/handbook.html"
           title="Lightbase Process Handbook"
           className="w-full h-full border-0"
-          style={{ background: "#ffffff" }}
         />
       </div>
     </div>

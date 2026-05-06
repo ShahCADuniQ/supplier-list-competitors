@@ -3,17 +3,99 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Lightbase Engineering Handbook</title>
+<script>
+ // Sync theme with the parent app. Reads preference in this order:
+ //   1. ?theme=light|dark|system query param (parent passes it on initial load)
+ //   2. parent.localStorage 'lb-theme' (same-origin iframe can read it)
+ //   3. system preference
+ // Listens for postMessage('lb-theme', ...) from parent for live updates.
+ (function(){
+  function resolve(c){
+   if(c==='light'||c==='dark') return c;
+   try { return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+   catch(_){ return 'dark'; }
+  }
+  function read(){
+   try {
+    var qs = new URLSearchParams(location.search);
+    var q = qs.get('theme');
+    if(q==='light'||q==='dark'||q==='system') return q;
+   } catch(_){}
+   try {
+    var v = window.parent && window.parent.localStorage
+     ? window.parent.localStorage.getItem('lb-theme') : null;
+    if(v==='light'||v==='dark'||v==='system') return v;
+   } catch(_){}
+   return 'dark';
+  }
+  function apply(c){
+   var resolved = resolve(c);
+   var root = document.documentElement;
+   if(resolved==='dark') root.classList.add('dark'); else root.classList.remove('dark');
+  }
+  apply(read());
+  window.addEventListener('message', function(e){
+   if(e && e.data && e.data.type==='lb-theme' && typeof e.data.value==='string') apply(e.data.value);
+  });
+  try {
+   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(){
+    if(read()==='system') apply('system');
+   });
+  } catch(_){}
+ })();
+</script>
 <style>
+/* ─── Light mode (fallback when .dark is not applied on <html>) ─── */
 :root{
- --navy:#1b3a5c;--navy-light:#24507a;--navy-dark:#132a44;
- --steel:#3a6ea5;--steel-light:#5b8bc4;
- --accent:#c0392b;--accent-hover:#a93226;
- --blue-soft:#2980b9;--blue-pale:#dce8f5;
- --bg-body:#f4f6f9;--bg-white:#ffffff;--bg-card:#f9fafb;--bg-code:#eef2f7;
- --border:#dce3eb;--border-dark:#b0bec5;
- --text:#2c3e50;--text-light:#5d6d7e;--text-muted:#8395a7;
- --green:#27ae60;--green-bg:#e8f8f0;
- --amber:#e67e22;--amber-bg:#fdf2e4;
+ /* Keep existing variable names so the rest of the CSS keeps working —
+    just point their values at the SaaS dashboard palette. */
+ --navy:#0a0b10;
+ --navy-light:#1a1c22;
+ --navy-dark:#0a0b10;
+ --steel:#2563ff;
+ --steel-light:#3a76ff;
+ --accent:#ff4d2e;
+ --accent-hover:#e63b1c;
+ --blue-soft:#2563ff;
+ --blue-pale:rgba(37,99,255,0.10);
+ --bg-body:#f6f7fb;
+ --bg-white:#ffffff;
+ --bg-card:#eef0f6;
+ --bg-code:#eef0f6;
+ --border:rgba(10,11,16,0.08);
+ --border-dark:rgba(10,11,16,0.16);
+ --text:#0a0b10;
+ --text-light:#5a6072;
+ --text-muted:#8a90a0;
+ --green:#10b981;
+ --green-bg:rgba(16,185,129,0.12);
+ --amber:#f59e0b;
+ --amber-bg:rgba(245,158,11,0.12);
+}
+/* ─── Dark mode (default — applied by the head script) ─── */
+html.dark{
+ --navy:#ffffff;
+ --navy-light:#a0a3ad;
+ --navy-dark:#ffffff;
+ --steel:#3a76ff;
+ --steel-light:#60a5fa;
+ --accent:#ff4d2e;
+ --accent-hover:#ff6242;
+ --blue-soft:#3a76ff;
+ --blue-pale:rgba(37,99,255,0.18);
+ --bg-body:#0c0d11;
+ --bg-white:#1a1c22;
+ --bg-card:#16181d;
+ --bg-code:#16181d;
+ --border:rgba(255,255,255,0.06);
+ --border-dark:rgba(255,255,255,0.12);
+ --text:#ffffff;
+ --text-light:#a0a3ad;
+ --text-muted:#6e7280;
+ --green:#4ade80;
+ --green-bg:rgba(74,222,128,0.14);
+ --amber:#fbbf24;
+ --amber-bg:rgba(251,191,36,0.14);
 }
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:var(--bg-body);color:var(--text);line-height:1.7;font-size:15px}
@@ -21,10 +103,11 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:var(--bg
 
 /* SIDEBAR */
 .sidebar{
- background:linear-gradient(180deg,var(--navy-dark) 0%,var(--navy) 100%);
+ /* Always dark — the inner controls use white-on-dark styling. */
+ background:#0c0d11;
  padding:20px;position:fixed;left:0;top:0;width:300px;height:100vh;
  overflow-y:auto;transition:transform .3s;z-index:100;
- box-shadow:3px 0 12px rgba(0,0,0,0.15);
+ box-shadow:3px 0 12px rgba(0,0,0,0.4);
 }
 .sidebar::-webkit-scrollbar{width:6px}
 .sidebar::-webkit-scrollbar-track{background:transparent}
@@ -100,13 +183,13 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:var(--bg
 .callout.note{background:var(--blue-pale);border-color:var(--steel);color:var(--navy-dark)}
 .callout.warn{background:var(--amber-bg);border-color:var(--amber);color:#6b3e0a}
 .callout.good{background:var(--green-bg);border-color:var(--green);color:#0e4f2a}
-.callout.danger{background:#fde8e6;border-color:var(--accent);color:#7a2018}
+.callout.danger{background:color-mix(in srgb, var(--accent) 14%, transparent);border-color:var(--accent);color:var(--accent)}
 .callout strong{display:block;margin-bottom:4px}
 
 .code-block{background:var(--bg-code);border:1px solid var(--border);padding:16px 18px;border-radius:6px;overflow-x:auto;margin:16px 0;font-family:'Courier New',monospace;font-size:13px;line-height:1.6;color:var(--navy-dark);white-space:pre}
 
 table{width:100%;border-collapse:collapse;margin:20px 0;border-radius:6px;overflow:hidden;font-size:14px}
-table th{background:var(--navy);color:#fff;padding:12px 14px;text-align:left;font-weight:600;font-size:13px}
+table th{background:var(--steel);color:#fff;padding:12px 14px;text-align:left;font-weight:600;font-size:13px}
 table td{padding:12px 14px;border-bottom:1px solid var(--border);line-height:1.55;color:var(--text)}
 table tr:nth-child(even){background:var(--bg-card)}
 table tr:hover{background:var(--blue-pale)}
@@ -127,16 +210,16 @@ table tr:hover{background:var(--blue-pale)}
 
 .diagram{background:var(--bg-white);padding:20px;border-radius:8px;border:1px solid var(--border);margin:16px 0;text-align:center;overflow-x:auto}
 
-.tool-panel{background:linear-gradient(135deg,#f6f9fc 0%,#eaf1f9 100%);border:1px solid var(--border);border-radius:10px;padding:24px;margin:20px 0}
+.tool-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:24px;margin:20px 0}
 .tool-panel h4{color:var(--navy);margin-bottom:16px;font-size:16px;display:flex;align-items:center;gap:8px}
 .tool-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:18px}
 .tool-input{display:flex;flex-direction:column;gap:4px}
 .tool-input label{font-size:11px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-muted);font-weight:600}
-.tool-input input,.tool-input select{padding:9px 12px;border:1px solid var(--border);border-radius:5px;font-size:14px;background:#fff;color:var(--text)}
+.tool-input input,.tool-input select{padding:9px 12px;border:1px solid var(--border);border-radius:5px;font-size:14px;background:var(--bg-white);color:var(--text)}
 .tool-input input:focus,.tool-input select:focus{outline:2px solid var(--steel);border-color:var(--steel)}
-.tool-btn{padding:10px 22px;background:var(--navy);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;transition:all .2s}
-.tool-btn:hover{background:var(--navy-dark)}
-.tool-result{background:#fff;border:1px solid var(--border);border-radius:8px;padding:18px;margin-top:14px}
+.tool-btn{padding:10px 22px;background:var(--steel);color:#fff;border:none;border-radius:9999px;cursor:pointer;font-weight:600;font-size:13px;transition:all .2s}
+.tool-btn:hover{background:var(--steel-light)}
+.tool-result{background:var(--bg-white);border:1px solid var(--border);border-radius:8px;padding:18px;margin-top:14px}
 .tool-result-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px}
 .tool-result-item{padding:12px;background:var(--bg-card);border-radius:6px;border-left:3px solid var(--steel)}
 .tool-result-item .r-label{font-size:10px;text-transform:uppercase;color:var(--text-muted);font-weight:600;letter-spacing:0.4px}
@@ -146,20 +229,20 @@ table tr:hover{background:var(--blue-pale)}
 .tool-result-item.status-warn{border-left-color:var(--amber)}
 .tool-result-item.status-bad{border-left-color:var(--accent)}
 
-.sim-stage{background:#fff;border:1px solid var(--border);border-radius:8px;padding:14px;margin-top:14px;position:relative}
+.sim-stage{background:var(--bg-white);border:1px solid var(--border);border-radius:8px;padding:14px;margin-top:14px;position:relative}
 #heatCanvas,#opticsCanvas{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
 
 .methodology{margin-top:16px;background:var(--bg-code);border:1px solid var(--border);border-radius:6px;padding:0;overflow:hidden}
-.methodology summary{padding:12px 16px;cursor:pointer;background:var(--navy);color:#fff;font-weight:600;font-size:13px;list-style:none}
+.methodology summary{padding:12px 16px;cursor:pointer;background:var(--steel);color:#fff;font-weight:600;font-size:13px;list-style:none}
 .methodology summary::-webkit-details-marker{display:none}
 .methodology summary::before{content:'▸ ';display:inline-block;transition:transform .2s}
 .methodology[open] summary::before{transform:rotate(90deg)}
-.methodology[open] summary{background:var(--navy-dark)}
+.methodology[open] summary{background:var(--steel-light)}
 .methodology .body{padding:16px 20px;font-size:13.5px;color:var(--text);line-height:1.7}
-.methodology .body code{background:#fff;border:1px solid var(--border)}
-.methodology .formula{background:#fff;border:1px solid var(--border);padding:10px 14px;border-radius:4px;margin:10px 0;font-family:'Courier New',monospace;font-size:13px;color:var(--navy-dark)}
+.methodology .body code{background:var(--bg-white);border:1px solid var(--border)}
+.methodology .formula{background:var(--bg-white);border:1px solid var(--border);padding:10px 14px;border-radius:4px;margin:10px 0;font-family:'Courier New',monospace;font-size:13px;color:var(--text)}
 
-.cct-swatch{display:inline-block;width:22px;height:22px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--border);vertical-align:middle;margin-right:6px}
+.cct-swatch{display:inline-block;width:22px;height:22px;border-radius:50%;border:2px solid var(--bg-white);box-shadow:0 0 0 1px var(--border);vertical-align:middle;margin-right:6px}
 
 .add-sub-btn{width:100%;background:none;border:2px dashed var(--border);color:var(--text-muted);border-radius:6px;padding:12px;margin-top:15px;font-size:14px;cursor:pointer;display:none;transition:all .2s}
 .add-sub-btn:hover{border-color:var(--steel);color:var(--steel)}
@@ -173,9 +256,9 @@ body.edit-mode .delete-btn{display:flex}
 .toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:var(--green);color:#fff;padding:14px 28px;border-radius:8px;font-weight:bold;font-size:14px;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,0.15)}
 .toast.show{opacity:1}
 
-.back-to-top{position:fixed;bottom:30px;right:30px;width:46px;height:46px;background:var(--navy);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:18px;display:none;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,0.2);z-index:90}
+.back-to-top{position:fixed;bottom:30px;right:30px;width:46px;height:46px;background:var(--steel);color:#fff;border:none;border-radius:50%;cursor:pointer;font-size:18px;display:none;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,0.4);z-index:90}
 .back-to-top.show{display:flex}
-.back-to-top:hover{background:var(--navy-dark)}
+.back-to-top:hover{background:var(--steel-light)}
 
 @media(max-width:900px){
  .sidebar{transform:translateX(-100%)}
