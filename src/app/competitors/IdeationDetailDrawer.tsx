@@ -10,6 +10,7 @@ import {
   updateIdeationItem,
   deleteIdeationItem,
 } from "./ideation-actions";
+import { IDEATION_CATEGORIES } from "./IdeationBoard";
 import type { CompetitorIdeationItem } from "@/db/schema";
 
 type Props = {
@@ -47,6 +48,7 @@ export default function IdeationDetailDrawer({
   const [notes, setNotes] = useState(item.notes ?? "");
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>(userFacingTags(item.tags));
+  const [kind, setKind] = useState<string>(item.kind);
   const sourceUrl = extractSourceUrl(item.tags);
 
   useEffect(() => {
@@ -76,6 +78,7 @@ export default function IdeationDetailDrawer({
   const dirty =
     title !== (item.title ?? "") ||
     notes !== (item.notes ?? "") ||
+    kind !== item.kind ||
     JSON.stringify(tags) !== JSON.stringify(userFacingTags(item.tags));
 
   async function handleSave() {
@@ -90,6 +93,7 @@ export default function IdeationDetailDrawer({
         id: item.id,
         title: title.trim() || null,
         notes: notes.trim() || null,
+        kind,
         tags: [...internal, ...tags],
       });
       router.refresh();
@@ -197,6 +201,28 @@ export default function IdeationDetailDrawer({
                 (e.currentTarget.style.opacity = "0.2");
               }}
             />
+          </section>
+
+          <section className="pd-section">
+            <h3 className="pd-section-h">Category</h3>
+            {canEdit ? (
+              <select
+                className="id-drawer-cat-select"
+                value={kind}
+                onChange={(e) => setKind(e.target.value)}
+                disabled={saving}
+              >
+                {IDEATION_CATEGORIES.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="id-drawer-cat-readonly">
+                {IDEATION_CATEGORIES.find((c) => c.key === kind)?.label ?? kind}
+              </div>
+            )}
           </section>
 
           <section className="pd-section">

@@ -411,147 +411,14 @@ export default function BenchmarkView({
             {totalProducts} product{totalProducts === 1 ? "" : "s"}. Updates as you add products — new brands appear automatically.
           </p>
         </div>
-        <div className="d-actions">
-          {canEdit && (
-            <>
-              <button
-                className="btn primary sm"
-                onClick={reanalyzeAllWithClaude}
-                disabled={reanalyzeBusy || !totalProducts}
-                title="Read every attached PDF on every product with Claude and refresh specs across the collection"
-              >
-                {reanalyzeBusy ? "Analyzing…" : "🧠 Re-analyze all with Claude"}
-              </button>
-              <button
-                className="btn primary sm"
-                onClick={() => findMoreBrands(6)}
-                disabled={findBusy}
-                title="Web search for top brands and auto-populate them with products"
-              >
-                {findBusy
-                  ? findProgress
-                    ? `${findProgress.current ?? "Working"} ${findProgress.done}/${findProgress.total}…`
-                    : "Researching…"
-                  : "✨ AI find more brands"}
-              </button>
-              <button
-                className="btn sm"
-                onClick={() => setAddOpen((o) => !o)}
-                disabled={addBusy}
-              >
-                {addOpen ? "Hide add panel" : "+ Add brand (URL or PDF)"}
-              </button>
-              <button
-                className="btn sm"
-                onClick={() => findMorePhotos()}
-                disabled={photoBusy}
-                title="Web-search reference photos and stash them on the Ideation board"
-              >
-                {photoBusy ? "Searching…" : "📷 More photos"}
-              </button>
-            </>
-          )}
-          <button
-            className="btn sm"
-            onClick={downloadAllSpecsheets}
-            disabled={zipBusy || !totalProducts}
-            title="Bundle every PDF/IES attached to a product as a zip"
-          >
-            {zipBusy
-              ? zipProgress
-                ? `Zipping ${zipProgress.done}/${zipProgress.total}…`
-                : "Preparing…"
-              : "⬇ Download all specsheets"}
-          </button>
-        </div>
       </div>
-
-      {addOpen && canEdit && (
-        <div className="d-card ai-card">
-          <h4>
-            <span className="ai-badge">✨ AI</span>&nbsp;Add brand from website or PDF
-          </h4>
-          <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 8px" }}>
-            Paste a brand website (e.g. <strong>lumenpulse.com</strong>) — Perplexity
-            enumerates every product in the <strong>{collection.name}</strong> niche
-            on that site, then for each product page we extract every spec
-            (mounting, lens, CCT, CRI, lumens, max length, driver, customization,
-            accessories…) and download every PDF / IES / drawing / BIM file linked
-            from that page. Takes 2–4 minutes for a large catalog. PDF brochures
-            uploaded directly are still supported as single-source extractions.
-          </p>
-          <div className="ai-body">
-            <input
-              type="text"
-              placeholder="lumenpulse.com or https://brand.com"
-              value={addUrl}
-              onChange={(e) => setAddUrl(e.target.value)}
-              disabled={addBusy}
-            />
-            <input
-              type="text"
-              placeholder="Brand display name (optional, auto-detected)"
-              value={addBrandName}
-              onChange={(e) => setAddBrandName(e.target.value)}
-              disabled={addBusy}
-            />
-            <label className="ai-drop">
-              {addFiles.length === 0
-                ? "📎 (Optional) Click to add a PDF brochure / catalog instead"
-                : `${addFiles.length} file${addFiles.length > 1 ? "s" : ""} attached`}
-              <input
-                type="file"
-                multiple
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  if (e.target.files) handleAddUploadFiles(e.target.files);
-                  e.target.value = "";
-                }}
-                disabled={addBusy}
-              />
-            </label>
-            {addFiles.length > 0 && (
-              <ul className="ai-file-list">
-                {addFiles.map((u, i) => (
-                  <li key={i}>
-                    <span>{u.name}</span>
-                    <button
-                      className="ai-rm"
-                      onClick={() => setAddFiles((s) => s.filter((_, j) => j !== i))}
-                      disabled={addBusy}
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {addBusy && addStatus && (
-              <div style={{ fontSize: 12, color: "var(--accent-strong)" }}>
-                ⏳ {addStatus} (this can take 60–120 seconds for a deep crawl)
-              </div>
-            )}
-            <button
-              className="btn primary sm"
-              onClick={handleAddByUrlOrFile}
-              disabled={addBusy || (!addUrl.trim() && !addFiles.length)}
-            >
-              {addBusy
-                ? "Researching…"
-                : addUrl.trim() && !addFiles.length
-                  ? "✨ Deep crawl & add"
-                  : "Research and add brand"}
-            </button>
-          </div>
-        </div>
-      )}
 
       {brands.length === 0 ? (
         <div className="d-card" style={{ padding: 24, textAlign: "center" }}>
           <h4 style={{ marginTop: 0 }}>No brands yet in this collection</h4>
           <p style={{ color: "var(--muted)", fontSize: 13, margin: "6px 0 16px" }}>
             {canEdit
-              ? "Use ✨ AI find more brands to web-search the top brands in this niche, or paste a website / drop a PDF above."
+              ? "Add a product above to get started. We'll auto-create brand sections for the manufacturers behind each product you add."
               : "An admin needs to populate this collection."}
           </p>
         </div>

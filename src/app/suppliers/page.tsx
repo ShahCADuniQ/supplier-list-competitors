@@ -12,7 +12,7 @@ import {
   canViewSuppliers,
   canEdit,
 } from "@/lib/permissions";
-import SuppliersView from "./SuppliersView";
+import InventoryAndManufacturing from "./InventoryAndManufacturing";
 
 export const dynamic = "force-dynamic";
 
@@ -56,5 +56,5 @@ export default async function SuppliersPage() {
     attachments: attBySupplier.get(s.id) ?? [],
   }));
 
-  return <SuppliersView initialData={initialData} canEdit={canEdit(profile)} />;
+  return <InventoryAndManufacturing initialData={initialData} canEdit={canEdit(profile)} />;
 }

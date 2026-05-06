@@ -10,10 +10,21 @@ import { fetchWithTimeout } from "@/lib/ai/parsers";
 import { extractPinterestImagesViaBrowser } from "@/lib/ai/pinterest";
 
 const KIND_KEYS = [
+  // Architectural-lighting brainstorm categories. Keep the original
+  // "reference" / "sketch" / "moodboard" / "mounting" / "ai-generated"
+  // values for backwards compatibility with existing data.
   "reference",
   "sketch",
   "moodboard",
   "mounting",
+  "lens",
+  "decorative",
+  "profile",
+  "finish",
+  "optic",
+  "endcap",
+  "effect",
+  "control",
   "ai-generated",
 ] as const;
 type KindKey = (typeof KIND_KEYS)[number];
@@ -178,6 +189,8 @@ export async function aiAddPinterestLink(input: {
   collectionId: number;
   url: string;
   comment?: string | null;
+  /** Category to assign to every imported card. Defaults to "moodboard". */
+  kind?: string;
 }): Promise<PinterestExtractResult> {
   await requireCompetitorEditor();
   const url = (input.url ?? "").trim();
@@ -271,12 +284,13 @@ export async function aiAddPinterestLink(input: {
       return "Pinterest";
     }
   })();
+  const kind = asKindKey(input.kind ?? "moodboard");
   const rows = newImages.slice(0, 60).map((imageUrl) => ({
     collectionId: input.collectionId,
     imageUrl,
     title: titlePrefix,
     notes: comment || null,
-    kind: "moodboard" as const,
+    kind,
     // Stash the originating Pinterest URL in tags so the user can trace
     // which paste produced this card.
     tags: [`pinterest:${url}`],

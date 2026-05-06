@@ -331,11 +331,21 @@ export const competitorProductAttachments = pgTable(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const competitorIdeationKind = pgEnum("competitor_ideation_kind", [
+  // Original values — kept for backwards compatibility with existing rows.
   "reference",   // photo of a real product / market reference
   "sketch",      // hand sketch / wireframe
   "moodboard",   // texture/finish/color reference
   "mounting",    // mounting detail
   "ai-generated", // image generated from a prompt (future use)
+  // Architectural-lighting brainstorm categories added in 0006_ideation_categories.
+  "lens",
+  "decorative",
+  "profile",
+  "finish",
+  "optic",
+  "endcap",
+  "effect",
+  "control",
 ]);
 
 export const competitorIdeationItems = pgTable(

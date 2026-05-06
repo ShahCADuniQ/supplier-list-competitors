@@ -27,6 +27,30 @@ function safeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "file";
 }
 
+// Architectural-lighting brainstorm categories. Order = display order.
+// Color is a tint used for the badge so each category is recognisable at a
+// glance. "reference" is the catch-all for general inspiration.
+export const IDEATION_CATEGORIES = [
+  { key: "moodboard", label: "Moodboard", color: "#a855f7" },
+  { key: "mounting", label: "Mounting", color: "#0ea5e9" },
+  { key: "lens", label: "Lens", color: "#06b6d4" },
+  { key: "optic", label: "Optic", color: "#0891b2" },
+  { key: "decorative", label: "Decorative", color: "#ec4899" },
+  { key: "profile", label: "Profile", color: "#f59e0b" },
+  { key: "finish", label: "Finish", color: "#84cc16" },
+  { key: "endcap", label: "End cap", color: "#14b8a6" },
+  { key: "effect", label: "Light effect", color: "#ef4444" },
+  { key: "control", label: "Control", color: "#6366f1" },
+  { key: "reference", label: "Reference", color: "#94a3b8" },
+  { key: "sketch", label: "Sketch", color: "#f97316" },
+  { key: "ai-generated", label: "AI generated", color: "#8b5cf6" },
+] as const;
+export type IdeationCategoryKey = (typeof IDEATION_CATEGORIES)[number]["key"];
+
+function categoryByKey(key: string) {
+  return IDEATION_CATEGORIES.find((c) => c.key === key) ?? IDEATION_CATEGORIES[10];
+}
+
 export default function IdeationBoard({
   collection,
   // brands kept for API compatibility (Summary jump-to expects this shape)
@@ -47,6 +71,7 @@ export default function IdeationBoard({
   // ── Pinterest extractor ──
   const [pinterestUrl, setPinterestUrl] = useState("");
   const [pinterestComment, setPinterestComment] = useState("");
+  const [pinterestKind, setPinterestKind] = useState<IdeationCategoryKey>("moodboard");
   const [pinterestBusy, setPinterestBusy] = useState(false);
 
   async function addPinterestBoard() {
@@ -64,6 +89,7 @@ export default function IdeationBoard({
         collectionId: collection.id,
         url: u,
         comment: pinterestComment.trim() || undefined,
+        kind: pinterestKind,
       });
       setPinterestUrl("");
       setPinterestComment("");
@@ -149,16 +175,30 @@ export default function IdeationBoard({
     }
   }
 
-  // ── Search ──
+  // ── Search + category filter ──
   const [search, setSearch] = useState("");
+  const [activeCategories, setActiveCategories] = useState<Set<IdeationCategoryKey>>(new Set());
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
     return items.filter((i) => {
-      const hay = [i.title, i.notes, ...(i.tags ?? [])].join(" ").toLowerCase();
-      return hay.includes(q);
+      if (activeCategories.size > 0 && !activeCategories.has(i.kind as IdeationCategoryKey)) {
+        return false;
+      }
+      if (q) {
+        const hay = [i.title, i.notes, ...(i.tags ?? [])].join(" ").toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
     });
-  }, [items, search]);
+  }, [items, search, activeCategories]);
+  // Counts per category — used in the chip labels.
+  const categoryCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of items) {
+      m.set(i.kind, (m.get(i.kind) ?? 0) + 1);
+    }
+    return m;
+  }, [items]);
 
   // ── Drawer ──
   const [openItemId, setOpenItemId] = useState<number | null>(null);
@@ -197,6 +237,25 @@ export default function IdeationBoard({
             >
               {pinterestBusy ? "Reading…" : "📥 Pull images"}
             </button>
+          </div>
+          <div className="id-pinterest-row" style={{ marginBottom: 8 }}>
+            <label className="id-pinterest-cat-label">
+              Category for these images:
+              <select
+                className="id-pinterest-cat"
+                value={pinterestKind}
+                onChange={(e) =>
+                  setPinterestKind(e.target.value as IdeationCategoryKey)
+                }
+                disabled={pinterestBusy}
+              >
+                {IDEATION_CATEGORIES.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <textarea
             className="id-pinterest-comment"
@@ -255,6 +314,53 @@ export default function IdeationBoard({
             }}
           />
         </label>
+      )}
+
+      {items.length > 0 && (
+        <div className="id-categories">
+          {IDEATION_CATEGORIES.map((c) => {
+            const n = categoryCounts.get(c.key) ?? 0;
+            if (n === 0) return null;
+            const active = activeCategories.has(c.key);
+            return (
+              <button
+                key={c.key}
+                type="button"
+                className={`id-cat-chip${active ? " active" : ""}`}
+                style={
+                  active
+                    ? {
+                        background: c.color,
+                        borderColor: c.color,
+                        color: "#fff",
+                      }
+                    : { borderLeft: `3px solid ${c.color}` }
+                }
+                onClick={() => {
+                  setActiveCategories((s) => {
+                    const next = new Set(s);
+                    if (next.has(c.key)) next.delete(c.key);
+                    else next.add(c.key);
+                    return next;
+                  });
+                }}
+              >
+                {c.label}
+                <span className="id-cat-chip-ct">{n}</span>
+              </button>
+            );
+          })}
+          {activeCategories.size > 0 && (
+            <button
+              type="button"
+              className="id-cat-chip id-cat-clear"
+              onClick={() => setActiveCategories(new Set())}
+              title="Clear category filter"
+            >
+              ✕ clear
+            </button>
+          )}
+        </div>
       )}
 
       {items.length > 0 && (
@@ -328,6 +434,7 @@ function IdeationCard({
   onOpen: () => void;
 }) {
   const userTags = (item.tags ?? []).filter((t) => !t.startsWith("pinterest:"));
+  const cat = categoryByKey(item.kind);
   return (
     <button
       type="button"
@@ -345,6 +452,12 @@ function IdeationCard({
             (e.currentTarget.style.opacity = "0.2");
           }}
         />
+        <span
+          className="id-card2-cat-badge"
+          style={{ background: cat.color }}
+        >
+          {cat.label}
+        </span>
       </div>
       {(item.title || item.notes || userTags.length > 0) && (
         <div className="id-card2-info">

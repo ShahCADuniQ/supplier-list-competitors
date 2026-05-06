@@ -547,7 +547,7 @@ export default function CompetitorsView({
             <span className="coll-chev">▾</span>
           </button>
           <span className="brand-sep">/</span>
-          <span className="brand-sub">Competitor Tracker</span>
+          <span className="brand-sub">Competitors &amp; Market Research</span>
 
           <div className="view-tabs">
             <button
@@ -1986,6 +1986,28 @@ const COMPETITOR_CSS = `
 .cm-app .id-pinterest-url:disabled{opacity:.6}
 .cm-app .id-pinterest-comment{width:100%;padding:8px 11px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;background:var(--surface);color:var(--text);font-family:inherit;line-height:1.5;resize:vertical;transition:border-color .15s}
 .cm-app .id-pinterest-comment:focus{outline:none;border-color:#dc2626}
+.cm-app .id-pinterest-cat-label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);font-weight:500}
+.cm-app .id-pinterest-cat{padding:5px 9px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;background:var(--surface);color:var(--text);font-family:inherit}
+.cm-app .id-pinterest-cat:focus{outline:none;border-color:#dc2626}
+
+/* ── Ideation: category filter chips ── */
+.cm-app .id-categories{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.cm-app .id-cat-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border:1px solid var(--border);border-radius:14px;font-size:11.5px;color:var(--text);background:var(--surface);cursor:pointer;font-weight:500;transition:transform .1s,box-shadow .15s,background .15s}
+.cm-app .id-cat-chip:hover{transform:translateY(-1px);box-shadow:0 2px 6px rgba(15,23,42,.06)}
+.cm-app .id-cat-chip.active{font-weight:600}
+.cm-app .id-cat-chip-ct{padding:1px 6px;background:rgba(255,255,255,.45);border-radius:9px;font-size:10px;font-variant-numeric:tabular-nums;color:inherit}
+.cm-app .id-cat-chip.active .id-cat-chip-ct{background:rgba(255,255,255,.25)}
+.cm-app .id-cat-chip:not(.active) .id-cat-chip-ct{background:#f1f5f9;color:var(--muted)}
+.cm-app .id-cat-clear{border-style:dashed;color:var(--muted)}
+
+/* Card category badge */
+.cm-app .id-card2-cat-badge{position:absolute;top:6px;left:6px;padding:2px 8px;background:#0f172a;color:#fff;border-radius:9px;font-size:10px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;line-height:1.4;pointer-events:none}
+.cm-app .id-card2-image{position:relative}
+
+/* Drawer category select */
+.cm-app .id-drawer-cat-select{padding:7px 11px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);font-family:inherit;min-width:200px}
+.cm-app .id-drawer-cat-select:focus{outline:none;border-color:var(--accent)}
+.cm-app .id-drawer-cat-readonly{font-size:13px;color:var(--text)}
 
 /* ── Ideation: drop zone ── */
 .cm-app .id-drop{display:flex;align-items:center;justify-content:center;padding:18px 16px;margin:0 0 14px;border:1px dashed var(--border);border-radius:8px;background:var(--surface);color:var(--muted);font-size:12.5px;cursor:pointer;text-align:center;transition:border-color .15s,background .15s}
