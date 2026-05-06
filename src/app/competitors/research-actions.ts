@@ -1185,15 +1185,14 @@ export async function aiDeepExtractBrand(input: {
       );
       let added = 0;
       let rejected = 0;
+      const productPathRegex = /\/products?\/(\d+\/)?[a-z0-9-]+\/?$/i;
       for (const u of sitemapUrls) {
         // Only consider URLs that are individual product pages. We accept
         // the common patterns: /products/<id>/<slug>, /products/<slug>,
         // /product/<slug>. Sites that don't match these are still processed
         // by the category-walk path above.
         const lower = u.toLowerCase();
-        const looksLikeProduct =
-          /\/products?\/(\d+\/)?[a-z0-9-]+\/?$/i.test(lower);
-        if (!looksLikeProduct) continue;
+        if (!productPathRegex.test(lower)) continue;
         // Niche filter — must pass the positive AND negative checks.
         if (!passesNicheFilter(lower, "", rules)) {
           rejected++;
@@ -1206,6 +1205,42 @@ export async function aiDeepExtractBrand(input: {
       console.log(
         `[deep-extract] sitemap: added ${added} in-niche product URLs (${rejected} off-niche rejected)`,
       );
+
+      // Fallback: brands like Axis Lighting use opaque SKU-style slugs
+      // (e.g. /products/tacet) that don't contain niche keywords like
+      // "linear" or "cove". When the strict positive-keyword filter
+      // rejects every URL but plenty exist, retry with a negatives-only
+      // pass so SKU slugs still come through. Lumenpulse-style sites
+      // (whose slugs DO contain "lumenline"/"lumencove") never trigger
+      // this branch because their strict pass already finds matches.
+      if (added === 0 && rejected > 0) {
+        console.log(
+          `[deep-extract] sitemap: strict niche filter rejected all ${rejected} URLs — falling back to negatives-only filter`,
+        );
+        let fallbackAdded = 0;
+        let fallbackBlocked = 0;
+        for (const u of sitemapUrls) {
+          const lower = u.toLowerCase();
+          if (!productPathRegex.test(lower)) continue;
+          let blocked = false;
+          for (const n of rules.negative) {
+            if (n && lower.includes(n)) {
+              blocked = true;
+              break;
+            }
+          }
+          if (blocked) {
+            fallbackBlocked++;
+            continue;
+          }
+          if (productUrls.has(u)) continue;
+          productUrls.add(u);
+          fallbackAdded++;
+        }
+        console.log(
+          `[deep-extract] sitemap fallback: added ${fallbackAdded} URLs (${fallbackBlocked} blocked by negatives)`,
+        );
+      }
     } catch (e) {
       console.warn("[deep-extract] sitemap crawl failed:", e);
     }
@@ -1251,8 +1286,18 @@ Return JSON: { "productUrls": string[] }`;
         if (sr.url) candidates.add(sr.url);
       }
 
+      const isNonProductPath = (pathname: string) =>
+        /\/(news|press|blog|case-stud|stories|projects?|contact|about|careers?|search|login|wishlist|services|dealers|support|signin|register|account)\b/i.test(
+          pathname,
+        );
+      const looksLikeProductPath = (pathname: string) =>
+        /--[ps]-?\d+\/?$/i.test(pathname) ||
+        /\/products?\/\d+\/[a-z0-9-]+\/?$/i.test(pathname) ||
+        /\/products?\/[a-z0-9-]+\/?$/i.test(pathname);
+
       let added = 0;
       let rejected = 0;
+      const fallbackPool: URL[] = [];
       for (const raw of candidates) {
         if (!raw || !/^https?:\/\//i.test(raw)) continue;
         let parsed: URL;
@@ -1262,25 +1307,18 @@ Return JSON: { "productUrls": string[] }`;
           continue;
         }
         if (parsed.host.replace(/^www\./, "") !== host) continue;
+        // Reject obvious non-product URLs early so they don't pollute the
+        // fallback pool either.
+        const segs = parsed.pathname.split("/").filter(Boolean);
+        if (segs.length < 2) continue;
+        if (isNonProductPath(parsed.pathname)) continue;
+        if (!looksLikeProductPath(parsed.pathname)) continue;
         // Niche filter — must pass.
         if (!passesNicheFilter(parsed.pathname.toLowerCase(), "", rules)) {
           rejected++;
+          fallbackPool.push(parsed);
           continue;
         }
-        // Reject obvious non-product URLs (category landing, news, etc.)
-        const segs = parsed.pathname.split("/").filter(Boolean);
-        if (segs.length < 2) continue;
-        if (
-          /\/(news|press|blog|case-stud|stories|projects?|contact|about|careers?|search|login|wishlist|services|dealers|support|signin|register|account)\b/i.test(
-            parsed.pathname,
-          )
-        ) continue;
-        // Likely product if it has an id-suffix pattern (--p-N, --sf-N, /N/slug, /products/N).
-        const looksLikeProduct =
-          /--[ps]-?\d+\/?$/i.test(parsed.pathname) ||
-          /\/products?\/\d+\/[a-z0-9-]+\/?$/i.test(parsed.pathname) ||
-          /\/products?\/[a-z0-9-]+\/?$/i.test(parsed.pathname);
-        if (!looksLikeProduct) continue;
         parsed.hash = "";
         const norm = parsed.toString();
         if (productUrls.has(norm)) continue;
@@ -1290,6 +1328,40 @@ Return JSON: { "productUrls": string[] }`;
       console.log(
         `[deep-extract] Perplexity URL enum: added ${added} (${rejected} rejected by niche filter)`,
       );
+
+      // Fallback for SKU-style slugs (Axis: /products/tacet) — same logic
+      // as the sitemap pass. If the strict filter zeroed everything out,
+      // re-admit candidates that only fail the positive-keyword check,
+      // still rejecting any URL that hits a negative keyword.
+      if (added === 0 && fallbackPool.length > 0) {
+        console.log(
+          `[deep-extract] Perplexity URL enum: strict filter rejected all ${fallbackPool.length} on-host product URLs — falling back to negatives-only filter`,
+        );
+        let fallbackAdded = 0;
+        let fallbackBlocked = 0;
+        for (const parsed of fallbackPool) {
+          const lower = parsed.pathname.toLowerCase();
+          let blocked = false;
+          for (const n of rules.negative) {
+            if (n && lower.includes(n)) {
+              blocked = true;
+              break;
+            }
+          }
+          if (blocked) {
+            fallbackBlocked++;
+            continue;
+          }
+          parsed.hash = "";
+          const norm = parsed.toString();
+          if (productUrls.has(norm)) continue;
+          productUrls.add(norm);
+          fallbackAdded++;
+        }
+        console.log(
+          `[deep-extract] Perplexity URL enum fallback: added ${fallbackAdded} (${fallbackBlocked} blocked by negatives)`,
+        );
+      }
     } catch (e) {
       console.warn("[deep-extract] Perplexity URL enumeration failed:", e);
     }
