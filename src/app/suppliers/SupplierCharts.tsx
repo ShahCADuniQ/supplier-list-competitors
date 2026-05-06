@@ -9,21 +9,56 @@ import {
   ArcElement,
   Tooltip,
   Legend,
+  type ScriptableContext,
 } from "chart.js";
 import { Bar, Doughnut } from "react-chartjs-2";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend);
 
-const PIE_COLORS = [
-  "#2a5c9e", "#1a8a4a", "#c07d0a", "#7a4ab5", "#1a7a8a",
-  "#c03030", "#3a4a5e", "#5a6a7e", "#7a8a9e", "#a0a8b6",
-  "#3eaa6a", "#d68f1a", "#c45a30", "#1e4a82",
+// Multi-hue palette for the donut — dark-mode friendly, vivid against
+// both light and dark surfaces. Pulled from the Dribbble reference.
+const DONUT_PALETTE = [
+  "#2563ff", // cobalt
+  "#4ade80", // lime
+  "#ff4d2e", // orange
+  "#fbbf24", // amber
+  "#a78bfa", // violet
+  "#22d3ee", // cyan
+  "#f472b6", // pink
+  "#34d399", // teal
+  "#60a5fa", // sky
+  "#f97316", // tangerine
+  "#a3e635", // chartreuse
+  "#e879f9", // magenta
+  "#94a3b8", // slate
+  "#fb7185", // rose
 ];
+
+// Read a CSS custom property at render time so charts respect theme.
+function cssVar(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const v = getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+  return v || fallback;
+}
+
+// Linear top-to-bottom gradient (lime → cobalt) for bar fills.
+function makeBarGradient(ctx: ScriptableContext<"bar">) {
+  const chart = ctx.chart;
+  const { ctx: c, chartArea } = chart;
+  if (!chartArea) return "#2563ff";
+  const gradient = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+  gradient.addColorStop(0, cssVar("--lb-chart-bar-top", "#4ade80"));
+  gradient.addColorStop(1, cssVar("--lb-chart-bar-bottom", "#1740d4"));
+  return gradient;
+}
 
 type Item = { category?: string | null; origin?: string | null };
 
 export function CategoryChart({
-  data, onSelect,
+  data,
+  onSelect,
 }: {
   data: Item[];
   onSelect: (category: string) => void;
@@ -37,19 +72,45 @@ export function CategoryChart({
     return { labels: sorted.map((e) => e[0]), values: sorted.map((e) => e[1]) };
   }, [data]);
 
+  const tickColor = cssVar("--lb-text-2", "#a0a3ad");
+  const gridColor = cssVar("--lb-border", "rgba(255,255,255,0.06)");
+
   return (
     <Bar
       data={{
         labels,
-        datasets: [{ data: values, backgroundColor: "#2a5c9e", borderRadius: 4 }],
+        datasets: [
+          {
+            data: values,
+            backgroundColor: (ctx) => makeBarGradient(ctx),
+            borderRadius: 6,
+            borderSkipped: false,
+            maxBarThickness: 36,
+          },
+        ],
       }}
       options={{
         responsive: true,
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          y: { beginAtZero: true, ticks: { precision: 0 } },
-          x: { ticks: { autoSkip: false, maxRotation: 35, minRotation: 0 } },
+          y: {
+            beginAtZero: true,
+            ticks: { precision: 0, color: tickColor, font: { size: 11 } },
+            grid: { color: gridColor },
+            border: { display: false },
+          },
+          x: {
+            ticks: {
+              autoSkip: false,
+              maxRotation: 35,
+              minRotation: 0,
+              color: tickColor,
+              font: { size: 11 },
+            },
+            grid: { display: false },
+            border: { color: gridColor },
+          },
         },
         onClick: (_evt, elements) => {
           if (elements.length) onSelect(labels[elements[0].index]);
@@ -60,7 +121,8 @@ export function CategoryChart({
 }
 
 export function OriginChart({
-  data, onSelect,
+  data,
+  onSelect,
 }: {
   data: Item[];
   onSelect: (origin: string) => void;
@@ -74,17 +136,40 @@ export function OriginChart({
     return { labels: sorted.map((e) => e[0]), values: sorted.map((e) => e[1]) };
   }, [data]);
 
+  const surfaceColor = cssVar("--lb-bg-elev", "#1a1c22");
+  const labelColor = cssVar("--lb-text-2", "#a0a3ad");
+
   return (
     <Doughnut
       data={{
         labels,
-        datasets: [{ data: values, backgroundColor: PIE_COLORS, borderColor: "#fff", borderWidth: 2 }],
+        datasets: [
+          {
+            data: values,
+            backgroundColor: DONUT_PALETTE,
+            borderColor: surfaceColor,
+            borderWidth: 3,
+            spacing: 1,
+          },
+        ],
       }}
       options={{
         responsive: true,
         maintainAspectRatio: false,
+        cutout: "62%",
         plugins: {
-          legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12 } },
+          legend: {
+            position: "right",
+            labels: {
+              color: labelColor,
+              font: { size: 11 },
+              boxWidth: 10,
+              boxHeight: 10,
+              padding: 8,
+              usePointStyle: true,
+              pointStyle: "circle",
+            },
+          },
         },
         onClick: (_evt, elements) => {
           if (elements.length) onSelect(labels[elements[0].index]);
