@@ -270,6 +270,10 @@ html.dark {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.lb-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lb-accent) 22%, transparent);
+}
 
 .lb-btn-primary {
   background: var(--lb-accent);
@@ -282,6 +286,7 @@ html.dark {
 }
 .lb-btn-primary:active {
   background: var(--lb-accent-active);
+  border-color: var(--lb-accent-active);
 }
 
 .lb-btn-ghost {
@@ -294,6 +299,7 @@ html.dark {
 
 .lb-input {
   width: 100%;
+  box-sizing: border-box;
   height: 32px;
   padding: 0 10px;
   border: 1px solid var(--lb-border-strong);
