@@ -83,6 +83,10 @@ export default function IdeationProductDrawer({
   const router = useRouter();
   const [entered, setEntered] = useState(false);
   const [uploadingKind, setUploadingKind] = useState<string | null>(null);
+  // Lightbox for image previews — clicking an uploaded product image
+  // expands it to a fullscreen overlay so the whole picture is visible
+  // at natural resolution.
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setEntered(true));
@@ -291,9 +295,6 @@ export default function IdeationProductDrawer({
                       cursor: "pointer",
                       fontFamily: "inherit",
                       transition: "border-color 160ms ease, transform 100ms ease",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
                     }}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -302,11 +303,9 @@ export default function IdeationProductDrawer({
                       alt={it.title ?? ""}
                       loading="lazy"
                       style={{
-                        maxWidth: "100%",
-                        maxHeight: "100%",
-                        width: "auto",
-                        height: "auto",
-                        objectFit: "contain",
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
                         display: "block",
                       }}
                       onError={(e) => {
@@ -379,11 +378,131 @@ export default function IdeationProductDrawer({
                 isUploading={isUploading}
                 onUpload={(f) => handleUpload(slot.kind, f)}
                 onDelete={handleDelete}
+                onImageClick={(url) => setLightboxUrl(url)}
               />
             );
           })}
         </div>
       </aside>
+
+      {lightboxUrl && (
+        <ImageLightbox
+          url={lightboxUrl}
+          onClose={() => setLightboxUrl(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inline lightbox — shows an image at natural size on a dim backdrop. ESC
+// closes; clicking outside the image closes; clicking the image itself
+// does nothing so users can drag-select / zoom.
+// ─────────────────────────────────────────────────────────────────────────────
+export function ImageLightbox({
+  url,
+  alt,
+  onClose,
+  extraButton,
+}: {
+  url: string;
+  alt?: string;
+  onClose: () => void;
+  /** Optional secondary action (e.g. "Edit details") rendered top-left. */
+  extraButton?: { label: string; onClick: () => void };
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Image preview"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.92)",
+        zIndex: 1100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      {extraButton && (
+        <button
+          type="button"
+          onClick={extraButton.onClick}
+          style={{
+            position: "absolute",
+            top: 16,
+            left: 16,
+            padding: "8px 16px",
+            borderRadius: 9999,
+            background: "rgba(255,255,255,0.12)",
+            border: "1px solid rgba(255,255,255,0.24)",
+            color: "#fff",
+            cursor: "pointer",
+            fontSize: 13,
+            fontWeight: 500,
+            fontFamily: "inherit",
+          }}
+        >
+          {extraButton.label}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close"
+        title="Close (Esc)"
+        style={{
+          position: "absolute",
+          top: 16,
+          right: 16,
+          width: 40,
+          height: 40,
+          borderRadius: 9999,
+          background: "rgba(255,255,255,0.12)",
+          border: "1px solid rgba(255,255,255,0.24)",
+          color: "#fff",
+          cursor: "pointer",
+          fontSize: 18,
+          lineHeight: 1,
+          padding: 0,
+          fontFamily: "inherit",
+        }}
+      >
+        ✕
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={alt ?? ""}
+        style={{
+          maxWidth: "100%",
+          maxHeight: "100%",
+          objectFit: "contain",
+          display: "block",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+          borderRadius: 4,
+        }}
+      />
     </div>
   );
 }
@@ -398,6 +517,7 @@ function FileSlot({
   isUploading,
   onUpload,
   onDelete,
+  onImageClick,
 }: {
   title: string;
   hint: string;
@@ -408,6 +528,7 @@ function FileSlot({
   isUploading: boolean;
   onUpload: (files: FileList | File[]) => void;
   onDelete: (file: IdeationProductFile) => void;
+  onImageClick?: (url: string) => void;
 }) {
   return (
     <section className="pd-section">
@@ -451,6 +572,16 @@ function FileSlot({
           {files.map((f) => (
             <div
               key={f.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onImageClick?.(f.url)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onImageClick?.(f.url);
+                }
+              }}
+              title={f.name}
               style={{
                 position: "relative",
                 aspectRatio: "1 / 1",
@@ -458,9 +589,7 @@ function FileSlot({
                 borderRadius: 8,
                 overflow: "hidden",
                 border: "1px solid var(--border)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
+                cursor: "pointer",
               }}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -468,18 +597,19 @@ function FileSlot({
                 src={f.url}
                 alt={f.name}
                 style={{
-                  maxWidth: "100%",
-                  maxHeight: "100%",
-                  width: "auto",
-                  height: "auto",
-                  objectFit: "contain",
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
                   display: "block",
                 }}
               />
               {canEdit && (
                 <button
                   type="button"
-                  onClick={() => onDelete(f)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(f);
+                  }}
                   aria-label={`Delete ${f.name}`}
                   style={{
                     position: "absolute",

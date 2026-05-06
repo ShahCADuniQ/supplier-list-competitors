@@ -2201,7 +2201,7 @@ const COMPETITOR_CSS = `
 .cm-app .id-card2:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 6px 14px rgba(15,23,42,.08)}
 .cm-app .id-card2:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .cm-app .id-card2-image{width:100%;background:#0f172a;display:flex;align-items:center;justify-content:center;overflow:hidden;aspect-ratio:1/1}
-.cm-app .id-card2-image img{width:100%;height:100%;object-fit:contain;display:block;transition:transform .25s}
+.cm-app .id-card2-image img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s}
 .cm-app .id-card2:hover .id-card2-image img{transform:scale(1.03)}
 .cm-app .id-card2-info{padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px}
 .cm-app .id-card2-title{font-size:12.5px;font-weight:600;color:var(--text);line-height:1.3}
