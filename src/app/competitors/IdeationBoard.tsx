@@ -752,11 +752,20 @@ export default function IdeationBoard({
         <IdeationProductDrawer
           product={drawerProduct}
           files={filesByProduct.get(drawerProduct.id) ?? []}
+          linkedItems={items.filter((i) => {
+            // Cards visible under this product pill: explicit junction OR
+            // global. Mirror the same rule the pill filter uses so the
+            // drawer view matches the board view.
+            if (i.isGlobal) return true;
+            const set = linkageMap.get(i.id);
+            return set ? set.has(drawerProduct.id) : false;
+          })}
           canEdit={canEdit}
           onEdit={() => setProductModal({ kind: "edit", product: drawerProduct })}
           onDelete={() =>
             setProductModal({ kind: "delete", product: drawerProduct })
           }
+          onOpenItem={(itemId) => setOpenItemId(itemId)}
           onToast={onToast}
           onClose={() => setDrawerProductId(null)}
         />

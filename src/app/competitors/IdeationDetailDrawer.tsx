@@ -66,32 +66,22 @@ export default function IdeationDetailDrawer({
   const [productsBusy, setProductsBusy] = useState(false);
   const sourceUrl = extractSourceUrl(item.tags);
 
-  function toggleProduct(id: number) {
-    setSelectedProducts((s) => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  async function saveProductLinkage() {
+  // ── Auto-save product linkage ─────────────────────────────────────────
+  // The previous "Save products" button approach was fragile — the button
+  // sat inside an h3 and was easy to miss, and a stale closure could keep
+  // it disabled even after the user toggled something. Now every checkbox
+  // change persists immediately by calling saveLinkageWith() directly with
+  // the new values, so the user never has to remember to save.
+  async function saveLinkageWith(nextIsGlobal: boolean, nextSelected: Set<number>) {
     if (!canEdit) return;
     setProductsBusy(true);
     try {
       await setIdeationItemProducts({
         itemId: item.id,
-        isGlobal,
-        productIds: isGlobal ? [] : Array.from(selectedProducts),
+        isGlobal: nextIsGlobal,
+        productIds: nextIsGlobal ? [] : Array.from(nextSelected),
       });
       router.refresh();
-      onToast(
-        isGlobal
-          ? "Linked to all products"
-          : selectedProducts.size === 0
-            ? "Cleared product links"
-            : `Linked to ${selectedProducts.size} product${selectedProducts.size === 1 ? "" : "s"}`,
-      );
     } catch (e) {
       onToast(e instanceof Error ? e.message : "Update failed", true);
     } finally {
@@ -99,12 +89,20 @@ export default function IdeationDetailDrawer({
     }
   }
 
-  // Compare current state to what's persisted — Save Products button gets
-  // disabled until something actually changes.
-  const linkageDirty =
-    isGlobal !== (item.isGlobal ?? true) ||
-    Array.from(selectedProducts).sort().join(",") !==
-      [...linkedProductIds].sort().join(",");
+  function handleGlobalChange(next: boolean) {
+    setIsGlobal(next);
+    saveLinkageWith(next, selectedProducts);
+  }
+
+  function toggleProduct(id: number) {
+    const next = new Set(selectedProducts);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedProducts(next);
+    // Only persist when off-global — toggling a checkbox while global is
+    // a no-op as far as the server is concerned.
+    if (!isGlobal) saveLinkageWith(isGlobal, next);
+  }
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setEntered(true));
@@ -281,26 +279,38 @@ export default function IdeationDetailDrawer({
           </section>
 
           <section className="pd-section">
-            <h3 className="pd-section-h">
-              Products
-              {canEdit && (
-                <button
-                  type="button"
-                  className="btn ghost sm"
-                  style={{ marginLeft: "auto" }}
-                  onClick={saveProductLinkage}
-                  disabled={productsBusy || !linkageDirty}
+            <h3 className="pd-section-h" style={{ display: "flex", alignItems: "center" }}>
+              <span>Products</span>
+              {productsBusy && (
+                <span
+                  style={{
+                    marginLeft: 10,
+                    fontSize: 11,
+                    fontWeight: 400,
+                    color: "var(--muted)",
+                    textTransform: "none",
+                    letterSpacing: 0,
+                  }}
                 >
-                  {productsBusy ? "Saving…" : "Save products"}
-                </button>
+                  Saving…
+                </span>
               )}
             </h3>
+            <p
+              style={{
+                fontSize: 12,
+                color: "var(--text-2)",
+                margin: "0 0 10px",
+              }}
+            >
+              Changes save automatically.
+            </p>
             {/* Apply-to-all toggle */}
             <label className="id-drawer-global-toggle">
               <input
                 type="checkbox"
                 checked={isGlobal}
-                onChange={(e) => setIsGlobal(e.target.checked)}
+                onChange={(e) => handleGlobalChange(e.target.checked)}
                 disabled={!canEdit || productsBusy}
               />
               <span>

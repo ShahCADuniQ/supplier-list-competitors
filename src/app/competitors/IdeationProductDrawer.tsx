@@ -17,14 +17,23 @@ import {
   addProductFile,
   deleteProductFile,
 } from "./ideation-product-file-actions";
-import type { IdeationProduct, IdeationProductFile } from "@/db/schema";
+import type {
+  IdeationProduct,
+  IdeationProductFile,
+  CompetitorIdeationItem,
+} from "@/db/schema";
 
 type Props = {
   product: IdeationProduct;
   files: IdeationProductFile[];
+  /** Ideation cards already linked to this product (or global). */
+  linkedItems: CompetitorIdeationItem[];
   canEdit: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  /** Called when the user clicks a linked-idea thumbnail — parent opens
+   *  the IdeationDetailDrawer overlaid on top of this drawer. */
+  onOpenItem: (itemId: number) => void;
   onToast: (msg: string, err?: boolean) => void;
   onClose: () => void;
 };
@@ -63,9 +72,11 @@ function fmtBytes(n: number) {
 export default function IdeationProductDrawer({
   product,
   files,
+  linkedItems,
   canEdit,
   onEdit,
   onDelete,
+  onOpenItem,
   onToast,
   onClose,
 }: Props) {
@@ -205,6 +216,149 @@ export default function IdeationProductDrawer({
         </header>
 
         <div className="pd-body">
+          <section className="pd-section">
+            <h3
+              className="pd-section-h"
+              style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+            >
+              <span>Linked ideas</span>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 400,
+                  color: "var(--muted)",
+                  letterSpacing: 0,
+                  textTransform: "none",
+                }}
+              >
+                Pinterest cards & moodboard items linked to this product
+              </span>
+              <span
+                style={{
+                  marginLeft: "auto",
+                  fontSize: 11,
+                  color: "var(--muted)",
+                  fontWeight: 600,
+                }}
+              >
+                {linkedItems.length}
+              </span>
+            </h3>
+
+            {linkedItems.length === 0 ? (
+              <p
+                style={{
+                  fontSize: 12,
+                  color: "var(--muted)",
+                  margin: 0,
+                  padding: "12px",
+                  background: "var(--surface-2)",
+                  border: "1px dashed var(--border)",
+                  borderRadius: 8,
+                  textAlign: "center",
+                }}
+              >
+                No ideas linked yet. Open any Pinterest card and link it to
+                <strong style={{ color: "var(--text)" }}>
+                  {" "}
+                  {product.name}
+                </strong>{" "}
+                from its drawer.
+              </p>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    "repeat(auto-fill, minmax(120px, 1fr))",
+                  gap: 8,
+                }}
+              >
+                {linkedItems.map((it) => (
+                  <button
+                    key={it.id}
+                    type="button"
+                    onClick={() => onOpenItem(it.id)}
+                    title={it.title ?? "Open"}
+                    style={{
+                      position: "relative",
+                      aspectRatio: "1 / 1",
+                      background: "var(--surface-2)",
+                      borderRadius: 8,
+                      overflow: "hidden",
+                      border: "1px solid var(--border)",
+                      padding: 0,
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      transition: "border-color 160ms ease, transform 100ms ease",
+                    }}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={it.imageUrl}
+                      alt={it.title ?? ""}
+                      loading="lazy"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        display: "block",
+                      }}
+                      onError={(e) => {
+                        (e.currentTarget.style.opacity = "0.2");
+                      }}
+                    />
+                    {it.isGlobal && (
+                      <span
+                        aria-hidden
+                        title="Applies to every product (global)"
+                        style={{
+                          position: "absolute",
+                          top: 4,
+                          right: 4,
+                          padding: "1px 6px",
+                          borderRadius: 9999,
+                          background: "rgba(15,23,42,0.78)",
+                          color: "#fff",
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: "0.06em",
+                          textTransform: "uppercase",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        All
+                      </span>
+                    )}
+                    {it.title && (
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          padding: "4px 6px",
+                          background:
+                            "linear-gradient(to top, rgba(0,0,0,0.7), transparent)",
+                          color: "#fff",
+                          fontSize: 10,
+                          lineHeight: 1.3,
+                          fontWeight: 500,
+                          textAlign: "left",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {it.title}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+
           {SLOTS.map((slot) => {
             const list = filesByKind.get(slot.kind) ?? [];
             const isUploading = uploadingKind === slot.kind;
