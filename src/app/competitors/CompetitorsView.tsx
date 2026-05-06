@@ -2211,8 +2211,8 @@ const COMPETITOR_CSS = `
 .cm-app .id-card2-tag-more{font-size:10.5px;color:var(--muted);padding:1px 7px}
 
 /* ── Ideation drawer ── */
-.cm-app .id-drawer-image{padding:0;background:#0f172a;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;max-height:60vh}
-.cm-app .id-drawer-image img{max-width:100%;max-height:60vh;object-fit:contain;display:block}
+.cm-app .id-drawer-image{padding:0;background:#0f172a;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;max-height:80vh}
+.cm-app .id-drawer-image img{max-width:100%;max-height:80vh;width:auto;height:auto;object-fit:contain;display:block}
 .cm-app .id-drawer-notes{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);font-family:inherit;line-height:1.5;resize:vertical;transition:border-color .15s}
 .cm-app .id-drawer-notes:focus{outline:none;border-color:var(--accent)}
 .cm-app .id-drawer-tags{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}

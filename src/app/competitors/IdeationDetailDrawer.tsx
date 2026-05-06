@@ -63,35 +63,15 @@ export default function IdeationDetailDrawer({
   const [selectedProducts, setSelectedProducts] = useState<Set<number>>(
     () => new Set(linkedProductIds),
   );
-  const [productsBusy, setProductsBusy] = useState(false);
   const sourceUrl = extractSourceUrl(item.tags);
 
-  // ── Auto-save product linkage ─────────────────────────────────────────
-  // The previous "Save products" button approach was fragile — the button
-  // sat inside an h3 and was easy to miss, and a stale closure could keep
-  // it disabled even after the user toggled something. Now every checkbox
-  // change persists immediately by calling saveLinkageWith() directly with
-  // the new values, so the user never has to remember to save.
-  async function saveLinkageWith(nextIsGlobal: boolean, nextSelected: Set<number>) {
-    if (!canEdit) return;
-    setProductsBusy(true);
-    try {
-      await setIdeationItemProducts({
-        itemId: item.id,
-        isGlobal: nextIsGlobal,
-        productIds: nextIsGlobal ? [] : Array.from(nextSelected),
-      });
-      router.refresh();
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : "Update failed", true);
-    } finally {
-      setProductsBusy(false);
-    }
-  }
-
+  // Local state mutates immediately for visual feedback. Persistence
+  // happens on the single Save button at the top of the drawer (handleSave
+  // below), which writes BOTH the item edits and the product linkage in
+  // one transaction. No more silent auto-save — the user sees a clear
+  // "Save" affordance and a "Saving…" indicator while it runs.
   function handleGlobalChange(next: boolean) {
     setIsGlobal(next);
-    saveLinkageWith(next, selectedProducts);
   }
 
   function toggleProduct(id: number) {
@@ -99,10 +79,20 @@ export default function IdeationDetailDrawer({
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setSelectedProducts(next);
-    // Only persist when off-global — toggling a checkbox while global is
-    // a no-op as far as the server is concerned.
-    if (!isGlobal) saveLinkageWith(isGlobal, next);
   }
+
+  // Linkage dirty: separate from item-fields dirty. Used to enable Save
+  // when only the product linkage changed.
+  const linkageDirty =
+    isGlobal !== (item.isGlobal ?? true) ||
+    Array.from(selectedProducts)
+      .map((n) => Number(n))
+      .sort((a, b) => a - b)
+      .join(",") !==
+      [...linkedProductIds]
+        .map((n) => Number(n))
+        .sort((a, b) => a - b)
+        .join(",");
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setEntered(true));
@@ -127,12 +117,15 @@ export default function IdeationDetailDrawer({
     setTimeout(onClose, 220);
   }
 
-  // Has the user changed anything? Used to enable Save and warn on close.
+  // Has the user changed anything? Used to enable Save. Includes both
+  // item-level edits and product linkage so a single Save persists
+  // everything together.
   const dirty =
     title !== (item.title ?? "") ||
     notes !== (item.notes ?? "") ||
     kind !== item.kind ||
-    JSON.stringify(tags) !== JSON.stringify(userFacingTags(item.tags));
+    JSON.stringify(tags) !== JSON.stringify(userFacingTags(item.tags)) ||
+    linkageDirty;
 
   async function handleSave() {
     if (!canEdit || saving) return;
@@ -142,13 +135,22 @@ export default function IdeationDetailDrawer({
       const internal = (item.tags ?? []).filter((t) =>
         t.startsWith("pinterest:"),
       );
-      await updateIdeationItem({
-        id: item.id,
-        title: title.trim() || null,
-        notes: notes.trim() || null,
-        kind,
-        tags: [...internal, ...tags],
-      });
+      // Persist item-level fields + product linkage in parallel. Either
+      // can throw individually; we surface whichever message arrives.
+      await Promise.all([
+        updateIdeationItem({
+          id: item.id,
+          title: title.trim() || null,
+          notes: notes.trim() || null,
+          kind,
+          tags: [...internal, ...tags],
+        }),
+        setIdeationItemProducts({
+          itemId: item.id,
+          isGlobal,
+          productIds: isGlobal ? [] : Array.from(selectedProducts),
+        }),
+      ]);
       router.refresh();
       onToast("Saved");
     } catch (e) {
@@ -192,9 +194,9 @@ export default function IdeationDetailDrawer({
       className={`pd-overlay${entered ? " entered" : ""}`}
       role="dialog"
       aria-modal="true"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) requestClose();
-      }}
+      // Backdrop click-to-close removed: user reported losing in-progress
+      // edits when they accidentally clicked outside the drawer. Use the
+      // ✕ button or Esc to close.
     >
       <aside className={`pd-drawer${entered ? " entered" : ""}`}>
         <header className="pd-head">
@@ -279,39 +281,14 @@ export default function IdeationDetailDrawer({
           </section>
 
           <section className="pd-section">
-            <h3 className="pd-section-h" style={{ display: "flex", alignItems: "center" }}>
-              <span>Products</span>
-              {productsBusy && (
-                <span
-                  style={{
-                    marginLeft: 10,
-                    fontSize: 11,
-                    fontWeight: 400,
-                    color: "var(--muted)",
-                    textTransform: "none",
-                    letterSpacing: 0,
-                  }}
-                >
-                  Saving…
-                </span>
-              )}
-            </h3>
-            <p
-              style={{
-                fontSize: 12,
-                color: "var(--text-2)",
-                margin: "0 0 10px",
-              }}
-            >
-              Changes save automatically.
-            </p>
+            <h3 className="pd-section-h">Products</h3>
             {/* Apply-to-all toggle */}
             <label className="id-drawer-global-toggle">
               <input
                 type="checkbox"
                 checked={isGlobal}
                 onChange={(e) => handleGlobalChange(e.target.checked)}
-                disabled={!canEdit || productsBusy}
+                disabled={!canEdit || saving}
               />
               <span>
                 <strong>Apply to all products</strong>
@@ -342,7 +319,7 @@ export default function IdeationDetailDrawer({
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggleProduct(p.id)}
-                          disabled={!canEdit || productsBusy}
+                          disabled={!canEdit || saving}
                         />
                         <span
                           className="id-drawer-product-dot"
