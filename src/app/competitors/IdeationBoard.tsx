@@ -20,6 +20,7 @@ import {
   addIdeationProduct,
   deleteIdeationProduct,
   updateIdeationProduct,
+  setIdeationItemProducts,
 } from "./ideation-product-actions";
 import {
   replaceCollectionBrochure,
@@ -293,6 +294,10 @@ export default function IdeationBoard({
   }
 
   // ── Manual image upload (drop or click) ──
+  // Each dropped file lands on the board as a regular ideation card. The
+  // chosen "Category" and "Link to product" selectors from the Pinterest
+  // panel above are reused here for consistency — pick once, applies to
+  // both the URL extractor and the drop zone.
   const [uploading, setUploading] = useState(0);
   async function uploadFiles(files: FileList | File[]) {
     if (!canEdit) return;
@@ -310,15 +315,37 @@ export default function IdeationBoard({
           handleUploadUrl: "/api/blob/upload",
           contentType: f.type || undefined,
         });
-        await addIdeationItem({
+        const row = await addIdeationItem({
           collectionId: collection.id,
           imageUrl: blob.url,
           blobPathname: blob.pathname,
           mimeType: f.type,
           size: f.size,
           title: f.name.replace(/\.[^.]+$/, ""),
-          kind: "reference",
+          kind: pinterestKind,
         });
+        // If the user picked a specific product in the link-selector,
+        // lock the new card to it (is_global=false + junction row).
+        // Otherwise it stays global by default and shows under every
+        // product pill.
+        if (
+          row?.id &&
+          effectivePinterestProduct !== "all" &&
+          typeof effectivePinterestProduct === "number"
+        ) {
+          try {
+            await setIdeationItemProducts({
+              itemId: row.id,
+              isGlobal: false,
+              productIds: [effectivePinterestProduct],
+            });
+          } catch (e) {
+            console.warn(
+              "[uploadFiles] product linkage failed (card still uploaded):",
+              e,
+            );
+          }
+        }
         succeeded++;
       } catch (e) {
         onToast(e instanceof Error ? e.message : "Upload failed", true);
@@ -483,6 +510,46 @@ export default function IdeationBoard({
         </div>
       )}
 
+      {/* Manual upload drop zone — appears immediately below the Pinterest
+          paste card so the two import paths sit next to each other. Drops
+          land as regular cards using the same category + product link
+          selected above. */}
+      {canEdit && (
+        <label
+          className="id-drop"
+          style={{ marginBottom: 14 }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            (e.currentTarget as HTMLElement).classList.add("drag");
+          }}
+          onDragLeave={(e) =>
+            (e.currentTarget as HTMLElement).classList.remove("drag")
+          }
+          onDrop={(e) => {
+            e.preventDefault();
+            (e.currentTarget as HTMLElement).classList.remove("drag");
+            if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+          }}
+        >
+          <span>
+            Or <strong>drop images</strong> here / click to upload
+            <span style={{ display: "block", fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+              Uses the category + product link selected above. Each file becomes a card on the board.
+            </span>
+          </span>
+          <input
+            type="file"
+            multiple
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              if (e.target.files?.length) uploadFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+        </label>
+      )}
+
       <div className="bm-head">
         <div>
           <div className="d-eyebrow">Ideation</div>
@@ -608,38 +675,6 @@ export default function IdeationBoard({
           </button>
         )}
       </div>
-
-      {canEdit && (
-        <label
-          className="id-drop"
-          onDragOver={(e) => {
-            e.preventDefault();
-            (e.currentTarget as HTMLElement).classList.add("drag");
-          }}
-          onDragLeave={(e) =>
-            (e.currentTarget as HTMLElement).classList.remove("drag")
-          }
-          onDrop={(e) => {
-            e.preventDefault();
-            (e.currentTarget as HTMLElement).classList.remove("drag");
-            if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
-          }}
-        >
-          <span>
-            Or <strong>drop images</strong> here / click to upload
-          </span>
-          <input
-            type="file"
-            multiple
-            accept="image/*"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              if (e.target.files?.length) uploadFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-        </label>
-      )}
 
       {items.length > 0 && (
         <div className="id-categories">
