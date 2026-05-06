@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { del } from "@vercel/blob";
 import { db } from "@/db";
-import { competitorIdeationItems } from "@/db/schema";
+import {
+  competitorIdeationItems,
+  ideationItemProducts,
+} from "@/db/schema";
 import { requireCompetitorEditor } from "@/lib/permissions";
 import { fetchWithTimeout } from "@/lib/ai/parsers";
 import { extractPinterestImagesViaBrowser } from "@/lib/ai/pinterest";
@@ -191,6 +194,16 @@ export async function aiAddPinterestLink(input: {
   comment?: string | null;
   /** Category to assign to every imported card. Defaults to "moodboard". */
   kind?: string;
+  /**
+   * How the imported cards link to ideation products in this collection.
+   *   - omitted / { kind: "all" }: each card is global (applies to every product).
+   *   - { kind: "product", productId }: each card is non-global and gets a
+   *     single junction row pointing at that product.
+   * Cards can always be re-linked from their detail drawer afterwards.
+   */
+  productLinkage?:
+    | { kind: "all" }
+    | { kind: "product"; productId: number };
 }): Promise<PinterestExtractResult> {
   await requireCompetitorEditor();
   const url = (input.url ?? "").trim();
@@ -285,17 +298,45 @@ export async function aiAddPinterestLink(input: {
     }
   })();
   const kind = asKindKey(input.kind ?? "moodboard");
+  // Decide the linkage shape for this batch. Defaults to "all" — cards land
+  // global (applies to every product), matching the pre-products behaviour
+  // and giving users freedom to re-link individual cards later.
+  const linkage = input.productLinkage ?? { kind: "all" as const };
+  const isGlobal = linkage.kind === "all";
   const rows = newImages.slice(0, 60).map((imageUrl) => ({
     collectionId: input.collectionId,
     imageUrl,
     title: titlePrefix,
     notes: comment || null,
     kind,
+    isGlobal,
     // Stash the originating Pinterest URL in tags so the user can trace
     // which paste produced this card.
     tags: [`pinterest:${url}`],
   }));
-  await db.insert(competitorIdeationItems).values(rows);
+  const inserted = await db
+    .insert(competitorIdeationItems)
+    .values(rows)
+    .returning({ id: competitorIdeationItems.id });
+
+  // Junction rows when locked to a single product.
+  if (linkage.kind === "product" && inserted.length > 0) {
+    const junctionRows = inserted.map((r) => ({
+      ideationItemId: r.id,
+      productId: linkage.productId,
+    }));
+    try {
+      await db.insert(ideationItemProducts).values(junctionRows);
+    } catch (e) {
+      // If migration 0007 hasn't been applied, the junction table doesn't
+      // exist yet. Insert silently fails and we leave the cards as global —
+      // user can link them from the drawer once products are migrated.
+      console.warn(
+        "[pinterest] ideation_item_products insert failed (migration not applied?):",
+        e,
+      );
+    }
+  }
   revalidatePath("/competitors");
 
   return {

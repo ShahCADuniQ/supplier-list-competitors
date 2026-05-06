@@ -184,7 +184,22 @@ export default function IdeationBoard({
   const [pinterestUrl, setPinterestUrl] = useState("");
   const [pinterestComment, setPinterestComment] = useState("");
   const [pinterestKind, setPinterestKind] = useState<IdeationCategoryKey>("moodboard");
+  // Pinterest-import linkage. "all" = each new card is global. <number> = each
+  // new card is locked to that single product. Default "all" so importing
+  // before products exist still works.
+  const [pinterestProduct, setPinterestProduct] = useState<"all" | number>(
+    "all",
+  );
   const [pinterestBusy, setPinterestBusy] = useState(false);
+  // Resolve the dropdown value to a guaranteed-valid option. If the user
+  // picked a product and that product is later deleted, fall back to "all"
+  // — the select renders as "All products" without losing user intent.
+  const effectivePinterestProduct: "all" | number =
+    pinterestProduct === "all"
+      ? "all"
+      : products.some((p) => p.id === pinterestProduct)
+        ? pinterestProduct
+        : "all";
 
   async function addPinterestBoard() {
     if (!canEdit) return;
@@ -202,6 +217,10 @@ export default function IdeationBoard({
         url: u,
         comment: pinterestComment.trim() || undefined,
         kind: pinterestKind,
+        productLinkage:
+          effectivePinterestProduct === "all"
+            ? { kind: "all" }
+            : { kind: "product", productId: effectivePinterestProduct },
       });
       setPinterestUrl("");
       setPinterestComment("");
@@ -366,6 +385,34 @@ export default function IdeationBoard({
                 {IDEATION_CATEGORIES.map((c) => (
                   <option key={c.key} value={c.key}>
                     {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="id-pinterest-cat-label">
+              Link these images to:
+              <select
+                className="id-pinterest-cat"
+                value={
+                  effectivePinterestProduct === "all"
+                    ? "all"
+                    : String(effectivePinterestProduct)
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setPinterestProduct(v === "all" ? "all" : Number(v));
+                }}
+                disabled={pinterestBusy}
+                title={
+                  products.length === 0
+                    ? "No products yet — cards will be added under \"All products\". Add a product on the Ideation board to lock new imports to it."
+                    : undefined
+                }
+              >
+                <option value="all">All products (default)</option>
+                {products.map((p) => (
+                  <option key={p.id} value={String(p.id)}>
+                    {p.name}
                   </option>
                 ))}
               </select>
