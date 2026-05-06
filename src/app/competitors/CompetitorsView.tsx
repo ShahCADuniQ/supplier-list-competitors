@@ -30,6 +30,8 @@ import type {
   CompetitorProduct,
   CompetitorProductAttachment,
   CompetitorIdeationItem,
+  IdeationProduct,
+  IdeationItemProduct,
 } from "@/db/schema";
 import BenchmarkView from "./BenchmarkView";
 import IdeationBoard from "./IdeationBoard";
@@ -88,11 +90,15 @@ export default function CompetitorsView({
   collections,
   brands,
   ideationItems,
+  ideationProducts,
+  ideationItemProducts,
   canEdit,
 }: {
   collections: CompetitorCollection[];
   brands: FullCompetitor[];
   ideationItems: CompetitorIdeationItem[];
+  ideationProducts: IdeationProduct[];
+  ideationItemProducts: IdeationItemProduct[];
   canEdit: boolean;
 }) {
   const router = useRouter();
@@ -119,6 +125,24 @@ export default function CompetitorsView({
         : [],
     [ideationItems, activeCollectionId],
   );
+  const collIdeationProducts = useMemo(
+    () =>
+      activeCollectionId
+        ? ideationProducts.filter((p) => p.collectionId === activeCollectionId)
+        : [],
+    [ideationProducts, activeCollectionId],
+  );
+  const collIdeationLinkages = useMemo(() => {
+    // Restrict the junction to items inside the active collection so the
+    // child component never has to second-guess it.
+    if (!activeCollectionId) return ideationItemProducts;
+    const itemIdsInColl = new Set(
+      ideationItems
+        .filter((i) => i.collectionId === activeCollectionId)
+        .map((i) => i.id),
+    );
+    return ideationItemProducts.filter((l) => itemIdsInColl.has(l.ideationItemId));
+  }, [ideationItems, ideationItemProducts, activeCollectionId]);
 
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState<Set<string>>(new Set());
@@ -633,6 +657,8 @@ export default function CompetitorsView({
               collection={activeCollection}
               brands={collBrands}
               items={collIdeation}
+              products={collIdeationProducts}
+              linkages={collIdeationLinkages}
               canEdit={canEdit}
               onToast={toast}
             />
@@ -2022,6 +2048,45 @@ const COMPETITOR_CSS = `
 
 /* Card category badge */
 .cm-app .id-card2-cat-badge{position:absolute;top:6px;left:6px;padding:2px 8px;background:#0f172a;color:#fff;border-radius:9px;font-size:10px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;line-height:1.4;pointer-events:none}
+
+/* Product overlay (top-right of each card image) — color dots for each
+   linked product, or an "All" pill when the idea applies to every product. */
+.cm-app .id-card2-prod-badge{position:absolute;top:6px;right:6px;display:inline-flex;align-items:center;gap:4px;padding:3px 6px;background:rgba(15,23,42,0.78);border-radius:9999px;line-height:1;pointer-events:none}
+.cm-app .id-card2-prod-dot{display:inline-block;width:8px;height:8px;border-radius:9999px;border:1px solid rgba(255,255,255,0.6)}
+.cm-app .id-card2-prod-all{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#fff;padding:0 4px;line-height:1.4}
+.cm-app .id-card2-prod-more{font-size:9.5px;font-weight:600;color:#fff;line-height:1.4}
+
+/* Products row — pills above the upload zone for filtering + add product. */
+.cm-app .id-products-row{display:flex;align-items:center;gap:8px;margin:14px 0 4px;flex-wrap:wrap;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--lb-radius)}
+.cm-app .id-product-pill-wrap{display:inline-flex;align-items:center;gap:0;border-radius:var(--lb-radius-pill);overflow:hidden}
+.cm-app .id-product-pill-wrap[data-active="true"]{box-shadow:0 0 0 2px color-mix(in srgb, var(--pill-color, var(--accent)) 40%, transparent)}
+.cm-app .id-product-pill{display:inline-flex;align-items:center;gap:8px;padding:0 14px;height:32px;border-radius:var(--lb-radius-pill);background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-size:12.5px;font-weight:500;cursor:pointer;font-family:inherit;letter-spacing:-.005em;transition:background 160ms ease, border-color 160ms ease, color 160ms ease;white-space:nowrap}
+.cm-app .id-product-pill:hover{background:var(--surface);border-color:var(--border-strong)}
+.cm-app .id-product-pill[data-active="true"]{background:var(--pill-color, var(--accent));border-color:var(--pill-color, var(--accent));color:#fff}
+.cm-app .id-product-pill-dot{display:inline-block;width:8px;height:8px;border-radius:9999px;background:var(--pill-color, var(--accent));border:1px solid color-mix(in srgb, var(--pill-color, var(--accent)) 80%, transparent);flex-shrink:0}
+.cm-app .id-product-pill[data-active="true"] .id-product-pill-dot{background:#fff;border-color:rgba(255,255,255,0.7)}
+.cm-app .id-product-pill-ct{padding:1px 7px;border-radius:9999px;background:rgba(0,0,0,0.10);font-size:11px;font-weight:600;color:var(--text-2);line-height:1.4}
+.cm-app .id-product-pill[data-active="true"] .id-product-pill-ct{background:rgba(255,255,255,0.22);color:#fff}
+.cm-app .id-product-pill-acts{display:inline-flex;align-items:center;gap:2px;margin-left:-8px;padding:0 4px;opacity:0;transition:opacity 160ms ease}
+.cm-app .id-product-pill-wrap:hover .id-product-pill-acts,.cm-app .id-product-pill-wrap[data-active="true"] .id-product-pill-acts{opacity:1}
+.cm-app .id-product-pill-acts button{background:transparent;border:none;padding:4px 6px;cursor:pointer;color:var(--text-3);font-size:11px;line-height:1;font-family:inherit;border-radius:6px}
+.cm-app .id-product-pill-acts button:hover{color:var(--text);background:var(--surface-2)}
+.cm-app .id-product-add{display:inline-flex;align-items:center;gap:4px;padding:0 14px;height:32px;border:1px dashed var(--border-strong);background:transparent;border-radius:var(--lb-radius-pill);color:var(--text-2);font-size:12.5px;font-weight:500;cursor:pointer;font-family:inherit;transition:border-color 160ms ease, color 160ms ease, background 160ms ease}
+.cm-app .id-product-add:hover{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb, var(--accent) 8%, transparent)}
+.cm-app .id-product-add:disabled{opacity:.5;cursor:not-allowed}
+
+/* Drawer Products section — toggle + checkbox list. */
+.cm-app .id-drawer-global-toggle{display:flex;align-items:flex-start;gap:10px;padding:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--lb-radius-sm);cursor:pointer;font-size:13px;color:var(--text)}
+.cm-app .id-drawer-global-toggle input{margin-top:3px;flex-shrink:0;accent-color:var(--accent)}
+.cm-app .id-drawer-global-hint{color:var(--text-2);font-weight:400}
+.cm-app .id-drawer-products{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.cm-app .id-drawer-product-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--lb-radius-sm);font-size:13px;color:var(--text);cursor:pointer;transition:border-color 160ms ease, background 160ms ease}
+.cm-app .id-drawer-product-row:hover{border-color:var(--border-strong)}
+.cm-app .id-drawer-product-row[data-checked="true"]{border-color:var(--accent);background:color-mix(in srgb, var(--accent) 8%, transparent)}
+.cm-app .id-drawer-product-row input{accent-color:var(--accent);flex-shrink:0}
+.cm-app .id-drawer-product-dot{display:inline-block;width:10px;height:10px;border-radius:9999px;border:1px solid var(--border-strong);flex-shrink:0}
+.cm-app .id-drawer-product-name{font-weight:500;flex-shrink:0}
+.cm-app .id-drawer-product-desc{font-size:11.5px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .cm-app .id-card2-image{position:relative}
 
 /* Drawer category select */

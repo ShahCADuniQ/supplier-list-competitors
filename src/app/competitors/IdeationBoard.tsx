@@ -16,11 +16,18 @@ import {
   aiAddPinterestLink,
   deleteAllIdeationItems,
 } from "./ideation-actions";
+import {
+  addIdeationProduct,
+  deleteIdeationProduct,
+  updateIdeationProduct,
+} from "./ideation-product-actions";
 import IdeationDetailDrawer from "./IdeationDetailDrawer";
 import type {
   CompetitorCollection,
   Competitor,
   CompetitorIdeationItem,
+  IdeationProduct,
+  IdeationItemProduct,
 } from "@/db/schema";
 
 function safeFileName(name: string) {
@@ -56,17 +63,122 @@ export default function IdeationBoard({
   // brands kept for API compatibility (Summary jump-to expects this shape)
   brands: _brands,
   items,
+  products,
+  linkages,
   canEdit,
   onToast,
 }: {
   collection: CompetitorCollection;
   brands: Competitor[];
   items: CompetitorIdeationItem[];
+  products: IdeationProduct[];
+  linkages: IdeationItemProduct[];
   canEdit: boolean;
   onToast: (msg: string, err?: boolean) => void;
 }) {
   void _brands;
   const router = useRouter();
+
+  // ── Product filter ─────────────────────────────────────────────────────
+  // null  = "All ideas" (no product filter)
+  // -1    = "Global only" (ideas marked is_global)
+  // <id>  = filter to ideas linked to that product (or marked global, since
+  //         is_global means "applies to every product")
+  const [productFilter, setProductFilter] = useState<number | null>(null);
+
+  // Map item.id -> Set<productId>. Built once per linkage change so the
+  // filter check below is O(1) per item.
+  const linkageMap = useMemo(() => {
+    const m = new Map<number, Set<number>>();
+    for (const l of linkages) {
+      const set = m.get(l.ideationItemId) ?? new Set<number>();
+      set.add(l.productId);
+      m.set(l.ideationItemId, set);
+    }
+    return m;
+  }, [linkages]);
+
+  function itemMatchesProduct(item: CompetitorIdeationItem): boolean {
+    if (productFilter === null) return true;
+    if (productFilter === -1) return item.isGlobal === true;
+    if (item.isGlobal) return true; // global ideas show under every product pill
+    const set = linkageMap.get(item.id);
+    return set ? set.has(productFilter) : false;
+  }
+
+  // Per-product idea count (for the pill counts).
+  const productCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    let globalCount = 0;
+    for (const i of items) {
+      if (i.isGlobal) {
+        globalCount++;
+        continue;
+      }
+      const set = linkageMap.get(i.id);
+      if (!set) continue;
+      for (const pid of set) {
+        counts.set(pid, (counts.get(pid) ?? 0) + 1);
+      }
+    }
+    // Global ideas count under every product too.
+    return { perProduct: counts, globalCount };
+  }, [items, linkageMap]);
+
+  // ── Add product flow ──────────────────────────────────────────────────
+  const [productBusy, setProductBusy] = useState(false);
+  async function handleAddProduct() {
+    if (!canEdit) return;
+    const name = window.prompt(
+      "Product name (e.g. Lightcove v2, Pendant Slim, Outdoor Bollard):",
+    );
+    if (!name || !name.trim()) return;
+    setProductBusy(true);
+    try {
+      await addIdeationProduct({
+        collectionId: collection.id,
+        name: name.trim(),
+      });
+      router.refresh();
+      onToast(`Added product "${name.trim()}"`);
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Add product failed", true);
+    } finally {
+      setProductBusy(false);
+    }
+  }
+
+  async function handleRenameProduct(p: IdeationProduct) {
+    if (!canEdit) return;
+    const next = window.prompt("Rename product:", p.name);
+    if (!next || !next.trim() || next.trim() === p.name) return;
+    try {
+      await updateIdeationProduct({ id: p.id, name: next.trim() });
+      router.refresh();
+      onToast("Renamed");
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Rename failed", true);
+    }
+  }
+
+  async function handleDeleteProduct(p: IdeationProduct) {
+    if (!canEdit) return;
+    if (
+      !window.confirm(
+        `Delete product "${p.name}"? Existing ideas linked to it will lose this specific link (they aren't deleted).`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteIdeationProduct(p.id);
+      router.refresh();
+      onToast(`Deleted "${p.name}"`);
+      if (productFilter === p.id) setProductFilter(null);
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Delete failed", true);
+    }
+  }
 
   // ── Pinterest extractor ──
   const [pinterestUrl, setPinterestUrl] = useState("");
@@ -181,6 +293,7 @@ export default function IdeationBoard({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((i) => {
+      if (!itemMatchesProduct(i)) return false;
       if (activeCategories.size > 0 && !activeCategories.has(i.kind as IdeationCategoryKey)) {
         return false;
       }
@@ -190,7 +303,8 @@ export default function IdeationBoard({
       }
       return true;
     });
-  }, [items, search, activeCategories]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, search, activeCategories, productFilter, linkageMap]);
   // Counts per category — used in the chip labels.
   const categoryCounts = useMemo(() => {
     const m = new Map<string, number>();
@@ -282,6 +396,105 @@ export default function IdeationBoard({
             )}
           </p>
         </div>
+      </div>
+
+      {/* Products row — pills to filter ideas by which product they apply to.
+          "All ideas" (default) shows everything; clicking a product pill shows
+          ideas linked to that product (plus any flagged is_global). */}
+      <div
+        className="id-products-row"
+        role="tablist"
+        aria-label="Ideation products"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={productFilter === null}
+          onClick={() => setProductFilter(null)}
+          className="id-product-pill"
+          data-active={productFilter === null}
+          style={{
+            "--pill-color": "var(--accent)",
+          } as React.CSSProperties}
+        >
+          <span className="id-product-pill-dot" aria-hidden />
+          All ideas
+          <span className="id-product-pill-ct">{items.length}</span>
+        </button>
+        {products.map((p) => {
+          const active = productFilter === p.id;
+          const localCount = productCounts.perProduct.get(p.id) ?? 0;
+          const total = localCount + productCounts.globalCount;
+          return (
+            <span
+              key={p.id}
+              className="id-product-pill-wrap"
+              data-active={active}
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setProductFilter(p.id)}
+                className="id-product-pill"
+                data-active={active}
+                style={{ "--pill-color": p.color } as React.CSSProperties}
+                title={p.description ?? p.name}
+              >
+                <span className="id-product-pill-dot" aria-hidden />
+                {p.name}
+                <span className="id-product-pill-ct">{total}</span>
+              </button>
+              {canEdit && (
+                <span className="id-product-pill-acts">
+                  <button
+                    type="button"
+                    title="Rename"
+                    aria-label={`Rename ${p.name}`}
+                    onClick={() => handleRenameProduct(p)}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete"
+                    aria-label={`Delete ${p.name}`}
+                    onClick={() => handleDeleteProduct(p)}
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+            </span>
+          );
+        })}
+        {productCounts.globalCount > 0 && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={productFilter === -1}
+            onClick={() => setProductFilter(-1)}
+            className="id-product-pill"
+            data-active={productFilter === -1}
+            style={{ "--pill-color": "var(--lb-text-2)" } as React.CSSProperties}
+            title="Ideas marked as applying to every product"
+          >
+            <span className="id-product-pill-dot" aria-hidden />
+            Global only
+            <span className="id-product-pill-ct">{productCounts.globalCount}</span>
+          </button>
+        )}
+        {canEdit && (
+          <button
+            type="button"
+            className="id-product-add"
+            onClick={handleAddProduct}
+            disabled={productBusy}
+            title="Add a product you're developing"
+          >
+            {productBusy ? "Adding…" : "+ Add product"}
+          </button>
+        )}
       </div>
 
       {canEdit && (
@@ -408,6 +621,8 @@ export default function IdeationBoard({
             <IdeationCard
               key={it.id}
               item={it}
+              products={products}
+              linkedProductIds={linkageMap.get(it.id) ?? new Set()}
               onOpen={() => setOpenItemId(it.id)}
             />
           ))}
@@ -417,6 +632,8 @@ export default function IdeationBoard({
       {openItem && (
         <IdeationDetailDrawer
           item={openItem}
+          products={products}
+          linkedProductIds={Array.from(linkageMap.get(openItem.id) ?? new Set())}
           canEdit={canEdit}
           onToast={onToast}
           onClose={() => setOpenItemId(null)}
@@ -428,13 +645,23 @@ export default function IdeationBoard({
 
 function IdeationCard({
   item,
+  products,
+  linkedProductIds,
   onOpen,
 }: {
   item: CompetitorIdeationItem;
+  products: IdeationProduct[];
+  linkedProductIds: Set<number>;
   onOpen: () => void;
 }) {
   const userTags = (item.tags ?? []).filter((t) => !t.startsWith("pinterest:"));
   const cat = categoryByKey(item.kind);
+  // Resolve the product objects this card is linked to (in product display
+  // order). When item.isGlobal is true, we render a single neutral "All"
+  // pill instead of per-product dots.
+  const linkedProducts = item.isGlobal
+    ? []
+    : products.filter((p) => linkedProductIds.has(p.id));
   return (
     <button
       type="button"
@@ -458,6 +685,34 @@ function IdeationCard({
         >
           {cat.label}
         </span>
+        {/* Product chips overlay — top-right of image. Up to 3 colored dots
+            with the product name on hover; "All" pill when global. */}
+        {(item.isGlobal || linkedProducts.length > 0) && (
+          <span
+            className="id-card2-prod-badge"
+            title={
+              item.isGlobal
+                ? "Applies to all products"
+                : linkedProducts.map((p) => p.name).join(" · ")
+            }
+          >
+            {item.isGlobal ? (
+              <span className="id-card2-prod-all">All</span>
+            ) : (
+              linkedProducts.slice(0, 3).map((p) => (
+                <span
+                  key={p.id}
+                  className="id-card2-prod-dot"
+                  style={{ background: p.color }}
+                  aria-label={p.name}
+                />
+              ))
+            )}
+            {!item.isGlobal && linkedProducts.length > 3 && (
+              <span className="id-card2-prod-more">+{linkedProducts.length - 3}</span>
+            )}
+          </span>
+        )}
       </div>
       {(item.title || item.notes || userTags.length > 0) && (
         <div className="id-card2-info">

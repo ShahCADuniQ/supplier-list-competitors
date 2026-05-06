@@ -8,6 +8,8 @@ import {
   competitorProducts,
   competitorProductAttachments,
   competitorIdeationItems,
+  ideationProducts,
+  ideationItemProducts,
 } from "@/db/schema";
 import {
   getOrCreateProfile,
@@ -61,6 +63,21 @@ export default async function CompetitorsPage() {
     console.warn("competitor_ideation_items not available yet:", e);
   }
 
+  // Ideation products + linkages live in tables added by migration 0007.
+  // Same pattern: tolerate missing tables so an unmigrated DB still loads
+  // the page (board renders without product filtering).
+  let ideationProductRows: Array<typeof ideationProducts.$inferSelect> = [];
+  let ideationItemProductRows: Array<typeof ideationItemProducts.$inferSelect> = [];
+  try {
+    ideationProductRows = await db
+      .select()
+      .from(ideationProducts)
+      .orderBy(asc(ideationProducts.sortOrder), asc(ideationProducts.id));
+    ideationItemProductRows = await db.select().from(ideationItemProducts);
+  } catch (e) {
+    console.warn("ideation_products / ideation_item_products not available yet:", e);
+  }
+
   const attsByComp = new Map<number, typeof atts>();
   atts.forEach((a) => {
     const list = attsByComp.get(a.competitorId) ?? [];
@@ -91,6 +108,8 @@ export default async function CompetitorsPage() {
       collections={collections}
       brands={compsWithAtts}
       ideationItems={ideationItems}
+      ideationProducts={ideationProductRows}
+      ideationItemProducts={ideationItemProductRows}
       canEdit={canEdit(profile)}
     />
   );

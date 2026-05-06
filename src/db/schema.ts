@@ -10,6 +10,7 @@ import {
   index,
   uniqueIndex,
   pgEnum,
+  primaryKey,
   date,
   numeric,
 } from "drizzle-orm/pg-core";
@@ -377,6 +378,10 @@ export const competitorIdeationItems = pgTable(
     // Free-form tag list — e.g. "mounting", "finish", "asymmetric"
     tags: text("tags").array().notNull().default(sql`ARRAY[]::text[]`),
     sortOrder: integer("sort_order").notNull().default(0),
+    // When true, the idea applies to every "ideation product" in the
+    // collection (the products WE'RE developing). When false, the
+    // idea only applies to the products linked through ideation_item_products.
+    isGlobal: boolean("is_global").notNull().default(true),
     addedByClerkId: text("added_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -385,6 +390,48 @@ export const competitorIdeationItems = pgTable(
     collectionIdx: index("competitor_ideation_collection_idx").on(t.collectionId),
     competitorIdx: index("competitor_ideation_competitor_idx").on(t.competitorId),
     productIdx: index("competitor_ideation_product_idx").on(t.productId),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IDEATION PRODUCTS — the products the company is developing, scoped to a
+// collection. Each idea (competitorIdeationItems row) can either apply to
+// every product in the collection (is_global=true) or only to specific
+// products via the ideation_item_products junction table below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ideationProducts = pgTable(
+  "ideation_products",
+  {
+    id: serial("id").primaryKey(),
+    collectionId: integer("collection_id")
+      .notNull()
+      .references(() => competitorCollections.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    color: text("color").notNull().default("#2563ff"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    collectionIdx: index("ideation_products_collection_idx").on(t.collectionId),
+  }),
+);
+
+export const ideationItemProducts = pgTable(
+  "ideation_item_products",
+  {
+    ideationItemId: integer("ideation_item_id")
+      .notNull()
+      .references(() => competitorIdeationItems.id, { onDelete: "cascade" }),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => ideationProducts.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ideationItemId, t.productId] }),
+    productIdx: index("ideation_item_products_product_idx").on(t.productId),
   }),
 );
 
@@ -542,3 +589,6 @@ export type HandbookRevision = typeof handbookRevisions.$inferSelect;
 export type NewHandbookRevision = typeof handbookRevisions.$inferInsert;
 export type CompetitorIdeationItem = typeof competitorIdeationItems.$inferSelect;
 export type NewCompetitorIdeationItem = typeof competitorIdeationItems.$inferInsert;
+export type IdeationProduct = typeof ideationProducts.$inferSelect;
+export type NewIdeationProduct = typeof ideationProducts.$inferInsert;
+export type IdeationItemProduct = typeof ideationItemProducts.$inferSelect;

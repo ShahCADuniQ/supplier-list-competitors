@@ -10,11 +10,17 @@ import {
   updateIdeationItem,
   deleteIdeationItem,
 } from "./ideation-actions";
+import { setIdeationItemProducts } from "./ideation-product-actions";
 import { IDEATION_CATEGORIES } from "./IdeationBoard";
-import type { CompetitorIdeationItem } from "@/db/schema";
+import type {
+  CompetitorIdeationItem,
+  IdeationProduct,
+} from "@/db/schema";
 
 type Props = {
   item: CompetitorIdeationItem;
+  products: IdeationProduct[];
+  linkedProductIds: number[];
   canEdit: boolean;
   onToast: (msg: string, err?: boolean) => void;
   onClose: () => void;
@@ -36,6 +42,8 @@ function userFacingTags(tags: string[] | null | undefined): string[] {
 
 export default function IdeationDetailDrawer({
   item,
+  products,
+  linkedProductIds,
   canEdit,
   onToast,
   onClose,
@@ -49,7 +57,54 @@ export default function IdeationDetailDrawer({
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>(userFacingTags(item.tags));
   const [kind, setKind] = useState<string>(item.kind);
+  // Product linkage state — independent from item title/notes save flow.
+  // When isGlobal is true, every product checkbox is ignored.
+  const [isGlobal, setIsGlobal] = useState<boolean>(item.isGlobal ?? true);
+  const [selectedProducts, setSelectedProducts] = useState<Set<number>>(
+    () => new Set(linkedProductIds),
+  );
+  const [productsBusy, setProductsBusy] = useState(false);
   const sourceUrl = extractSourceUrl(item.tags);
+
+  function toggleProduct(id: number) {
+    setSelectedProducts((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function saveProductLinkage() {
+    if (!canEdit) return;
+    setProductsBusy(true);
+    try {
+      await setIdeationItemProducts({
+        itemId: item.id,
+        isGlobal,
+        productIds: isGlobal ? [] : Array.from(selectedProducts),
+      });
+      router.refresh();
+      onToast(
+        isGlobal
+          ? "Linked to all products"
+          : selectedProducts.size === 0
+            ? "Cleared product links"
+            : `Linked to ${selectedProducts.size} product${selectedProducts.size === 1 ? "" : "s"}`,
+      );
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Update failed", true);
+    } finally {
+      setProductsBusy(false);
+    }
+  }
+
+  // Compare current state to what's persisted — Save Products button gets
+  // disabled until something actually changes.
+  const linkageDirty =
+    isGlobal !== (item.isGlobal ?? true) ||
+    Array.from(selectedProducts).sort().join(",") !==
+      [...linkedProductIds].sort().join(",");
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setEntered(true));
@@ -221,6 +276,79 @@ export default function IdeationDetailDrawer({
             ) : (
               <div className="id-drawer-cat-readonly">
                 {IDEATION_CATEGORIES.find((c) => c.key === kind)?.label ?? kind}
+              </div>
+            )}
+          </section>
+
+          <section className="pd-section">
+            <h3 className="pd-section-h">
+              Products
+              {canEdit && (
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  style={{ marginLeft: "auto" }}
+                  onClick={saveProductLinkage}
+                  disabled={productsBusy || !linkageDirty}
+                >
+                  {productsBusy ? "Saving…" : "Save products"}
+                </button>
+              )}
+            </h3>
+            {/* Apply-to-all toggle */}
+            <label className="id-drawer-global-toggle">
+              <input
+                type="checkbox"
+                checked={isGlobal}
+                onChange={(e) => setIsGlobal(e.target.checked)}
+                disabled={!canEdit || productsBusy}
+              />
+              <span>
+                <strong>Apply to all products</strong>
+                <span className="id-drawer-global-hint">
+                  {" "}
+                  — this idea shows up under every product pill.
+                </span>
+              </span>
+            </label>
+            {/* Per-product checkboxes */}
+            {!isGlobal && (
+              <div className="id-drawer-products">
+                {products.length === 0 ? (
+                  <p className="pd-spec-empty" style={{ margin: "8px 0 0" }}>
+                    No products in this collection yet — add one from the
+                    Ideation board.
+                  </p>
+                ) : (
+                  products.map((p) => {
+                    const checked = selectedProducts.has(p.id);
+                    return (
+                      <label
+                        key={p.id}
+                        className="id-drawer-product-row"
+                        data-checked={checked}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleProduct(p.id)}
+                          disabled={!canEdit || productsBusy}
+                        />
+                        <span
+                          className="id-drawer-product-dot"
+                          style={{ background: p.color }}
+                          aria-hidden
+                        />
+                        <span className="id-drawer-product-name">{p.name}</span>
+                        {p.description && (
+                          <span className="id-drawer-product-desc">
+                            {p.description}
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })
+                )}
               </div>
             )}
           </section>
