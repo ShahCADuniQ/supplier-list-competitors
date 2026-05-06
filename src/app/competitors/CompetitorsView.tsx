@@ -2108,30 +2108,29 @@ const COMPETITOR_CSS = `
 .cm-app .id-product-pill[data-active="true"] .id-product-pill-ct{
   background:rgba(255,255,255,0.22);color:#fff;
 }
-/* Edit / delete buttons: hidden by default, fade in on wrap hover or
-   when the matching pill is active. They sit *next to* the pill — same
-   row, gap-spaced — never on top of it. */
+/* Edit / delete buttons: always visible so the row doesn't shift width
+   on hover. Subtle by default (low-contrast border + muted icon),
+   sharpen up on direct button hover. They sit to the right of the pill
+   in the same flex row, separated by the wrap's gap. */
 .cm-app .id-product-pill-acts{
   display:inline-flex;align-items:center;gap:2px;
-  opacity:0;pointer-events:none;
-  transition:opacity 160ms ease;
-}
-.cm-app .id-product-pill-wrap:hover .id-product-pill-acts,
-.cm-app .id-product-pill-wrap:focus-within .id-product-pill-acts,
-.cm-app .id-product-pill-wrap[data-active="true"] .id-product-pill-acts{
-  opacity:1;pointer-events:auto;
 }
 .cm-app .id-product-pill-acts button{
-  width:28px;height:28px;
+  width:24px;height:24px;
   display:inline-flex;align-items:center;justify-content:center;
-  background:var(--surface-2);border:1px solid var(--border);
-  color:var(--text-2);
-  font-size:11px;line-height:1;font-family:inherit;
-  border-radius:9999px;cursor:pointer;
+  background:transparent;border:1px solid var(--border);
+  color:var(--text-3);
+  font-size:10.5px;line-height:1;font-family:inherit;
+  border-radius:9999px;cursor:pointer;flex-shrink:0;
   transition:background 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 .cm-app .id-product-pill-acts button:hover{
-  background:var(--surface);border-color:var(--border-strong);color:var(--text);
+  background:var(--surface-2);border-color:var(--border-strong);color:var(--text);
+}
+.cm-app .id-product-pill-acts button[title="Delete"]:hover{
+  border-color:color-mix(in srgb, var(--lb-danger) 40%, transparent);
+  color:var(--lb-danger);
+  background:color-mix(in srgb, var(--lb-danger) 10%, transparent);
 }
 .cm-app .id-product-add{
   display:inline-flex;align-items:center;gap:4px;
