@@ -1,7 +1,7 @@
 # Frontend Redesign — Industrial / Operational Aesthetic via Google Stitch
 
 **Date:** 2026-05-05
-**Status:** Draft for review
+**Status:** Phase 0 + Phase 1 complete (Stitch system + tokens + shell). Phases 2-4 in follow-up plans.
 **Approach:** Stitch-led page-by-page rebuild (Approach 2)
 
 ## Goal
