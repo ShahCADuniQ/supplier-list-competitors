@@ -45,20 +45,28 @@ export default async function Home() {
   if (!hasAnyAccess) return <AwaitingAccess />;
 
   // Fetch only what the user is allowed to see; everything in parallel.
+  // Each query is wrapped in safeQuery so that an unmigrated DB (missing
+  // column / missing table) degrades the dashboard gracefully instead of
+  // crashing the whole page. Common with the new is_global column on
+  // competitor_ideation_items added in migration 0007.
   const [supRows, peRows, compRows, ideationRows, collectionRows] =
     await Promise.all([
-      sup ? db.select().from(suppliers) : Promise.resolve([]),
-      sup ? db.select().from(supplierProjectEntries) : Promise.resolve([]),
-      comp ? db.select().from(competitors) : Promise.resolve([]),
+      sup ? safeQuery(() => db.select().from(suppliers)) : Promise.resolve([]),
+      sup
+        ? safeQuery(() => db.select().from(supplierProjectEntries))
+        : Promise.resolve([]),
+      comp ? safeQuery(() => db.select().from(competitors)) : Promise.resolve([]),
       comp
-        ? db
-            .select()
-            .from(competitorIdeationItems)
-            .orderBy(desc(competitorIdeationItems.id))
-            .limit(8)
+        ? safeQuery(() =>
+            db
+              .select()
+              .from(competitorIdeationItems)
+              .orderBy(desc(competitorIdeationItems.id))
+              .limit(8),
+          )
         : Promise.resolve([]),
       comp
-        ? db.select().from(competitorCollections).limit(50)
+        ? safeQuery(() => db.select().from(competitorCollections).limit(50))
         : Promise.resolve([]),
     ]);
 
@@ -902,4 +910,16 @@ function CompanyFootnote() {
       Lightbase Inc. · Montreal, QC · Design Meets Engineering
     </div>
   );
+}
+
+// Run a Drizzle query, fall back to an empty array on any failure. Logs the
+// error so we can spot unmigrated tables / missing columns in dev. The
+// dashboard treats absent data as an empty section rather than a 500.
+async function safeQuery<T>(fn: () => Promise<T[]>): Promise<T[]> {
+  try {
+    return await fn();
+  } catch (e) {
+    console.warn("[home] query failed, returning []:", e);
+    return [];
+  }
 }
