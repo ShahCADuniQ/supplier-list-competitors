@@ -24,7 +24,11 @@ export default function ThemeToggle() {
   const [choice, setChoice] = useState<ThemeChoice>("system");
 
   useEffect(() => {
+    // One-shot read of persisted theme after mount. Initial paint already
+    // applied the correct theme via NO_FOUC_SCRIPT in <head>, so this only
+    // syncs React state with what the inline script already did.
     const stored = readStoredTheme();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setChoice(stored);
     applyTheme(stored);
   }, []);

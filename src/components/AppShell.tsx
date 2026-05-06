@@ -30,7 +30,11 @@ export default function AppShell({
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
+    // One-shot read of persisted UI preference after mount. Reading during
+    // render or via useState initializer would touch localStorage on the
+    // server, and useSyncExternalStore is overkill for a single read.
     const v = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (v === "1") setCollapsed(true);
   }, []);
 
