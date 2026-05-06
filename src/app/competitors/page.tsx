@@ -93,7 +93,12 @@ export default async function CompetitorsPage() {
           asc(competitorIdeationItems.sortOrder),
           asc(competitorIdeationItems.id),
         );
-      ideationItems = rows.map((r) => ({ ...r, isGlobal: true }));
+      ideationItems = rows.map((r) => ({
+        ...r,
+        isGlobal: true,
+        extraImageUrls: [],
+        extraBlobPathnames: [],
+      }));
     } catch (e2) {
       console.warn("competitor_ideation_items not available yet:", e2);
     }

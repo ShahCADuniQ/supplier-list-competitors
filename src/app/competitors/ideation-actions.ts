@@ -119,6 +119,100 @@ export async function updateIdeationItem(input: IdeationItemUpdate) {
   revalidatePath("/competitors");
 }
 
+/**
+ * Append a new image URL (and optional blob pathname) to an ideation
+ * item's extra-images array. The primary `imageUrl` stays untouched —
+ * extras are additional images shown alongside the cover in the drawer
+ * carousel.
+ */
+export async function addIdeationItemExtraImage(input: {
+  itemId: number;
+  url: string;
+  blobPathname?: string | null;
+}) {
+  await requireCompetitorEditor();
+  const url = cleanString(input.url);
+  if (!url) throw new Error("Image URL is required");
+  const blobPathname = cleanString(input.blobPathname);
+  // Read current arrays, append, write back. SQL array-append would be
+  // marginally cheaper but Drizzle's typed update keeps the column
+  // shape obvious.
+  const [row] = await db
+    .select({
+      extraImageUrls: competitorIdeationItems.extraImageUrls,
+      extraBlobPathnames: competitorIdeationItems.extraBlobPathnames,
+    })
+    .from(competitorIdeationItems)
+    .where(eq(competitorIdeationItems.id, input.itemId))
+    .limit(1);
+  if (!row) throw new Error("Ideation item not found");
+  const nextUrls = [...(row.extraImageUrls ?? []), url];
+  const nextPathnames = [...(row.extraBlobPathnames ?? []), blobPathname ?? ""];
+  await db
+    .update(competitorIdeationItems)
+    .set({
+      extraImageUrls: nextUrls,
+      extraBlobPathnames: nextPathnames,
+      updatedAt: new Date(),
+    })
+    .where(eq(competitorIdeationItems.id, input.itemId));
+  revalidatePath("/competitors");
+}
+
+/**
+ * Remove the image at the given index from an ideation item's
+ * extra-images array. The primary cover image (imageUrl) is never
+ * touched by this action — drop the whole card if you need to remove
+ * the cover.
+ */
+export async function removeIdeationItemExtraImage(input: {
+  itemId: number;
+  index: number;
+}) {
+  await requireCompetitorEditor();
+  const [row] = await db
+    .select({
+      extraImageUrls: competitorIdeationItems.extraImageUrls,
+      extraBlobPathnames: competitorIdeationItems.extraBlobPathnames,
+    })
+    .from(competitorIdeationItems)
+    .where(eq(competitorIdeationItems.id, input.itemId))
+    .limit(1);
+  if (!row) throw new Error("Ideation item not found");
+  const urls = row.extraImageUrls ?? [];
+  const pathnames = row.extraBlobPathnames ?? [];
+  if (input.index < 0 || input.index >= urls.length) {
+    throw new Error("Image index out of range");
+  }
+  // If we own the blob, drop it from storage so we don't leak.
+  const droppedPathname = pathnames[input.index];
+  const droppedUrl = urls[input.index];
+  if (droppedPathname) {
+    try {
+      await del(droppedUrl);
+    } catch (e) {
+      console.warn("[removeIdeationItemExtraImage] blob removal failed:", e);
+    }
+  }
+  const nextUrls = [
+    ...urls.slice(0, input.index),
+    ...urls.slice(input.index + 1),
+  ];
+  const nextPathnames = [
+    ...pathnames.slice(0, input.index),
+    ...pathnames.slice(input.index + 1),
+  ];
+  await db
+    .update(competitorIdeationItems)
+    .set({
+      extraImageUrls: nextUrls,
+      extraBlobPathnames: nextPathnames,
+      updatedAt: new Date(),
+    })
+    .where(eq(competitorIdeationItems.id, input.itemId));
+  revalidatePath("/competitors");
+}
+
 export async function deleteIdeationItem(id: number) {
   await requireCompetitorEditor();
   const [row] = await db
@@ -131,6 +225,18 @@ export async function deleteIdeationItem(id: number) {
       await del(row.imageUrl);
     } catch (e) {
       console.error("Failed to remove ideation blob", row.blobPathname, e);
+    }
+  }
+  // Drop any extra images we own (Pinterest URLs lack a blob pathname,
+  // we just leave those — Pinterest hosts them).
+  const extraUrls = row?.extraImageUrls ?? [];
+  const extraPathnames = row?.extraBlobPathnames ?? [];
+  for (let i = 0; i < extraUrls.length; i++) {
+    if (!extraPathnames[i]) continue;
+    try {
+      await del(extraUrls[i]);
+    } catch (e) {
+      console.warn("Failed to remove extra ideation blob", extraPathnames[i], e);
     }
   }
   await db.delete(competitorIdeationItems).where(eq(competitorIdeationItems.id, id));

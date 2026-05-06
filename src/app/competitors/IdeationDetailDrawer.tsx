@@ -6,9 +6,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { upload } from "@vercel/blob/client";
 import {
   updateIdeationItem,
   deleteIdeationItem,
+  addIdeationItemExtraImage,
+  removeIdeationItemExtraImage,
 } from "./ideation-actions";
 import { setIdeationItemProducts } from "./ideation-product-actions";
 import { IDEATION_CATEGORIES } from "./IdeationBoard";
@@ -64,6 +67,87 @@ export default function IdeationDetailDrawer({
     () => new Set(linkedProductIds),
   );
   const sourceUrl = extractSourceUrl(item.tags);
+
+  // ── Image carousel ────────────────────────────────────────────────────
+  // Images = [cover, ...extras]. The cover (item.imageUrl) is index 0
+  // and can't be deleted from the carousel — extras can. New uploads
+  // append to the extras array via addIdeationItemExtraImage.
+  const allImages = [item.imageUrl, ...(item.extraImageUrls ?? [])];
+  const [imageIndex, setImageIndex] = useState(0);
+  const [imageBusy, setImageBusy] = useState(false);
+  const safeIndex = Math.min(imageIndex, allImages.length - 1);
+  const currentImage = allImages[safeIndex] ?? item.imageUrl;
+  const isCover = safeIndex === 0;
+
+  function safeFileName(name: string) {
+    return (
+      name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "file"
+    );
+  }
+
+  async function handleAddImage(files: FileList | File[]) {
+    if (!canEdit) return;
+    setImageBusy(true);
+    try {
+      let added = 0;
+      for (const f of Array.from(files)) {
+        if (!f.type.startsWith("image/")) {
+          onToast(`${f.name} is not an image`, true);
+          continue;
+        }
+        const pathname = `competitors/ideation/${item.collectionId}/${item.id}/extras/${crypto.randomUUID()}/${safeFileName(f.name)}`;
+        const blob = await upload(pathname, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: f.type || undefined,
+        });
+        await addIdeationItemExtraImage({
+          itemId: item.id,
+          url: blob.url,
+          blobPathname: blob.pathname,
+        });
+        added++;
+      }
+      if (added > 0) {
+        router.refresh();
+        onToast(`Added ${added} image${added === 1 ? "" : "s"}`);
+        // Jump to the last appended image so the user sees it immediately.
+        setImageIndex(allImages.length + added - 1);
+      }
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Upload failed", true);
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function handleRemoveCurrentImage() {
+    if (!canEdit || isCover || imageBusy) return;
+    if (!confirm("Remove this image from the card?")) return;
+    setImageBusy(true);
+    try {
+      // Cover is index 0, extras start at index 1 → 0 in the extras array.
+      await removeIdeationItemExtraImage({
+        itemId: item.id,
+        index: safeIndex - 1,
+      });
+      router.refresh();
+      onToast("Image removed");
+      // Step back so we don't end up past the new array length.
+      setImageIndex((i) => Math.max(0, i - 1));
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Remove failed", true);
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  function showPrev() {
+    setImageIndex((i) => (i - 1 + allImages.length) % allImages.length);
+  }
+  function showNext() {
+    setImageIndex((i) => (i + 1) % allImages.length);
+  }
 
   // Local state mutates immediately for visual feedback. Persistence
   // happens on the single Save button at the top of the drawer (handleSave
@@ -135,25 +219,27 @@ export default function IdeationDetailDrawer({
       const internal = (item.tags ?? []).filter((t) =>
         t.startsWith("pinterest:"),
       );
-      // Persist item-level fields + product linkage in parallel. Either
-      // can throw individually; we surface whichever message arrives.
-      await Promise.all([
-        updateIdeationItem({
-          id: item.id,
-          title: title.trim() || null,
-          notes: notes.trim() || null,
-          kind,
-          tags: [...internal, ...tags],
-        }),
-        setIdeationItemProducts({
-          itemId: item.id,
-          isGlobal,
-          productIds: isGlobal ? [] : Array.from(selectedProducts),
-        }),
-      ]);
+      // Sequential, not Promise.all: both actions write to
+      // competitor_ideation_items and parallel writes against the same
+      // row from the same Drizzle/neon-serverless connection were the
+      // source of intermittent "another error" toasts. Doing one then
+      // the other avoids the race entirely.
+      await updateIdeationItem({
+        id: item.id,
+        title: title.trim() || null,
+        notes: notes.trim() || null,
+        kind,
+        tags: [...internal, ...tags],
+      });
+      await setIdeationItemProducts({
+        itemId: item.id,
+        isGlobal,
+        productIds: isGlobal ? [] : Array.from(selectedProducts),
+      });
       router.refresh();
       onToast("Saved");
     } catch (e) {
+      console.error("[IdeationDetailDrawer] save failed:", e);
       onToast(e instanceof Error ? e.message : "Save failed", true);
     } finally {
       setSaving(false);
@@ -246,16 +332,148 @@ export default function IdeationDetailDrawer({
         </header>
 
         <div className="pd-body">
-          <section className="pd-section id-drawer-image">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={item.imageUrl}
-              alt={item.title ?? ""}
-              loading="eager"
-              onError={(e) => {
-                (e.currentTarget.style.opacity = "0.2");
-              }}
-            />
+          <section className="pd-section">
+            <div className="id-drawer-image" style={{ position: "relative" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                key={currentImage}
+                src={currentImage}
+                alt={item.title ?? ""}
+                loading="eager"
+                onError={(e) => {
+                  (e.currentTarget.style.opacity = "0.2");
+                }}
+              />
+              {allImages.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={showPrev}
+                    aria-label="Previous image"
+                    title="Previous"
+                    style={{
+                      position: "absolute",
+                      top: "50%",
+                      left: 12,
+                      transform: "translateY(-50%)",
+                      width: 40,
+                      height: 40,
+                      borderRadius: 9999,
+                      background: "rgba(15,23,42,0.7)",
+                      border: "1px solid rgba(255,255,255,0.24)",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontSize: 18,
+                      lineHeight: 1,
+                      padding: 0,
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={showNext}
+                    aria-label="Next image"
+                    title="Next"
+                    style={{
+                      position: "absolute",
+                      top: "50%",
+                      right: 12,
+                      transform: "translateY(-50%)",
+                      width: 40,
+                      height: 40,
+                      borderRadius: 9999,
+                      background: "rgba(15,23,42,0.7)",
+                      border: "1px solid rgba(255,255,255,0.24)",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontSize: 18,
+                      lineHeight: 1,
+                      padding: 0,
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    ›
+                  </button>
+                  <span
+                    style={{
+                      position: "absolute",
+                      bottom: 12,
+                      left: "50%",
+                      transform: "translateX(-50%)",
+                      padding: "4px 10px",
+                      borderRadius: 9999,
+                      background: "rgba(15,23,42,0.78)",
+                      color: "#fff",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    {safeIndex + 1} / {allImages.length}
+                    {isCover && (
+                      <span style={{ opacity: 0.7, marginLeft: 6 }}>· cover</span>
+                    )}
+                  </span>
+                </>
+              )}
+            </div>
+            {canEdit && (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  marginTop: 10,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                }}
+              >
+                <label
+                  className="btn primary sm"
+                  style={{
+                    cursor: imageBusy ? "not-allowed" : "pointer",
+                    opacity: imageBusy ? 0.6 : 1,
+                  }}
+                  title="Upload one or more images to this card"
+                >
+                  {imageBusy ? "Uploading…" : "+ Add picture"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    style={{ display: "none" }}
+                    disabled={imageBusy}
+                    onChange={(e) => {
+                      if (e.target.files?.length) handleAddImage(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {!isCover && (
+                  <button
+                    type="button"
+                    className="btn sm pd-danger"
+                    onClick={handleRemoveCurrentImage}
+                    disabled={imageBusy}
+                    title="Remove this image (cover image cannot be removed)"
+                  >
+                    🗑 Remove this image
+                  </button>
+                )}
+                {isCover && allImages.length > 1 && (
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: "var(--text-2)",
+                    }}
+                  >
+                    The cover image can&apos;t be removed individually — delete
+                    the whole card to remove it.
+                  </span>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="pd-section">

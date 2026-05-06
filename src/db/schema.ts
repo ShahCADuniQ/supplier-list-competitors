@@ -382,6 +382,18 @@ export const competitorIdeationItems = pgTable(
     // collection (the products WE'RE developing). When false, the
     // idea only applies to the products linked through ideation_item_products.
     isGlobal: boolean("is_global").notNull().default(true),
+    // Additional images beyond the primary `imageUrl`. The drawer shows
+    // the cover first, then these in order, with prev/next navigation
+    // and per-image delete. Blob pathnames track the matching ones in
+    // Vercel Blob so we can clean storage when an image is removed.
+    extraImageUrls: text("extra_image_urls")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
+    extraBlobPathnames: text("extra_blob_pathnames")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
     addedByClerkId: text("added_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
