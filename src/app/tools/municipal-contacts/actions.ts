@@ -427,6 +427,13 @@ export async function generateMunicipalContacts(
   // Claude normalizes + categorizes (or keyword fallback if Claude is down).
   const categorized = await categorizeWithClaude(rawContacts);
 
+  // Verify every sourceUrl + website actually resolves. Perplexity sometimes
+  // hallucinates plausible-sounding URLs that 404. We HEAD-check each in
+  // parallel; for any that fails, swap in the closest Perplexity citation
+  // that mentions the same municipality (or null out the field) so the user
+  // never clicks through to a dead page.
+  const verified = await verifyContactUrls(categorized, citations);
+
   // Insert search row + contacts (single transaction-ish flow: parent first,
   // then bulk insert children).
   const [searchRow] = await db
@@ -444,9 +451,9 @@ export async function generateMunicipalContacts(
     })
     .returning();
 
-  if (categorized.length > 0) {
+  if (verified.length > 0) {
     await db.insert(municipalityContacts).values(
-      categorized.map((c) => ({
+      verified.map((c) => ({
         searchId: searchRow.id,
         municipalityName: c.municipalityName?.trim() || "Unknown",
         municipalityType: nullIfEmpty(c.municipalityType),
@@ -468,9 +475,181 @@ export async function generateMunicipalContacts(
   revalidatePath("/tools/municipal-contacts");
   return {
     searchId: searchRow.id,
-    contactCount: categorized.length,
+    contactCount: verified.length,
     citations,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// URL VERIFICATION
+//
+// Perplexity returns plausible URLs that don't always exist. HEAD-check each
+// sourceUrl + website in parallel; on failure, try to substitute a citation
+// the model actually visited that mentions the same municipality. As a last
+// resort, null the field — better than linking to a 404.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const URL_VERIFY_TIMEOUT_MS = 8_000;
+const URL_VERIFY_CONCURRENCY = 8;
+const VERIFY_BROWSER_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
+  "(KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+
+async function verifyContactUrls(
+  contacts: CategorizedContact[],
+  citations: string[],
+): Promise<CategorizedContact[]> {
+  // Collect every distinct URL across sourceUrl + website. Verifying once per
+  // URL — many contacts share a municipality website.
+  const urls = new Set<string>();
+  for (const c of contacts) {
+    if (c.sourceUrl) urls.add(c.sourceUrl);
+    if (c.website) urls.add(c.website);
+  }
+  for (const u of citations) urls.add(u);
+
+  const status = new Map<string, boolean>(); // url → ok
+  const queue = [...urls];
+  async function worker() {
+    while (queue.length) {
+      const u = queue.shift();
+      if (!u) return;
+      status.set(u, await checkUrl(u));
+    }
+  }
+  await Promise.all(
+    Array.from({ length: URL_VERIFY_CONCURRENCY }, () => worker()),
+  );
+
+  let fixed = 0;
+  let droppedSource = 0;
+  let droppedWebsite = 0;
+  const out = contacts.map((c) => {
+    let sourceUrl = c.sourceUrl?.trim() || "";
+    let website = c.website?.trim() || "";
+
+    if (sourceUrl && !status.get(sourceUrl)) {
+      const replacement = bestCitationFor(c.municipalityName, citations, status);
+      if (replacement) {
+        sourceUrl = replacement;
+        fixed++;
+      } else {
+        sourceUrl = "";
+        droppedSource++;
+      }
+    }
+    if (website && !status.get(website)) {
+      // Try to keep a domain-level fallback (https://<host>/) if the host
+      // appears in any citation that resolved.
+      const fallback = bestCitationDomainFor(website, citations, status);
+      if (fallback) {
+        website = fallback;
+      } else {
+        website = "";
+        droppedWebsite++;
+      }
+    }
+
+    return { ...c, sourceUrl, website };
+  });
+
+  console.log(
+    `[municipal-contacts] verify: checked ${urls.size} URL(s) · ` +
+      `replaced ${fixed} sourceUrl(s) · ` +
+      `dropped ${droppedSource} sourceUrl(s) and ${droppedWebsite} website(s) that 404'd`,
+  );
+  return out;
+}
+
+async function checkUrl(url: string): Promise<boolean> {
+  if (!/^https?:\/\//i.test(url)) return false;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), URL_VERIFY_TIMEOUT_MS);
+  try {
+    // Verify with realistic browser headers; many municipal CMSes (Drupal,
+    // SiteCore) sit behind WAFs that 403 a bare HEAD request even when the
+    // page is real and reachable from a browser. We only treat the URL as
+    // broken when we get a definitive 404 / 410 / 5xx — anything else is
+    // assumed reachable so we don't strip URLs out of the user's results
+    // just because we hit a bot wall.
+    const headers = {
+      "User-Agent": VERIFY_BROWSER_UA,
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-CA,en;q=0.9,fr-CA;q=0.8,fr;q=0.7",
+    };
+    // GET (not HEAD) — many sites HEAD-block but answer GET.
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers,
+    }).catch(() => null);
+    if (!res) return false; // network failure — treat as broken
+    // 2xx / 3xx → fine. 401/403 → bot wall, page likely real, keep it.
+    if (res.status < 400) return true;
+    if (res.status === 401 || res.status === 403) return true;
+    return false; // 404 / 410 / 5xx etc.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Score citations by host-similarity to the municipality name + domain
+ *  signal (gov.qc.ca, ville.<x>, town.<x>). Best-scoring resolved citation
+ *  wins. Returns null if nothing resolves or matches. */
+function bestCitationFor(
+  municipalityName: string,
+  citations: string[],
+  status: Map<string, boolean>,
+): string | null {
+  const name = (municipalityName || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const tokens = name.split(/\s+/).filter((t) => t.length >= 4);
+  let best: { url: string; score: number } | null = null;
+  for (const u of citations) {
+    if (!status.get(u)) continue; // only consider URLs that actually resolved
+    const lower = u.toLowerCase();
+    let score = 0;
+    for (const t of tokens) if (lower.includes(t)) score += 2;
+    if (/\.(qc|on|bc|ab|mb|sk|ns|nb|nl|pe|yt|nt|nu)\.ca\b/i.test(lower)) score += 1;
+    if (/\b(ville|town|city|village|municipalit[eé])\b/i.test(lower)) score += 1;
+    if (score === 0) continue;
+    if (!best || score > best.score) best = { url: u, score };
+  }
+  return best?.url ?? null;
+}
+
+/** When a website 404s, try the same host's homepage (or any citation on the
+ *  same host that resolved) as a fallback. */
+function bestCitationDomainFor(
+  brokenWebsite: string,
+  citations: string[],
+  status: Map<string, boolean>,
+): string | null {
+  let host: string;
+  try {
+    host = new URL(brokenWebsite).host;
+  } catch {
+    return null;
+  }
+  // Same-host root.
+  const root = `https://${host}/`;
+  if (status.get(root)) return root;
+  // Any resolved citation on the same host.
+  for (const u of citations) {
+    if (!status.get(u)) continue;
+    try {
+      if (new URL(u).host === host) return u;
+    } catch {
+      // skip malformed
+    }
+  }
+  return null;
 }
 
 export async function deleteMunicipalitySearch(searchId: number): Promise<void> {
@@ -575,8 +754,8 @@ For each contact, return:
   - email: official department or person email. Empty string if unlisted.
   - phone: main phone with extension if applicable. Empty string if unlisted.
   - address: city hall / department mailing address. Empty string if not on the source page.
-  - website: the municipality's website (homepage URL).
-  - sourceUrl: the exact page where you found this contact.
+  - website: the municipality's website HOMEPAGE URL (not a deep link). Verify the host actually exists by checking your citations list.
+  - sourceUrl: MUST be a URL you actually visited and that appears in your citations. Do NOT invent or guess paths — if the page you read at city hall doesn't have a stable URL, fall back to the staff-directory landing page from your citations. Better to give the citation root than invent a deep path that 404s.
   - notes: any extra context (e.g. "interim director", "shared phone with planning").
 
 CRITICAL rules:
