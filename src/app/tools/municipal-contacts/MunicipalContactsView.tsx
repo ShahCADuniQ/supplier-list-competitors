@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type {
   MunicipalitySearch,
@@ -14,6 +14,8 @@ import {
   COUNT_OPTIONS,
   COUNT_MIN,
   COUNT_MAX,
+  PER_BATCH,
+  MAX_EMPTY_STREAK,
   categoryLabel,
   sectorLabel,
 } from "./constants";
@@ -50,6 +52,18 @@ export default function MunicipalContactsView({
   // ── Generation state ──
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ msg: string; err?: boolean } | null>(null);
+
+  // Live progress for the batch loop. `target` is what the user asked for;
+  // `added` is how many genuinely-new contacts have come back so far in
+  // this run; `lastBatch` is the most recent batch's count for the "+ N
+  // added" pulse; `cancelRequested` toggles when the user clicks Cancel.
+  const [progress, setProgress] = useState<{
+    target: number;
+    added: number;
+    lastBatch: number;
+    activeBatch: number; // sequence number, 1, 2, ...
+  } | null>(null);
+  const cancelRef = useRef(false);
 
   // Active search the user is viewing (defaults to the most recent).
   const [activeSearchId, setActiveSearchId] = useState<number | null>(
@@ -108,40 +122,109 @@ export default function MunicipalContactsView({
     );
   }
 
+  /**
+   * Generation runs as a client-side batch loop. Each iteration asks the
+   * server action for at most PER_BATCH contacts so a single Vercel
+   * function call stays well within the serverless timeout. The action
+   * already excludes municipalities the DB knows about, so each batch
+   * targets unsearched towns.
+   *
+   * The loop stops on any of:
+   *   • added >= target (user got what they asked for)
+   *   • two consecutive empty batches (Perplexity exhausted for this scope)
+   *   • the user clicks Cancel
+   *   • a batch returns ok:false (e.g. timeout, missing key)
+   *
+   * Each batch refreshes the page after insert so new contacts appear in
+   * the grid as they come in.
+   */
   async function handleGenerate() {
     if (!canEdit) {
       showToast("You don't have permission to generate.", true);
       return;
     }
+    cancelRef.current = false;
     setBusy(true);
-    showToast(`Researching ${count} contacts in ${province}…`);
-    try {
-      const r = await generateMunicipalContacts({
-        province,
-        scopeTypes,
-        sectors,
-        cityFilter: cityFilter.trim() || null,
-        count,
-        title: title.trim() || null,
-      });
-      // The action returns the error as data so we get the real message
-      // (Next sanitizes thrown errors in production).
+    setProgress({ target: count, added: 0, lastBatch: 0, activeBatch: 0 });
+    showToast(`Researching up to ${count} contact${count === 1 ? "" : "s"} in ${province}…`);
+
+    let added = 0;
+    let emptyStreak = 0;
+    let batchNum = 0;
+    let lastSearchId: number | null = null;
+
+    while (added < count) {
+      if (cancelRef.current) {
+        showToast(`Cancelled — ${added} new contact${added === 1 ? "" : "s"} added`);
+        break;
+      }
+      batchNum++;
+      const remaining = count - added;
+      const batchCount = Math.min(PER_BATCH, remaining);
+      setProgress((p) => p && { ...p, activeBatch: batchNum });
+
+      let r;
+      try {
+        r = await generateMunicipalContacts({
+          province,
+          scopeTypes,
+          sectors,
+          cityFilter: cityFilter.trim() || null,
+          count: batchCount,
+          title: batchNum === 1 ? title.trim() || null : null,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Generation failed";
+        showToast(msg, true);
+        break;
+      }
+
       if (!r.ok) {
         const msg = r.error || "Generation failed";
         console.error("[municipal-contacts] action error:", msg, r.stack);
         showToast(msg, true);
-        return;
+        break;
       }
-      showToast(`Generated ${r.contactCount} contact${r.contactCount === 1 ? "" : "s"}`);
-      setActiveSearchId(r.searchId);
-      setCategoryFilter(null);
+
+      added += r.contactCount;
+      lastSearchId = r.searchId;
+      setProgress((p) =>
+        p && {
+          ...p,
+          added,
+          lastBatch: r.contactCount,
+        },
+      );
       router.refresh();
-    } catch (e) {
-      // Should be rare now — only client-side / network errors land here.
-      showToast(e instanceof Error ? e.message : "Generation failed", true);
-    } finally {
-      setBusy(false);
+
+      if (r.contactCount === 0) {
+        emptyStreak++;
+        if (emptyStreak >= MAX_EMPTY_STREAK) {
+          showToast(
+            `Stopped — Perplexity has no more new contacts for this scope (added ${added})`,
+          );
+          break;
+        }
+      } else {
+        emptyStreak = 0;
+      }
     }
+
+    if (added >= count) {
+      showToast(`✓ Done — added ${added} new contact${added === 1 ? "" : "s"}`);
+    }
+
+    if (lastSearchId) {
+      setActiveSearchId(lastSearchId);
+      setCategoryFilter(null);
+    }
+    setProgress(null);
+    setBusy(false);
+  }
+
+  function handleCancel() {
+    cancelRef.current = true;
+    showToast("Cancel requested — finishing current batch…");
   }
 
   async function handleDeleteSearch(id: number) {
@@ -509,6 +592,42 @@ export default function MunicipalContactsView({
           </button>
         </div>
       </section>
+
+      {/* Live progress banner while a batch loop is running */}
+      {progress && (
+        <div className="mc-progress" role="status" aria-live="polite">
+          <div className="mc-progress-bar">
+            <div
+              className="mc-progress-fill"
+              style={{
+                width: `${Math.min(100, (progress.added / Math.max(1, progress.target)) * 100)}%`,
+              }}
+            />
+          </div>
+          <div className="mc-progress-text">
+            <span>
+              <strong>{progress.added}</strong> / {progress.target} contacts found
+              {progress.lastBatch > 0 && (
+                <span className="mc-progress-pulse">
+                  {" "}+{progress.lastBatch} just added
+                </span>
+              )}
+            </span>
+            <span className="mc-progress-meta">
+              Batch #{progress.activeBatch} ·{" "}
+              {Math.min(PER_BATCH, progress.target - progress.added)} per batch
+            </span>
+          </div>
+          <button
+            type="button"
+            className="mc-btn mc-btn-cancel"
+            onClick={handleCancel}
+            disabled={cancelRef.current}
+          >
+            {cancelRef.current ? "Cancelling…" : "Cancel"}
+          </button>
+        </div>
+      )}
 
       {/* Past searches */}
       {searches.length > 0 && (
@@ -1453,6 +1572,76 @@ function MunicipalContactsCss() {
         font-weight: 500;
         box-shadow: 0 12px 28px rgba(0, 0, 0, 0.25);
         z-index: 200;
+      }
+
+      /* Live progress banner shown while the batch loop is running. Sticks
+         under the form and updates after every batch so the user can watch
+         contacts roll in without leaving the page. */
+      .mc-progress {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-areas: "bar bar" "text cancel";
+        gap: 10px 16px;
+        align-items: center;
+        background: var(--lb-bg-elev);
+        border: 1px solid var(--lb-accent);
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-bottom: 18px;
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--lb-accent) 12%, transparent);
+      }
+      .mc-progress-bar {
+        grid-area: bar;
+        height: 8px;
+        background: var(--lb-bg);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .mc-progress-fill {
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          var(--lb-accent),
+          color-mix(in srgb, var(--lb-accent) 65%, white)
+        );
+        transition: width 320ms ease;
+      }
+      .mc-progress-text {
+        grid-area: text;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        font-size: 13px;
+        color: var(--lb-text);
+      }
+      .mc-progress-text strong {
+        color: var(--lb-accent);
+        font-variant-numeric: tabular-nums;
+      }
+      .mc-progress-pulse {
+        color: var(--lb-text-2);
+        animation: mc-pulse 1.6s ease-out;
+        font-size: 12px;
+      }
+      @keyframes mc-pulse {
+        0% { opacity: 1; }
+        100% { opacity: 0.55; }
+      }
+      .mc-progress-meta {
+        font-size: 11px;
+        color: var(--lb-text-3);
+      }
+      .mc-btn-cancel {
+        grid-area: cancel;
+        height: 32px;
+        font-size: 12px;
+        background: transparent;
+        color: var(--lb-text-2);
+        border: 1px solid var(--lb-border);
+      }
+      .mc-btn-cancel:hover:not(:disabled) {
+        border-color: #ef4444;
+        color: #ef4444;
       }
     `}</style>
   );

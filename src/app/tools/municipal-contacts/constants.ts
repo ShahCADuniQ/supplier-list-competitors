@@ -111,8 +111,22 @@ export function sectorLabel(code: string | null | undefined): string {
 export const categoryLabel = sectorLabel;
 
 /** Quick-pick chips next to the count input. Free-form values work too. */
-export const COUNT_OPTIONS = [5, 10, 25, 50, 100, 200] as const;
+export const COUNT_OPTIONS = [10, 25, 50, 100, 250, 500, 1000] as const;
 export const COUNT_MIN = 1;
-export const COUNT_MAX = 200;
+export const COUNT_MAX = 1000;
+/**
+ * Per-Vercel-function-call cap. Generation runs as a client-side loop —
+ * each iteration asks the action for at most this many contacts so a
+ * single function invocation stays well within Vercel's serverless
+ * timeout (60 s on Hobby, 300 s on Pro). The client keeps looping until
+ * the user's target is hit OR Perplexity stops finding new leads.
+ */
+export const PER_BATCH = 25;
+/**
+ * Stop after this many consecutive empty batches (Perplexity returned
+ * nothing new for the current exclude list). Indicates the well is dry
+ * for the chosen scope/sectors/province.
+ */
+export const MAX_EMPTY_STREAK = 2;
 
 export type CategoryCode = SectorCode;
