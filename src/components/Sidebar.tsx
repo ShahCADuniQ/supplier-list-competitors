@@ -62,6 +62,15 @@ export default function Sidebar({
       matchPrefixes: ["/competitors", "/handbook", "/engineering"],
     },
     {
+      // Tools section — Municipal Contacts is the first tool. The rail item
+      // links straight to the most-used child for now.
+      href: "/tools/municipal-contacts",
+      label: "Tools",
+      icon: "🛠",
+      show: canViewSuppliers || canViewCompetitors || canViewEngineering || isAdmin,
+      matchPrefixes: ["/tools"],
+    },
+    {
       href: "/admin",
       label: "Admin",
       icon: "★",

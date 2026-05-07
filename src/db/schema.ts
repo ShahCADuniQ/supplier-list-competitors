@@ -650,3 +650,68 @@ export type NewIdeationProduct = typeof ideationProducts.$inferInsert;
 export type IdeationItemProduct = typeof ideationItemProducts.$inferSelect;
 export type IdeationProductFile = typeof ideationProductFiles.$inferSelect;
 export type NewIdeationProductFile = typeof ideationProductFiles.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MUNICIPAL CONTACTS — Tools / Canadian municipality contact directory.
+// A user picks a province + scope (cities / towns / villages / all) and an
+// optional municipality name filter, sets a target count, and the system
+// asks Perplexity for engineering + administration contacts and stores them
+// here. Each search row groups its own contact list. Searches are kept so
+// the user can re-open / refine / re-export later.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const municipalitySearches = pgTable(
+  "municipality_searches",
+  {
+    id: serial("id").primaryKey(),
+    country: text("country").notNull().default("Canada"),
+    province: text("province").notNull(),
+    // Comma-list of "city" | "town" | "village" | "municipality" | "all".
+    scopeTypes: text("scope_types").notNull().default("all"),
+    cityFilter: text("city_filter"), // optional: limit to one named municipality
+    requestedCount: integer("requested_count").notNull().default(25),
+    title: text("title"), // free-form label set by the user
+    notes: text("notes"),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    provinceIdx: index("municipality_searches_province_idx").on(t.province),
+    createdAtIdx: index("municipality_searches_created_at_idx").on(t.createdAt),
+  }),
+);
+
+export const municipalityContacts = pgTable(
+  "municipality_contacts",
+  {
+    id: serial("id").primaryKey(),
+    searchId: integer("search_id")
+      .notNull()
+      .references(() => municipalitySearches.id, { onDelete: "cascade" }),
+    municipalityName: text("municipality_name").notNull(),
+    municipalityType: text("municipality_type"), // city / town / village / municipality
+    province: text("province").notNull(),
+    department: text("department"), // "Engineering", "Public Works", "Administration", etc.
+    role: text("role"), // "City Engineer", "Director of Public Works", "Mayor", "Town Clerk"
+    category: text("category"), // canonical bucket: "engineering" | "administration" | "public-works" | "other"
+    name: text("name"),
+    email: text("email"),
+    phone: text("phone"),
+    address: text("address"),
+    website: text("website"),
+    sourceUrl: text("source_url"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    searchIdx: index("municipality_contacts_search_idx").on(t.searchId),
+    categoryIdx: index("municipality_contacts_category_idx").on(t.category),
+    provinceIdx: index("municipality_contacts_province_idx").on(t.province),
+  }),
+);
+
+export type MunicipalitySearch = typeof municipalitySearches.$inferSelect;
+export type NewMunicipalitySearch = typeof municipalitySearches.$inferInsert;
+export type MunicipalityContact = typeof municipalityContacts.$inferSelect;
+export type NewMunicipalityContact = typeof municipalityContacts.$inferInsert;

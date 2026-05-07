@@ -9,6 +9,8 @@ const TITLE_BY_PREFIX: { prefix: string; title: string }[] = [
   { prefix: "/competitors", title: "COMPETITORS & MARKET RESEARCH" },
   { prefix: "/handbook", title: "PROCESS" },
   { prefix: "/engineering", title: "ENGINEERING" },
+  { prefix: "/tools/municipal-contacts", title: "MUNICIPAL CONTACTS" },
+  { prefix: "/tools", title: "TOOLS" },
   { prefix: "/admin", title: "ADMIN" },
   { prefix: "/sign-in", title: "SIGN IN" },
   { prefix: "/sign-up", title: "SIGN UP" },
