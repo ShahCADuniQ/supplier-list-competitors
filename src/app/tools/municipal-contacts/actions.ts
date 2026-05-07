@@ -342,22 +342,85 @@ export async function generateMunicipalContacts(
   // to 32k since most providers cap there.
   const maxTokens = Math.min(32_000, 1500 + count * 180);
 
-  const r = await perplexityChat<{ contacts: PerplexityContact[] }>({
-    systemPrompt:
-      "You are a public-records research assistant. Return only valid JSON matching the schema. Use ONLY publicly-listed municipal contacts (city hall directories, official .ca / .gov.qc.ca pages). Do not include personal cell numbers or unverified emails.",
-    userPrompt,
-    schema: PERPLEXITY_SCHEMA,
-    schemaName: "municipal_contacts",
-    maxTokens,
-    // Light bias toward .ca and .gouv domains — Perplexity treats this as
-    // a hint, not a hard filter.
-    searchDomains: ["ca", "gouv.qc.ca", "gc.ca"],
-  });
+  const systemPrompt =
+    "You are a public-records research assistant for Canadian municipalities. Take time to actually search the web for each municipality before answering. Search BOTH English and French municipal websites — Quebec and New Brunswick directories are often in French. Use ONLY publicly-listed municipal contacts (city hall directories, official municipal pages). Do not include personal cell numbers or unverified emails. If a record's optional fields aren't on the source, fill them with empty string. Spread contacts across multiple municipalities.";
 
-  const rawContacts = r.content?.contacts ?? [];
+  // Two-pass strategy.
+  //
+  // Pass A: strict JSON-schema mode. Fast when it works (5-10 s) and the
+  // model fills the array directly. Some queries — notably Quebec, where
+  // the directories are in French — make sonar-pro bail in JSON-schema
+  // mode and return `{"contacts":[]}` in ~2 s without actually searching.
+  //
+  // Pass B: free-form prompt. Strip the JSON schema and instead give the
+  // model an explicit example output block, then parse the JSON we find
+  // inside the reply ourselves. This fires only when Pass A returned []
+  // and reliably produces 10+ records.
+  let citations: string[] = [];
+  let rawContacts: PerplexityContact[] = [];
+
+  try {
+    const passA = await perplexityChat<{ contacts: PerplexityContact[] }>({
+      systemPrompt,
+      userPrompt,
+      schema: PERPLEXITY_SCHEMA,
+      schemaName: "municipal_contacts",
+      maxTokens,
+    });
+    rawContacts = passA.content?.contacts ?? [];
+    citations = passA.citations ?? [];
+    console.log(
+      `[municipal-contacts] Pass A (schema): ${rawContacts.length} contacts, ${citations.length} citations`,
+    );
+  } catch (e) {
+    console.warn("[municipal-contacts] Pass A failed:", e);
+  }
+
+  if (rawContacts.length === 0) {
+    console.warn(
+      "[municipal-contacts] Pass A returned 0 — falling back to free-form prompt (Pass B)",
+    );
+    const freeFormPrompt = buildFreeFormPrompt({
+      province,
+      scopeText,
+      sectors,
+      cityFilter,
+      count,
+    });
+    try {
+      const passB = await perplexityChat<string>({
+        systemPrompt,
+        userPrompt: freeFormPrompt,
+        // No schema — the model returns a fenced JSON block we parse below.
+        maxTokens,
+      });
+      const text = passB.content ?? "";
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          const parsed = JSON.parse(m[0]) as { contacts?: PerplexityContact[] };
+          rawContacts = parsed.contacts ?? [];
+          citations = passB.citations ?? citations;
+          console.log(
+            `[municipal-contacts] Pass B (free-form): ${rawContacts.length} contacts, ${citations.length} citations`,
+          );
+        } catch (e) {
+          console.warn("[municipal-contacts] Pass B JSON parse failed:", e);
+        }
+      } else {
+        console.warn(
+          "[municipal-contacts] Pass B returned no JSON block. Head:",
+          text.slice(0, 300),
+        );
+      }
+    } catch (e) {
+      console.warn("[municipal-contacts] Pass B failed:", e);
+    }
+  }
+
   if (!rawContacts.length) {
     throw new Error(
-      "Perplexity returned no contacts. Try a broader scope or smaller count.",
+      "Perplexity returned no contacts in either schema or free-form mode. Try a broader scope, fewer sectors, or a smaller count.",
     );
   }
 
@@ -406,7 +469,7 @@ export async function generateMunicipalContacts(
   return {
     searchId: searchRow.id,
     contactCount: categorized.length,
-    citations: r.citations ?? [],
+    citations,
   };
 }
 
@@ -481,11 +544,23 @@ ${sectors
 
 If a municipality has no contact in any of the requested sectors, skip it and pick the next municipality.`;
 
+  // Provinces with significant French-language municipal sites need an
+  // explicit French-source instruction. Quebec is the obvious one; New
+  // Brunswick is bilingual.
+  const bilingualNote =
+    province === "Quebec"
+      ? `IMPORTANT: Quebec municipal websites are in French. Search BOTH languages — French department names like "Service du génie", "Travaux publics", "Greffier(ère)", "Directeur général", "Maire" are equally valid sources to the English equivalents. Many municipalities only publish their directories in French.`
+      : province === "New Brunswick"
+        ? `Note: New Brunswick is bilingual — search both English and French municipal directories.`
+        : "";
+
   return `Find ${count} verified public contacts for municipalities in ${province}, Canada${
     cityFilter
       ? ` (focus on the municipality named "${cityFilter}" — return contacts only for that municipality and its closest neighbours)`
       : ""
   }.
+
+${bilingualNote}
 
 Scope: ${scopeText}.
 
@@ -518,4 +593,69 @@ function nullIfEmpty(s: string | null | undefined): string | null {
   if (!s) return null;
   const t = s.trim();
   return t.length === 0 ? null : t;
+}
+
+// Pass B prompt — no JSON schema, just an explicit example block. We parse
+// the JSON ourselves from the model's reply. Use this when schema mode
+// returns []; common with Quebec (French sources) and other queries where
+// strict whitelisting trips the model into a fast-bail.
+function buildFreeFormPrompt(args: {
+  province: string;
+  scopeText: string;
+  sectors: string[];
+  cityFilter: string | null;
+  count: number;
+}): string {
+  const { province, scopeText, sectors, cityFilter, count } = args;
+
+  const sectorPreference =
+    sectors.length === 0
+      ? `Focus on engineering and administration leads where available, but accept any public contact you can verify.`
+      : `Prefer contacts in: ${sectors
+          .map((c) => SECTOR_OPTIONS.find((s) => s.code === c)?.label ?? c)
+          .join(", ")}. If a municipality has none in those sectors, return its closest equivalent (e.g. infrastructure → engineering, mayor's office → administration). Do not return empty — return your best effort.`;
+
+  const bilingualNote =
+    province === "Quebec"
+      ? `Quebec municipalities use French labels: "Service du génie", "Travaux publics", "Greffier(ère)", "Maire", "Directeur général". Search for those terms too.`
+      : province === "New Brunswick"
+        ? "New Brunswick is bilingual — search both English and French municipal directories."
+        : "";
+
+  return `Find up to ${count} public municipal contacts in ${province}, Canada${
+    cityFilter
+      ? ` with a focus on the municipality named "${cityFilter}"`
+      : ""
+  }.
+
+Scope: ${scopeText}.
+${sectorPreference}
+
+Search BOTH English and French municipal websites. ${bilingualNote}
+
+Take your time. Visit each municipality's directory page. Each contact must have a real sourceUrl you visited.
+
+Output FORMAT (must be exactly this — a fenced JSON block):
+
+\`\`\`json
+{
+  "contacts": [
+    {
+      "municipalityName": "Ville de Saint-Hyacinthe",
+      "municipalityType": "city",
+      "department": "Service du génie",
+      "role": "Directeur du génie",
+      "name": "...",
+      "email": "...",
+      "phone": "...",
+      "address": "...",
+      "website": "...",
+      "sourceUrl": "...",
+      "notes": ""
+    }
+  ]
+}
+\`\`\`
+
+Empty string is acceptable for ANY field you can't verify on the source. Spread across multiple municipalities — don't return all ${count} from one big city.`;
 }
