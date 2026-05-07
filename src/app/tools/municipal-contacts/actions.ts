@@ -325,14 +325,39 @@ export async function generateMunicipalContacts(
   );
   const cityFilter = (input.cityFilter ?? "").trim() || null;
 
+  // Load every existing contact for this province so we can (a) tell
+  // Perplexity to skip those municipalities and (b) reject duplicates
+  // before insert. Keys are `municipality::role` — same person at
+  // different roles, or two roles in one municipality, each count as
+  // separate leads.
+  const existingRows = await db
+    .select({
+      municipalityName: municipalityContacts.municipalityName,
+      role: municipalityContacts.role,
+    })
+    .from(municipalityContacts)
+    .where(eq(municipalityContacts.province, province));
+  const existingKeys = new Set<string>();
+  const existingMunicipalities = new Set<string>();
+  for (const r of existingRows) {
+    existingKeys.add(dedupKeyOf(r.municipalityName, r.role));
+    if (r.municipalityName) existingMunicipalities.add(r.municipalityName);
+  }
+  console.log(
+    `[municipal-contacts] excluding ${existingMunicipalities.size} municipalities (${existingRows.length} existing contacts) from this generation`,
+  );
+
   // Build the Perplexity prompt — explicit about only Canada, only public
   // contacts, only the requested scope, and the sectors we want filled.
+  // The excluded list is passed in so the model doesn't rediscover known
+  // municipalities; it nudges Perplexity toward unsearched towns.
   const userPrompt = buildPerplexityPrompt({
     province,
     scopeText,
     sectors,
     cityFilter,
     count,
+    excludedMunicipalities: [...existingMunicipalities],
   });
 
   console.log(
@@ -391,6 +416,7 @@ export async function generateMunicipalContacts(
       sectors,
       cityFilter,
       count,
+      excludedMunicipalities: [...existingMunicipalities],
     });
     try {
       const passB = await perplexityChat<string>({
@@ -463,9 +489,25 @@ export async function generateMunicipalContacts(
     })
     .returning();
 
-  if (verified.length > 0) {
+  // Filter out duplicates against the existing-keys set built at the top.
+  // Identical (municipality::role) records already in the DB would just clutter
+  // the user's directory, so we keep only the genuinely-new ones.
+  const fresh = verified.filter((c) => {
+    const k = dedupKeyOf(c.municipalityName, c.role);
+    if (existingKeys.has(k)) return false;
+    existingKeys.add(k); // also catches dupes within this generation
+    return true;
+  });
+  const skippedDupes = verified.length - fresh.length;
+  if (skippedDupes > 0) {
+    console.log(
+      `[municipal-contacts] skipped ${skippedDupes} duplicate(s) already in the directory`,
+    );
+  }
+
+  if (fresh.length > 0) {
     await db.insert(municipalityContacts).values(
-      verified.map((c) => ({
+      fresh.map((c) => ({
         searchId: searchRow.id,
         municipalityName: c.municipalityName?.trim() || "Unknown",
         municipalityType: nullIfEmpty(c.municipalityType),
@@ -488,7 +530,7 @@ export async function generateMunicipalContacts(
   revalidatePath("/tools/municipal-contacts");
   return {
     searchId: searchRow.id,
-    contactCount: verified.length,
+    contactCount: fresh.length,
     citations,
   };
 }
@@ -759,8 +801,10 @@ function buildPerplexityPrompt(args: {
   sectors: string[];
   cityFilter: string | null;
   count: number;
+  excludedMunicipalities?: string[];
 }): string {
-  const { province, scopeText, sectors, cityFilter, count } = args;
+  const { province, scopeText, sectors, cityFilter, count, excludedMunicipalities } = args;
+  const excludeBlock = buildExcludeBlock(excludedMunicipalities);
 
   // Compose the "sectors to look for" block. Empty array → ask for engineering
   // and admin first (the original default), but allow any. A non-empty list
@@ -799,7 +843,7 @@ If a municipality has no contact in any of the requested sectors, skip it and pi
   }.
 
 ${bilingualNote}
-
+${excludeBlock}
 Scope: ${scopeText}.
 
 ${sectorBlock}
@@ -834,6 +878,37 @@ function nullIfEmpty(s: string | null | undefined): string | null {
   return t.length === 0 ? null : t;
 }
 
+/**
+ * Deduplication key for municipal contacts. Same person at a different role,
+ * or different people at the same role in one municipality, each count as
+ * separate leads. Unicode-folded so accent variants merge.
+ */
+function dedupKeyOf(
+  municipalityName: string | null | undefined,
+  role: string | null | undefined,
+): string {
+  const fold = (s: string | null | undefined) =>
+    (s ?? "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  return `${fold(municipalityName)}::${fold(role)}`;
+}
+
+/**
+ * Compose the "DO NOT include these municipalities" block injected into both
+ * the strict and free-form prompts. Keeps the prompt budget under control
+ * by truncating to the first N alphabetically (so successive sweeps see a
+ * stable list and don't oscillate).
+ */
+function buildExcludeBlock(excluded: string[] | undefined): string {
+  if (!excluded || excluded.length === 0) return "";
+  const sample = [...excluded].sort().slice(0, 80);
+  return `\n\nDO NOT return contacts from these municipalities — they are already in the directory: ${sample.join(", ")}${excluded.length > sample.length ? `, …and ${excluded.length - sample.length} more` : ""}. Pick OTHER municipalities. Smaller cities, towns, villages, MRC seats, and agglomeration members are all fair game.\n`;
+}
+
 // Pass B prompt — no JSON schema, just an explicit example block. We parse
 // the JSON ourselves from the model's reply. Use this when schema mode
 // returns []; common with Quebec (French sources) and other queries where
@@ -844,8 +919,10 @@ function buildFreeFormPrompt(args: {
   sectors: string[];
   cityFilter: string | null;
   count: number;
+  excludedMunicipalities?: string[];
 }): string {
-  const { province, scopeText, sectors, cityFilter, count } = args;
+  const { province, scopeText, sectors, cityFilter, count, excludedMunicipalities } = args;
+  const excludeBlock = buildExcludeBlock(excludedMunicipalities);
 
   const sectorPreference =
     sectors.length === 0
@@ -866,7 +943,7 @@ function buildFreeFormPrompt(args: {
       ? ` with a focus on the municipality named "${cityFilter}"`
       : ""
   }.
-
+${excludeBlock}
 Scope: ${scopeText}.
 ${sectorPreference}
 

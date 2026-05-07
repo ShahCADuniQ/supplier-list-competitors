@@ -115,11 +115,26 @@ function buildPrompt(args: {
   region: string;
   sector: { label: string; promptHint: string };
   count: number;
+  excludedMunicipalities: string[];
+  excludedKeys: Set<string>;
 }): string {
-  const { region, sector, count } = args;
+  const { region, sector, count, excludedMunicipalities } = args;
+
+  // Truncate the excluded-municipalities list to keep the prompt under control.
+  // Sorted by name so successive sweeps see a stable list and don't oscillate.
+  const excludeSample = [...excludedMunicipalities].sort().slice(0, 80);
+  const excludeBlock = excludeSample.length
+    ? `
+
+DO NOT return contacts from these municipalities — they are already in the directory:
+${excludeSample.join(", ")}${excludedMunicipalities.length > excludeSample.length ? `, …and ${excludedMunicipalities.length - excludeSample.length} more` : ""}
+
+Pick OTHER Quebec municipalities in the region. Smaller cities, towns, villages, MRC seats, and agglomeration members are all fair game.`
+    : "";
+
   return `Find UP TO ${count} verified public ${sector.label} contacts for Quebec municipalities in this region: ${region}.
 
-Even returning 1-3 high-quality contacts is fine — quality matters more than hitting the count exactly. If the region is dominated by one large city (e.g. Laval is a single municipality), include multiple roles within that one city across the relevant department, plus any nearby agglomeration members.
+Even returning 1-3 high-quality contacts is fine — quality matters more than hitting the count exactly. If the region is dominated by one large city (e.g. Laval is a single municipality), include multiple roles within that one city across the relevant department, plus any nearby agglomeration members.${excludeBlock}
 
 What to look for: ${sector.promptHint}
 
@@ -266,6 +281,8 @@ async function fetchBatch(args: {
   region: string;
   sector: { label: string; promptHint: string };
   count: number;
+  excludedMunicipalities: string[];
+  excludedKeys: Set<string>;
 }): Promise<{ contacts: Contact[]; citations: string[] }> {
   const userPrompt = buildPrompt(args);
   const maxTokens = Math.min(32_000, 1500 + args.count * 280);
@@ -435,8 +452,32 @@ async function main() {
   console.log(`Regions: ${REGIONS.length} · Sectors: ${SECTORS.length} · per-batch: ${PER_BATCH}`);
   console.log(`Estimated max candidates: ${REGIONS.length * SECTORS.length * PER_BATCH}\n`);
 
+  // Load every existing Quebec contact so we (a) can ask Perplexity to skip
+  // those municipalities in its research and (b) reject duplicates before
+  // they hit the DB. Keys are `lower(municipality_name)::lower(role)` so
+  // the same person at two roles or two people in one municipality each
+  // count as separate leads.
+  const existingRows = (await sql.query(
+    `SELECT municipality_name, role FROM municipality_contacts
+       WHERE province = 'Quebec'`,
+  )) as Array<{ municipality_name: string; role: string | null }>;
   const accepted: Contact[] = [];
   const acceptedKeys = new Set<string>();
+  for (const r of existingRows) {
+    const k = dedupKey({
+      municipalityName: r.municipality_name ?? "",
+      role: r.role ?? "",
+    } as Contact);
+    acceptedKeys.add(k);
+  }
+  // Distinct municipality names already covered (for the exclude block in
+  // the prompt). Use original casing — Perplexity matches better that way.
+  const existingMunicipalities = [
+    ...new Set(existingRows.map((r) => r.municipality_name).filter(Boolean)),
+  ];
+  console.log(
+    `Loaded ${existingRows.length} existing contact(s) covering ${existingMunicipalities.length} municipalities — those will be excluded from this sweep.\n`,
+  );
   const stats: Record<string, number> = {
     candidates: 0,
     "drop:sourceUrl": 0,
@@ -464,6 +505,11 @@ async function main() {
         region: region.label,
         sector,
         count: PER_BATCH,
+        excludedMunicipalities: [
+          ...existingMunicipalities,
+          ...accepted.map((c) => c.municipalityName),
+        ],
+        excludedKeys: acceptedKeys,
       });
       console.log(
         `  Perplexity returned ${candidates.length} candidates, ${citations.length} citations`,
@@ -561,24 +607,38 @@ async function main() {
     return;
   }
 
-  console.log(`\nNormalizing ${accepted.length} leads with Claude…`);
+  console.log(`\nNormalizing ${accepted.length} new leads with Claude…`);
   const categorized = await categorizeWithClaude(accepted);
 
-  // Insert one search row + all contacts
-  const search = (await sql.query(
-    `INSERT INTO municipality_searches
-       (country, province, scope_types, sectors, requested_count, title, created_by_clerk_id)
-     VALUES ('Canada', 'Quebec', 'all', $1, $2, $3, $4)
-     RETURNING id`,
-    [
-      "engineering,parks,public-works,administration",
-      categorized.length,
-      `Quebec municipalities — comprehensive lead list (${categorized.length} verified)`,
-      "script:lead-quebec-comprehensive",
-    ],
+  // Append to the canonical comprehensive search row if one exists; otherwise
+  // create it. Title gets refreshed at the end with the post-merge count.
+  const existingSearch = (await sql.query(
+    `SELECT id FROM municipality_searches
+       WHERE province = 'Quebec'
+         AND title LIKE 'Quebec municipalities — comprehensive%'
+       ORDER BY id ASC LIMIT 1`,
   )) as Array<{ id: number }>;
-  const searchId = search[0].id;
-  console.log(`Inserted search #${searchId}`);
+
+  let searchId: number;
+  if (existingSearch.length > 0) {
+    searchId = existingSearch[0].id;
+    console.log(`Appending to canonical search #${searchId}`);
+  } else {
+    const created = (await sql.query(
+      `INSERT INTO municipality_searches
+         (country, province, scope_types, sectors, requested_count, title, created_by_clerk_id)
+       VALUES ('Canada', 'Quebec', 'all', $1, $2, $3, $4)
+       RETURNING id`,
+      [
+        "engineering,parks,public-works,administration",
+        categorized.length,
+        `Quebec municipalities — comprehensive lead list (${categorized.length} verified)`,
+        "script:lead-quebec-comprehensive",
+      ],
+    )) as Array<{ id: number }>;
+    searchId = created[0].id;
+    console.log(`Created canonical search #${searchId}`);
+  }
 
   // Insert in chunks to stay under any single-statement size cap.
   const chunkSize = 50;
@@ -613,16 +673,26 @@ async function main() {
     console.log(`  inserted ${Math.min(i + chunkSize, categorized.length)} / ${categorized.length}`);
   }
 
-  // By-sector summary
-  const bySector = new Map<string, number>();
-  for (const c of categorized) {
-    const k = c.category || c.sectorCode || "other";
-    bySector.set(k, (bySector.get(k) ?? 0) + 1);
-  }
-  console.log(`\nBy sector:`);
-  for (const [k, v] of [...bySector.entries()].sort((a, b) => b[1] - a[1])) {
-    console.log(`  ${k}: ${v}`);
-  }
+  // Refresh canonical title + count to match the post-merge total.
+  const finalCount = (await sql.query(
+    `SELECT count(*)::int AS c FROM municipality_contacts WHERE search_id = $1`,
+    [searchId],
+  )) as Array<{ c: number }>;
+  const finalTitle = `Quebec municipalities — comprehensive lead list (${finalCount[0].c} verified)`;
+  await sql.query(
+    `UPDATE municipality_searches SET title = $1, requested_count = $2, updated_at = NOW() WHERE id = $3`,
+    [finalTitle, finalCount[0].c, searchId],
+  );
+
+  // By-sector summary across the whole canonical row (not just this run).
+  const bySector = (await sql.query(
+    `SELECT category, count(*)::int AS n FROM municipality_contacts
+       WHERE search_id = $1 GROUP BY category ORDER BY n DESC`,
+    [searchId],
+  )) as Array<{ category: string | null; n: number }>;
+  console.log(`\nCanonical row #${searchId} now has ${finalCount[0].c} total contact(s).`);
+  console.log(`By sector:`);
+  for (const r of bySector) console.log(`  ${r.category ?? "(null)"}: ${r.n}`);
   console.log(`\nView at: /tools/municipal-contacts (search #${searchId})`);
 }
 
