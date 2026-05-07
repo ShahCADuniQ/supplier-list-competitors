@@ -308,179 +308,196 @@ export default function MunicipalContactsView({
         </div>
       </header>
 
-      {/* Generator form */}
+      {/* Generator form — three clear stages: Where → What → How many. */}
       <section className="mc-form">
-        <div className="mc-form-grid">
-          <label className="mc-field">
-            <span className="mc-label">Province</span>
-            <select
-              value={province}
-              onChange={(e) => setProvince(e.target.value)}
-              disabled={busy}
-              className="mc-input"
-            >
-              {CANADIAN_PROVINCES.map((p) => (
-                <option key={p.code} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="mc-field mc-field-wide">
-            <span className="mc-label">
-              Specific municipality (optional)
-              <span className="mc-hint">
-                Restricts to that town and nearby — leave blank for province-wide
-              </span>
-            </span>
-            <input
-              type="text"
-              value={cityFilter}
-              onChange={(e) => setCityFilter(e.target.value)}
-              disabled={busy}
-              placeholder="e.g. Saint-Hyacinthe, Mont-Tremblant"
-              className="mc-input"
-            />
-          </label>
-
-          <div className="mc-field mc-field-wide">
-            <span className="mc-label">
-              Scope
-              <span className="mc-hint">
-                Pick none for all municipality types
-              </span>
-            </span>
-            <div className="mc-pills">
-              {SCOPE_TYPES.map((s) => {
-                const active = scopeTypes.includes(s.code);
-                return (
-                  <button
-                    key={s.code}
-                    type="button"
-                    className={`mc-pill ${active ? "mc-pill-on" : ""}`}
-                    onClick={() => toggleScope(s.code)}
-                    disabled={busy}
-                  >
-                    {s.label}
-                  </button>
-                );
-              })}
-            </div>
+        {/* Stage 1: Where to research */}
+        <div className="mc-stage">
+          <div className="mc-stage-head">
+            <span className="mc-stage-num">1</span>
+            <h3 className="mc-stage-title">Where to research</h3>
           </div>
-
-          <div className="mc-field mc-field-wide">
-            <span className="mc-label">
-              Sectors
-              <span className="mc-hint">
-                Restricts the research to these departments. Pick none to
-                let it return contacts from any sector.
-              </span>
-            </span>
-            <div className="mc-pills">
-              {SECTOR_OPTIONS.map((s) => {
-                const active = sectors.includes(s.code);
-                return (
-                  <button
-                    key={s.code}
-                    type="button"
-                    className={`mc-pill mc-pill-cat-${s.code} ${active ? "mc-pill-on" : ""}`}
-                    onClick={() => toggleSector(s.code)}
-                    disabled={busy}
-                    title={s.promptHint}
-                  >
-                    {s.label}
-                  </button>
-                );
-              })}
-              {sectors.length > 0 && (
-                <button
-                  type="button"
-                  className="mc-pill mc-pill-clear"
-                  onClick={() => setSectors([])}
-                  disabled={busy}
-                  title="Clear all — return contacts from any sector"
-                >
-                  All sectors
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="mc-field">
-            <span className="mc-label">
-              Quantity
-              <span className="mc-hint">
-                Pick a quick value or type any number from {COUNT_MIN}–{COUNT_MAX}
-              </span>
-            </span>
-            <div className="mc-count-row">
-              <input
-                type="number"
-                inputMode="numeric"
-                min={COUNT_MIN}
-                max={COUNT_MAX}
-                value={count}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value, 10);
-                  if (Number.isFinite(n)) setCount(n);
-                  else if (e.target.value === "") setCount(COUNT_MIN);
-                }}
-                onBlur={(e) => {
-                  // Clamp on blur so an out-of-range typed value snaps back.
-                  const n = parseInt(e.target.value, 10);
-                  if (!Number.isFinite(n) || n < COUNT_MIN) setCount(COUNT_MIN);
-                  else if (n > COUNT_MAX) setCount(COUNT_MAX);
-                }}
+          <div className="mc-row mc-row-12">
+            <label className="mc-field" style={{ gridColumn: "span 3" }}>
+              <span className="mc-label">Province</span>
+              <select
+                value={province}
+                onChange={(e) => setProvince(e.target.value)}
                 disabled={busy}
-                className="mc-input mc-count-input"
-                aria-label="Quantity"
+                className="mc-input"
+              >
+                {CANADIAN_PROVINCES.map((p) => (
+                  <option key={p.code} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="mc-field" style={{ gridColumn: "span 5" }}>
+              <span className="mc-label">
+                Specific municipality
+                <span className="mc-optional">optional</span>
+              </span>
+              <input
+                type="text"
+                value={cityFilter}
+                onChange={(e) => setCityFilter(e.target.value)}
+                disabled={busy}
+                placeholder="e.g. Saint-Hyacinthe, Mont-Tremblant"
+                className="mc-input"
               />
+              <span className="mc-hint">
+                Restricts to that town and its neighbours — leave blank for province-wide
+              </span>
+            </label>
+
+            <div className="mc-field" style={{ gridColumn: "span 4" }}>
+              <span className="mc-label">
+                Scope
+                <span className="mc-optional">all if empty</span>
+              </span>
               <div className="mc-pills">
-                {COUNT_OPTIONS.map((n) => {
-                  const active = count === n;
+                {SCOPE_TYPES.map((s) => {
+                  const active = scopeTypes.includes(s.code);
                   return (
                     <button
-                      key={n}
+                      key={s.code}
                       type="button"
                       className={`mc-pill ${active ? "mc-pill-on" : ""}`}
-                      onClick={() => setCount(n)}
+                      onClick={() => toggleScope(s.code)}
                       disabled={busy}
                     >
-                      {n}
+                      {s.label}
                     </button>
                   );
                 })}
               </div>
             </div>
           </div>
-
-          <label className="mc-field mc-field-wide">
-            <span className="mc-label">Title (optional)</span>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={busy}
-              placeholder="e.g. Quebec linear-lighting RFP outreach – May 2026"
-              className="mc-input"
-            />
-          </label>
         </div>
 
+        {/* Stage 2: What to find — sectors get a full row of their own */}
+        <div className="mc-stage">
+          <div className="mc-stage-head">
+            <span className="mc-stage-num">2</span>
+            <h3 className="mc-stage-title">What to find</h3>
+            {sectors.length > 0 && (
+              <button
+                type="button"
+                className="mc-stage-action"
+                onClick={() => setSectors([])}
+                disabled={busy}
+                title="Clear all — return contacts from any sector"
+              >
+                Clear · all sectors
+              </button>
+            )}
+          </div>
+          <div className="mc-pills mc-pills-sectors">
+            {SECTOR_OPTIONS.map((s) => {
+              const active = sectors.includes(s.code);
+              return (
+                <button
+                  key={s.code}
+                  type="button"
+                  className={`mc-pill mc-pill-cat-${s.code} ${active ? "mc-pill-on" : ""}`}
+                  onClick={() => toggleSector(s.code)}
+                  disabled={busy}
+                  title={s.promptHint}
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mc-hint mc-hint-block">
+            Restricts the research to these departments. Pick none to let it return contacts from any sector.
+          </p>
+        </div>
+
+        {/* Stage 3: How many + label */}
+        <div className="mc-stage">
+          <div className="mc-stage-head">
+            <span className="mc-stage-num">3</span>
+            <h3 className="mc-stage-title">How many</h3>
+          </div>
+          <div className="mc-row mc-row-12">
+            <div className="mc-field" style={{ gridColumn: "span 6" }}>
+              <span className="mc-label">Quantity</span>
+              <div className="mc-count-row">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={COUNT_MIN}
+                  max={COUNT_MAX}
+                  value={count}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (Number.isFinite(n)) setCount(n);
+                    else if (e.target.value === "") setCount(COUNT_MIN);
+                  }}
+                  onBlur={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (!Number.isFinite(n) || n < COUNT_MIN) setCount(COUNT_MIN);
+                    else if (n > COUNT_MAX) setCount(COUNT_MAX);
+                  }}
+                  disabled={busy}
+                  className="mc-input mc-count-input"
+                  aria-label="Quantity"
+                />
+                <div className="mc-pills mc-pills-tight">
+                  {COUNT_OPTIONS.map((n) => {
+                    const active = count === n;
+                    return (
+                      <button
+                        key={n}
+                        type="button"
+                        className={`mc-pill mc-pill-sm ${active ? "mc-pill-on" : ""}`}
+                        onClick={() => setCount(n)}
+                        disabled={busy}
+                      >
+                        {n}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <span className="mc-hint">
+                Pick a quick value or type any number from {COUNT_MIN}–{COUNT_MAX}
+              </span>
+            </div>
+
+            <label className="mc-field" style={{ gridColumn: "span 6" }}>
+              <span className="mc-label">
+                Run label
+                <span className="mc-optional">optional · for your records</span>
+              </span>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                disabled={busy}
+                placeholder="e.g. Quebec linear-lighting RFP outreach – May 2026"
+                className="mc-input"
+              />
+            </label>
+          </div>
+        </div>
+
+        {/* Action bar */}
         <div className="mc-form-actions">
+          {!canEdit && (
+            <span className="mc-readonly">Read-only access</span>
+          )}
           <button
             type="button"
-            className="mc-btn mc-btn-primary"
+            className="mc-btn mc-btn-primary mc-btn-cta"
             onClick={handleGenerate}
             disabled={busy || !canEdit}
             title={!canEdit ? "Read-only — needs edit permissions" : undefined}
           >
-            {busy ? "Researching…" : `✨ Generate ${count} contacts`}
+            {busy ? "Researching…" : `✨ Generate ${count} contact${count === 1 ? "" : "s"}`}
           </button>
-          {!canEdit && (
-            <span className="mc-readonly">Read-only access</span>
-          )}
         </div>
       </section>
 
@@ -825,22 +842,69 @@ function MunicipalContactsCss() {
         margin: 0;
       }
 
-      /* Form */
+      /* Form — three-stage layout (Where → What → How many) */
       .mc-form {
         background: var(--lb-bg-elev);
         border: 1px solid var(--lb-border);
-        border-radius: 14px;
-        padding: 18px 18px 16px;
+        border-radius: 16px;
+        padding: 6px 22px 22px;
         margin-bottom: 18px;
       }
-      .mc-form-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 14px;
+      .mc-stage {
+        padding: 18px 0;
+        border-bottom: 1px solid var(--lb-border);
+      }
+      .mc-stage:last-of-type { border-bottom: 0; }
+      .mc-stage-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
         margin-bottom: 12px;
       }
-      .mc-field-wide {
-        grid-column: span 2;
+      .mc-stage-num {
+        flex: 0 0 auto;
+        width: 22px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--lb-accent-fg);
+        background: var(--lb-accent);
+        border-radius: 50%;
+        font-variant-numeric: tabular-nums;
+      }
+      .mc-stage-title {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: -0.005em;
+        color: var(--lb-text);
+      }
+      .mc-stage-action {
+        margin-left: auto;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--lb-text-3);
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+      .mc-stage-action:hover { color: var(--lb-accent); background: var(--lb-bg); }
+      .mc-stage-action:disabled { opacity: 0.5; cursor: not-allowed; }
+
+      /* 12-column grid for stages 1 & 3 */
+      .mc-row-12 {
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 14px;
+        align-items: start;
+      }
+      @media (max-width: 880px) {
+        .mc-row-12 > .mc-field { grid-column: span 12 !important; }
       }
       .mc-field {
         display: flex;
@@ -849,19 +913,31 @@ function MunicipalContactsCss() {
         min-width: 0;
       }
       .mc-label {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
         font-size: 11.5px;
         font-weight: 600;
         color: var(--lb-text-2);
         letter-spacing: 0.02em;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
+      }
+      .mc-optional {
+        font-size: 10px;
+        font-weight: 500;
+        color: var(--lb-text-3);
+        letter-spacing: 0;
+        text-transform: lowercase;
+        font-style: italic;
       }
       .mc-hint {
-        font-size: 10.5px;
+        font-size: 11px;
         font-weight: 400;
         color: var(--lb-text-3);
         letter-spacing: 0;
+        line-height: 1.4;
+      }
+      .mc-hint-block {
+        margin: 10px 0 0;
       }
       .mc-input {
         height: 36px;
@@ -892,17 +968,39 @@ function MunicipalContactsCss() {
         flex-wrap: wrap;
         gap: 6px;
       }
+      .mc-pills-tight {
+        gap: 4px;
+      }
+      .mc-pills-sectors {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 8px;
+      }
+      .mc-pills-sectors .mc-pill {
+        justify-content: center;
+        height: 36px;
+        font-size: 12.5px;
+      }
+      .mc-pill-sm {
+        height: 28px;
+        padding: 0 10px;
+        font-size: 11.5px;
+        min-width: 36px;
+        justify-content: center;
+      }
       .mc-count-row {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         flex-wrap: wrap;
       }
       .mc-count-input {
-        width: 88px;
+        width: 86px;
+        height: 36px;
         text-align: center;
         font-variant-numeric: tabular-nums;
         font-weight: 600;
+        font-size: 14px;
       }
       .mc-count-input::-webkit-outer-spin-button,
       .mc-count-input::-webkit-inner-spin-button {
@@ -1010,6 +1108,18 @@ function MunicipalContactsCss() {
         display: flex;
         align-items: center;
         gap: 12px;
+        margin-top: 18px;
+        padding-top: 18px;
+        border-top: 1px solid var(--lb-border);
+        justify-content: flex-end;
+      }
+      .mc-form-actions .mc-readonly { margin-right: auto; }
+      .mc-btn-cta {
+        height: 44px;
+        padding: 0 24px;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: -0.005em;
       }
       .mc-btn {
         height: 38px;
