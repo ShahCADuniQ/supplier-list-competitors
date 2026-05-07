@@ -590,6 +590,11 @@ export default function MunicipalContactsView({
                         {c.name && (
                           <div className="mc-contact-name">{c.name}</div>
                         )}
+                        {c.servicesSummary && (
+                          <div className="mc-contact-services">
+                            {c.servicesSummary}
+                          </div>
+                        )}
                         <div className="mc-contact-fields">
                           {c.email && (
                             <a
@@ -1047,6 +1052,16 @@ function MunicipalContactsCss() {
         font-weight: 600;
         color: var(--lb-text);
         margin-top: 2px;
+      }
+      .mc-contact-services {
+        font-size: 11.5px;
+        color: var(--lb-text-2);
+        line-height: 1.45;
+        margin-top: 6px;
+        padding: 6px 8px;
+        background: color-mix(in srgb, var(--lb-accent) 6%, var(--lb-bg-elev));
+        border-left: 2px solid var(--lb-accent);
+        border-radius: 4px;
       }
       .mc-contact-fields {
         display: flex;

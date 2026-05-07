@@ -706,6 +706,11 @@ export const municipalityContacts = pgTable(
     website: text("website"),
     sourceUrl: text("source_url"),
     notes: text("notes"),
+    // Free-form summary of what services this department offers / what
+    // they do. Filled by Perplexity during research and shown on the
+    // contact card so users don't have to click through to a source page
+    // to know whether the lead is relevant.
+    servicesSummary: text("services_summary"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({

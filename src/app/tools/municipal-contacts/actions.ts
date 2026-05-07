@@ -90,6 +90,7 @@ const PERPLEXITY_SCHEMA = {
           address: { type: "string" },
           website: { type: "string" },
           sourceUrl: { type: "string" },
+          servicesSummary: { type: "string" },
           notes: { type: "string" },
         },
         required: [
@@ -103,6 +104,7 @@ const PERPLEXITY_SCHEMA = {
           "address",
           "website",
           "sourceUrl",
+          "servicesSummary",
           "notes",
         ],
       },
@@ -122,6 +124,7 @@ type PerplexityContact = {
   address: string;
   website: string;
   sourceUrl: string;
+  servicesSummary: string;
   notes: string;
 };
 
@@ -176,6 +179,7 @@ Pick the BEST single bucket. Trim and clean every field. Keep email / phone digi
                 website: { type: "string" },
                 sourceUrl: { type: "string" },
                 notes: { type: "string" },
+                servicesSummary: { type: "string" },
                 category: {
                   type: "string",
                   enum: [...ALL_SECTOR_CODES],
@@ -192,6 +196,7 @@ Pick the BEST single bucket. Trim and clean every field. Keep email / phone digi
                 "address",
                 "website",
                 "sourceUrl",
+                "servicesSummary",
                 "notes",
                 "category",
               ],
@@ -467,6 +472,7 @@ export async function generateMunicipalContacts(
         address: nullIfEmpty(c.address),
         website: nullIfEmpty(c.website),
         sourceUrl: nullIfEmpty(c.sourceUrl),
+        servicesSummary: nullIfEmpty(c.servicesSummary),
         notes: nullIfEmpty(c.notes),
       })),
     );
@@ -756,6 +762,7 @@ For each contact, return:
   - address: city hall / department mailing address. Empty string if not on the source page.
   - website: the municipality's website HOMEPAGE URL (not a deep link). Verify the host actually exists by checking your citations list.
   - sourceUrl: MUST be a URL you actually visited and that appears in your citations. Do NOT invent or guess paths — if the page you read at city hall doesn't have a stable URL, fall back to the staff-directory landing page from your citations. Better to give the citation root than invent a deep path that 404s.
+  - servicesSummary: 2-3 sentence summary of the services this department offers and what they actually do — e.g. "Manages municipal infrastructure projects: roads, drainage, water/sewer networks, traffic studies, bridges. Reviews engineering submittals from developers and oversees public-works tenders." Be specific to this municipality based on the source page; don't write a generic description.
   - notes: any extra context (e.g. "interim director", "shared phone with planning").
 
 CRITICAL rules:
@@ -830,11 +837,12 @@ Output FORMAT (must be exactly this — a fenced JSON block):
       "address": "...",
       "website": "...",
       "sourceUrl": "...",
+      "servicesSummary": "2-3 sentence summary of services this department offers and what they do",
       "notes": ""
     }
   ]
 }
 \`\`\`
 
-Empty string is acceptable for ANY field you can't verify on the source. Spread across multiple municipalities — don't return all ${count} from one big city.`;
+Empty string is acceptable for ANY field you can't verify on the source — EXCEPT servicesSummary, which should always be filled with a specific 2-3 sentence description of the department's actual services. Spread across multiple municipalities — don't return all ${count} from one big city.`;
 }
