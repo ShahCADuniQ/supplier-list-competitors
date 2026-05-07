@@ -410,19 +410,6 @@ export default function MunicipalContactsView({
 
   return (
     <div className="mc-wrap">
-      {/* Header */}
-      <header className="mc-header">
-        <div>
-          <div className="mc-eyebrow">Tools · Canada</div>
-          <h1 className="mc-title">Municipal Contacts</h1>
-          <p className="mc-sub">
-            Generate engineering and administration contacts for any Canadian
-            province. Perplexity researches public directories, Claude
-            normalizes the records into clean categories.
-          </p>
-        </div>
-      </header>
-
       {/* Generator form — three clear stages: Where → What → How many. */}
       <section className="mc-form">
         {/* Stage 1: Where to research */}
@@ -974,32 +961,8 @@ function MunicipalContactsCss() {
       .mc-wrap {
         max-width: 1280px;
         margin: 0 auto;
-        padding: 28px;
+        padding: 20px 28px 28px;
         color: var(--lb-text);
-      }
-      .mc-header {
-        margin-bottom: 22px;
-      }
-      .mc-eyebrow {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: var(--lb-text-3);
-      }
-      .mc-title {
-        font-family: var(--lb-font-display);
-        font-size: 30px;
-        font-weight: 800;
-        letter-spacing: -0.02em;
-        margin: 4px 0 6px;
-        color: var(--lb-text);
-      }
-      .mc-sub {
-        max-width: 720px;
-        font-size: 14px;
-        color: var(--lb-text-2);
-        margin: 0;
       }
 
       /* Form — three-stage layout (Where → What → How many) */

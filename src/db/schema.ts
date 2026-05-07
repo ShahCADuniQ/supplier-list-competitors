@@ -755,3 +755,132 @@ export type NewMunicipalitySearch = typeof municipalitySearches.$inferInsert;
 export type MunicipalityContact = typeof municipalityContacts.$inferSelect;
 export type NewMunicipalityContact = typeof municipalityContacts.$inferInsert;
 export type MunicipalityContactExport = typeof municipalityContactExports.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MUNICIPAL CONTACT LIST — Tools / static directory of every Quebec
+// municipality, seeded from the MAMH "Répertoire des municipalités" CSV.
+// One row per municipality (~1,100 rows). Unlike `municipality_contacts`,
+// which is generated on-demand by Perplexity + Claude, this table is a
+// curated reference list the user can filter/edit/extend over time.
+//
+// Council members are stored as a JSONB array because the source CSV has
+// up to 75 councillor columns most of which are empty — flattening them
+// into named columns would waste schema. Other admin roles (DG, treasurer,
+// clerk, fire, public works, etc.) are kept as named columns so they're
+// easy to filter on in SQL and surface in the UI.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const municipalityListEntries = pgTable(
+  "municipality_list_entries",
+  {
+    id: serial("id").primaryKey(),
+    // Source code from MAMH CSV (mcode). Unique so re-running the import
+    // upserts rather than duplicates. Null for user-added entries.
+    sourceCode: text("source_code"),
+
+    // Name + designation
+    name: text("name").notNull(),
+    designationCode: integer("designation_code"), // mcodedesi
+    designation: text("designation"), // mdes ("Ville", "Municipalité", "Paroisse", "Canton", ...)
+    gentile: text("gentile"), // residents' demonym
+
+    // Contact
+    email: text("email"),
+    website: text("website"),
+    phone: text("phone"),
+    fax: text("fax"),
+
+    // Address
+    addressLine: text("address_line"),
+    addressCity: text("address_city"),
+    addressPostal: text("address_postal"),
+
+    // Geography
+    region: text("region"), // regadm
+    mrc: text("mrc"),
+    mrcFull: text("mrc_full"),
+
+    // Stats
+    areaKm2: numeric("area_km2"),
+    population: integer("population"),
+
+    // Election + governance
+    dateIncorporation: text("date_incorporation"),
+    dateElection: text("date_election"),
+    electionMode: text("election_mode"),
+    circonscription: text("circonscription"),
+
+    // Mayor
+    mayor: text("mayor"),
+
+    // Councillors — array of names (variable length, ~6 typical)
+    councillors: jsonb("councillors").$type<string[]>(),
+
+    // Administrative staff (key roles)
+    directorGeneral: text("director_general"),
+    deputyDg: text("deputy_dg"),
+    treasurer: text("treasurer"),
+    clerk: text("clerk"),
+    policeChief: text("police_chief"),
+    fireChief: text("fire_chief"),
+    recreationDirector: text("recreation_director"),
+    publicWorksDirector: text("public_works_director"),
+    emergencyMeasures: text("emergency_measures"),
+    urbanPlanner: text("urban_planner"),
+    communications: text("communications"),
+    permits: text("permits"),
+    buildingInspector: text("building_inspector"),
+
+    // User-managed metadata
+    notes: text("notes"),
+    // false for cards the user added manually after import; lets us avoid
+    // overwriting hand-edited rows on re-import.
+    isImported: boolean("is_imported").notNull().default(true),
+
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    sourceCodeIdx: uniqueIndex("municipality_list_entries_source_code_idx").on(
+      t.sourceCode,
+    ),
+    nameIdx: index("municipality_list_entries_name_idx").on(t.name),
+    regionIdx: index("municipality_list_entries_region_idx").on(t.region),
+    mrcIdx: index("municipality_list_entries_mrc_idx").on(t.mrc),
+    designationIdx: index("municipality_list_entries_designation_idx").on(
+      t.designation,
+    ),
+  }),
+);
+
+export type MunicipalityListEntry =
+  typeof municipalityListEntries.$inferSelect;
+export type NewMunicipalityListEntry =
+  typeof municipalityListEntries.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-USER EXPORT TRACKING for the curated municipal list — same shape as
+// `municipality_contact_exports` but pointing at `municipality_list_entries`.
+// Drives the "↓ HubSpot — N new" button label: each user has their own
+// "what have I exported?" view, so user A pulling the full directory still
+// leaves user B's "new" count intact.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const municipalityListExports = pgTable(
+  "municipality_list_exports",
+  {
+    entryId: integer("entry_id")
+      .notNull()
+      .references(() => municipalityListEntries.id, { onDelete: "cascade" }),
+    clerkUserId: text("clerk_user_id").notNull(),
+    exportedAt: timestamp("exported_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.entryId, t.clerkUserId] }),
+    userIdx: index("municipality_list_exports_user_idx").on(t.clerkUserId),
+  }),
+);
+
+export type MunicipalityListExport =
+  typeof municipalityListExports.$inferSelect;
