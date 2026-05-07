@@ -33,7 +33,10 @@ export const CONTACT_CATEGORIES = [
   { code: "other", label: "Other" },
 ] as const;
 
-export const COUNT_OPTIONS = [5, 10, 25, 50, 100] as const;
+/** Quick-pick chips next to the count input. Free-form values work too. */
+export const COUNT_OPTIONS = [5, 10, 25, 50, 100, 200] as const;
+export const COUNT_MIN = 1;
+export const COUNT_MAX = 200;
 
 export type CategoryCode = (typeof CONTACT_CATEGORIES)[number]["code"];
 

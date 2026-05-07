@@ -11,6 +11,8 @@ import {
   SCOPE_TYPES,
   CONTACT_CATEGORIES,
   COUNT_OPTIONS,
+  COUNT_MIN,
+  COUNT_MAX,
   categoryLabel,
 } from "./constants";
 import {
@@ -287,22 +289,50 @@ export default function MunicipalContactsView({
           </div>
 
           <div className="mc-field">
-            <span className="mc-label">Quantity</span>
-            <div className="mc-pills">
-              {COUNT_OPTIONS.map((n) => {
-                const active = count === n;
-                return (
-                  <button
-                    key={n}
-                    type="button"
-                    className={`mc-pill ${active ? "mc-pill-on" : ""}`}
-                    onClick={() => setCount(n)}
-                    disabled={busy}
-                  >
-                    {n}
-                  </button>
-                );
-              })}
+            <span className="mc-label">
+              Quantity
+              <span className="mc-hint">
+                Pick a quick value or type any number from {COUNT_MIN}–{COUNT_MAX}
+              </span>
+            </span>
+            <div className="mc-count-row">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={COUNT_MIN}
+                max={COUNT_MAX}
+                value={count}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  if (Number.isFinite(n)) setCount(n);
+                  else if (e.target.value === "") setCount(COUNT_MIN);
+                }}
+                onBlur={(e) => {
+                  // Clamp on blur so an out-of-range typed value snaps back.
+                  const n = parseInt(e.target.value, 10);
+                  if (!Number.isFinite(n) || n < COUNT_MIN) setCount(COUNT_MIN);
+                  else if (n > COUNT_MAX) setCount(COUNT_MAX);
+                }}
+                disabled={busy}
+                className="mc-input mc-count-input"
+                aria-label="Quantity"
+              />
+              <div className="mc-pills">
+                {COUNT_OPTIONS.map((n) => {
+                  const active = count === n;
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      className={`mc-pill ${active ? "mc-pill-on" : ""}`}
+                      onClick={() => setCount(n)}
+                      disabled={busy}
+                    >
+                      {n}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -673,6 +703,22 @@ function MunicipalContactsCss() {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
+      }
+      .mc-count-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .mc-count-input {
+        width: 88px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+      .mc-count-input::-webkit-outer-spin-button,
+      .mc-count-input::-webkit-inner-spin-button {
+        opacity: 1;
       }
       .mc-pill {
         display: inline-flex;

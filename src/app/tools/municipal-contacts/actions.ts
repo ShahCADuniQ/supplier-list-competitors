@@ -38,7 +38,7 @@ import {
   hasClaudeKey,
 } from "@/lib/ai/claude";
 import { getOrCreateProfile, canEdit } from "@/lib/permissions";
-import { SCOPE_TYPES, COUNT_OPTIONS } from "./constants";
+import { SCOPE_TYPES, COUNT_MIN, COUNT_MAX } from "./constants";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC TYPES
@@ -304,13 +304,18 @@ export async function generateMunicipalContacts(
       ` scope=${scopeTypes.join(",") || "all"}`,
   );
 
+  // Budget per record × count + overhead. Each record is ~150 output tokens
+  // (12 string fields + JSON shape). For 200 records this is ~30k; clamped
+  // to 32k since most providers cap there.
+  const maxTokens = Math.min(32_000, 1500 + count * 180);
+
   const r = await perplexityChat<{ contacts: PerplexityContact[] }>({
     systemPrompt:
       "You are a public-records research assistant. Return only valid JSON matching the schema. Use ONLY publicly-listed municipal contacts (city hall directories, official .ca / .gov.qc.ca pages). Do not include personal cell numbers or unverified emails.",
     userPrompt,
     schema: PERPLEXITY_SCHEMA,
     schemaName: "municipal_contacts",
-    maxTokens: 8000,
+    maxTokens,
     // Light bias toward .ca and .gouv domains — Perplexity treats this as
     // a hint, not a hard filter.
     searchDomains: ["ca", "gouv.qc.ca", "gc.ca"],
@@ -399,12 +404,10 @@ export async function deleteMunicipalityContact(
 
 function clampCount(n: number): number {
   if (!Number.isFinite(n)) return 25;
-  if (n < 5) return 5;
-  if (n > 100) return 100;
-  // Snap to one of the allowed options for consistency with the UI.
-  return COUNT_OPTIONS.reduce((closest, opt) =>
-    Math.abs(opt - n) < Math.abs(closest - n) ? opt : closest,
-  );
+  const r = Math.round(n);
+  if (r < COUNT_MIN) return COUNT_MIN;
+  if (r > COUNT_MAX) return COUNT_MAX;
+  return r;
 }
 
 function scopeTypeText(scopeTypes: string[]): string {
