@@ -1670,8 +1670,23 @@ const COMPETITOR_CSS = `
 .cm-app .stat-row{display:flex;align-items:center;gap:8px;font-size:12.5px}
 .cm-app .stat-row-bar{flex:1;position:relative;background:var(--accent-bg);border:1px solid var(--accent-border);border-radius:5px;height:22px;overflow:hidden;display:flex;align-items:center}
 .cm-app .stat-row-fill{position:absolute;inset:0 auto 0 0;background:var(--accent-bg);border-right:1px solid var(--accent-border)}
-.cm-app .stat-row-label{position:relative;padding:0 8px;color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+/* ── Stacked, brand-coloured fill — replaces the single-block fill so each
+     row visually breaks down which brands contributed. ── */
+.cm-app .stat-row-fill-stack{position:absolute;inset:0 auto 0 0;display:flex;height:100%;border-right:1px solid var(--accent-border);overflow:hidden;opacity:.78}
+.cm-app .stat-row-seg{flex:1 1 auto;min-width:2px;height:100%}
+.cm-app .stat-row-seg + .stat-row-seg{border-left:1px solid rgba(255,255,255,.18)}
+.cm-app .stat-row-label{position:relative;padding:0 8px;color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;text-shadow:0 1px 1px rgba(0,0,0,.35)}
 .cm-app .stat-row-count{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:24px;text-align:right}
+
+/* ── Brand-colour legend (top of Summary view) ── */
+.cm-app .sv-legend{display:flex;flex-wrap:wrap;gap:8px;margin:-4px 0 18px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:10px}
+.cm-app .sv-legend-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px 3px 8px;background:var(--accent-bg);border:1px solid var(--border);border-radius:14px;font-size:11.5px;color:var(--text);font-weight:500;line-height:1.3}
+.cm-app .sv-legend-dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.12)}
+.cm-app .sv-legend-name{white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.cm-app .sv-legend-count{margin-left:2px;color:var(--muted);font-size:10.5px;font-variant-numeric:tabular-nums}
+
+/* Brand-coloured dot for product / drilldown labels. */
+.cm-app .sv-product-brand-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;box-shadow:0 0 0 1px rgba(0,0,0,.12)}
 
 /* ── Benchmark AI panel ── */
 .cm-app .bm-ai{background:var(--accent-bg)}

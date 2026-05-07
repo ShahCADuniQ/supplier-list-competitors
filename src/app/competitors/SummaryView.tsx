@@ -28,12 +28,15 @@ type StatRow = {
   value: string;
   count: number;
   productRefs: ProductRef[];
+  /** Per-brand contribution: how many products from each brand had this value.
+   *  Used to render a stacked, brand-coloured bar. */
+  brandCounts: Map<string, number>;
 };
 
 /**
  * Tally a list of (value, productRef) tuples into stat rows. Normalizes case
- * so "Surface" / "surface" / "SURFACE" merge into one row, and tracks which
- * products contributed to each row so the UI can drill in.
+ * so "Surface" / "surface" / "SURFACE" merge into one row, tracks which
+ * products contributed, and totals per-brand mentions for stacked-bar rendering.
  */
 function tallyWithRefs(
   pairs: Array<{ value: string; productRef: ProductRef }>,
@@ -52,6 +55,10 @@ function tallyWithRefs(
     }
     if (ex) {
       ex.count += 1;
+      ex.brandCounts.set(
+        productRef.brandName,
+        (ex.brandCounts.get(productRef.brandName) ?? 0) + 1,
+      );
       if (!refSet.has(productRef.id)) {
         ex.productRefs.push(productRef);
         refSet.add(productRef.id);
@@ -61,11 +68,29 @@ function tallyWithRefs(
         value: t,
         count: 1,
         productRefs: [productRef],
+        brandCounts: new Map([[productRef.brandName, 1]]),
       });
       refSet.add(productRef.id);
     }
   }
   return [...counts.values()].sort((a, b) => b.count - a.count);
+}
+
+/**
+ * Assign each brand a deterministic, visually-distinct colour by walking the
+ * HSL hue circle in golden-angle steps. Brands sorted alphabetically by name
+ * so colours stay stable across renders even if the input order shifts.
+ */
+function computeBrandColors(
+  brands: { id: number; name: string }[],
+): Map<string, string> {
+  const sorted = [...brands].sort((a, b) => a.name.localeCompare(b.name));
+  const m = new Map<string, string>();
+  sorted.forEach((b, i) => {
+    const hue = Math.round((i * 137.508) % 360);
+    m.set(b.name, `hsl(${hue}, 65%, 52%)`);
+  });
+  return m;
 }
 
 function pickSpec(p: CompetitorProduct, key: string): string[] {
@@ -114,6 +139,10 @@ export default function SummaryView({
     for (const b of brands) m.set(b.id, b.name);
     return m;
   }, [brands]);
+
+  // Stable colour-per-brand for the legend, stat-card stacked bars, "All
+  // products" brand labels, drill-down dots, and Top-brands panel.
+  const brandColorByName = useMemo(() => computeBrandColors(brands), [brands]);
 
   // Auto-tallied "market standard" stats with product-ref tracking so each
   // value is clickable to drill into the contributing products.
@@ -287,6 +316,28 @@ export default function SummaryView({
         </div>
       </div>
 
+      {brands.length > 0 && (
+        <div className="sv-legend" role="list" aria-label="Brand colour legend">
+          {[...brands]
+            .sort((a, b) => b.products.length - a.products.length)
+            .map((b) => (
+              <span
+                key={b.id}
+                role="listitem"
+                className="sv-legend-chip"
+                title={`${b.name} — ${b.products.length} product${b.products.length === 1 ? "" : "s"}`}
+              >
+                <span
+                  className="sv-legend-dot"
+                  style={{ background: brandColorByName.get(b.name) ?? "var(--accent)" }}
+                />
+                <span className="sv-legend-name">{b.name}</span>
+                <span className="sv-legend-count">{b.products.length}</span>
+              </span>
+            ))}
+        </div>
+      )}
+
       {products.length > 0 && (
         <section className="sv-products">
           <div className="sv-products-head">
@@ -335,7 +386,16 @@ export default function SummaryView({
                       )}
                     </div>
                     <div className="sv-product-info">
-                      <div className="sv-product-brand">{b.name}</div>
+                      <div
+                        className="sv-product-brand"
+                        style={{ color: brandColorByName.get(b.name) ?? undefined }}
+                      >
+                        <span
+                          className="sv-product-brand-dot"
+                          style={{ background: brandColorByName.get(b.name) ?? "var(--accent)" }}
+                        />
+                        {b.name}
+                      </div>
                       <div className="sv-product-name">{p.name}</div>
                       {p.productCode && (
                         <div className="sv-product-code">{p.productCode}</div>
@@ -378,37 +438,37 @@ export default function SummaryView({
       )}
 
       <div className="bm-grid">
-        <StatCard title="Profile face" rows={stats.profileFaceSizes} empty="No profile face size data yet — attach a spec PDF and click Refresh from files." onPick={(row) => setDrillDown({ cardTitle: "Profile face", row })} />
-        <StatCard title="Length" rows={stats.lengths} empty="No length data yet." onPick={(row) => setDrillDown({ cardTitle: "Length", row })} />
-        <StatCard title="Cut-out" rows={stats.cutouts} empty="No cut-out data yet." onPick={(row) => setDrillDown({ cardTitle: "Cut-out", row })} />
-        <StatCard title="UGR (glare)" rows={stats.ugrs} empty="No UGR data yet." onPick={(row) => setDrillDown({ cardTitle: "UGR (glare)", row })} />
-        <StatCard title="R9" rows={stats.r9s} empty="No R9 data yet." onPick={(row) => setDrillDown({ cardTitle: "R9", row })} />
-        <StatCard title="SDCM" rows={stats.sdcms} empty="No colour-consistency data yet." onPick={(row) => setDrillDown({ cardTitle: "SDCM", row })} />
-        <StatCard title="Lifespan" rows={stats.lifespans} empty="No lifespan data yet." onPick={(row) => setDrillDown({ cardTitle: "Lifespan", row })} />
-        <StatCard title="Operating temp" rows={stats.operatingTemps} empty="No operating-temp data yet." onPick={(row) => setDrillDown({ cardTitle: "Operating temp", row })} />
-        <StatCard title="Housing material" rows={stats.housings} empty="No housing-material data yet." onPick={(row) => setDrillDown({ cardTitle: "Housing material", row })} />
-        <StatCard title="Country of origin" rows={stats.origins} empty="No country-of-origin data yet." onPick={(row) => setDrillDown({ cardTitle: "Country of origin", row })} />
-        <StatCard title="Warranty" rows={stats.warranties} empty="No warranty data yet." onPick={(row) => setDrillDown({ cardTitle: "Warranty", row })} />
-        <StatCard title="Mounting" rows={stats.mounting} empty="Mounting not yet extracted on any product." onPick={(row) => setDrillDown({ cardTitle: "Mounting", row })} />
-        <StatCard title="Lens / Optic" rows={stats.lensType} empty="Lens type not yet extracted on any product." onPick={(row) => setDrillDown({ cardTitle: "Lens / Optic", row })} />
-        <StatCard title="Orientation" rows={stats.orientation} empty="No orientation data yet (Direct / Indirect)." onPick={(row) => setDrillDown({ cardTitle: "Orientation", row })} />
-        <StatCard title="Driver location" rows={stats.driverLocation} empty="Internal vs External driver — no data yet." onPick={(row) => setDrillDown({ cardTitle: "Driver location", row })} />
-        <StatCard title="Dimming" rows={stats.dimming} empty="No dimming protocol data yet." onPick={(row) => setDrillDown({ cardTitle: "Dimming", row })} />
-        <StatCard title="Customization" rows={stats.customization} empty="No customization data yet." onPick={(row) => setDrillDown({ cardTitle: "Customization", row })} />
-        <StatCard title="Accessories" rows={stats.accessories} empty="No accessory data yet." onPick={(row) => setDrillDown({ cardTitle: "Accessories", row })} />
-        <StatCard title="Categories" rows={stats.categories} empty="No categories yet." onPick={(row) => setDrillDown({ cardTitle: "Categories", row })} />
-        <StatCard title="Max length" rows={stats.maxLengths} empty="No max-length data yet." onPick={(row) => setDrillDown({ cardTitle: "Max length", row })} />
-        <StatCard title="IP Rating" rows={stats.ip} empty="No IP data yet." onPick={(row) => setDrillDown({ cardTitle: "IP Rating", row })} />
-        <StatCard title="CCT" rows={stats.cct} empty="No CCT data yet." onPick={(row) => setDrillDown({ cardTitle: "CCT", row })} />
-        <StatCard title="Wattage" rows={stats.wattage} empty="No wattage data yet." onPick={(row) => setDrillDown({ cardTitle: "Wattage", row })} />
-        <StatCard title="Lumens" rows={stats.lumens} empty="No lumen data yet." onPick={(row) => setDrillDown({ cardTitle: "Lumens", row })} />
-        <StatCard title="Efficacy (lm/W)" rows={stats.efficacy} empty="No efficacy data yet." onPick={(row) => setDrillDown({ cardTitle: "Efficacy", row })} />
-        <StatCard title="CRI" rows={stats.cri} empty="No CRI data yet." onPick={(row) => setDrillDown({ cardTitle: "CRI", row })} />
-        <StatCard title="Beam angle" rows={stats.beam} empty="No beam-angle data yet." onPick={(row) => setDrillDown({ cardTitle: "Beam angle", row })} />
-        <StatCard title="Voltage" rows={stats.voltage} empty="No voltage data yet." onPick={(row) => setDrillDown({ cardTitle: "Voltage", row })} />
-        <StatCard title="Finishes" rows={stats.finishes} empty="No finish data yet." onPick={(row) => setDrillDown({ cardTitle: "Finishes", row })} />
-        <StatCard title="Colors" rows={stats.colors} empty="No color data yet." onPick={(row) => setDrillDown({ cardTitle: "Colors", row })} />
-        <StatCard title="Certifications" rows={stats.certs} empty="No cert data yet." onPick={(row) => setDrillDown({ cardTitle: "Certifications", row })} />
+        <StatCard title="Profile face" rows={stats.profileFaceSizes} empty="No profile face size data yet — attach a spec PDF and click Refresh from files." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Profile face", row })} />
+        <StatCard title="Length" rows={stats.lengths} empty="No length data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Length", row })} />
+        <StatCard title="Cut-out" rows={stats.cutouts} empty="No cut-out data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Cut-out", row })} />
+        <StatCard title="UGR (glare)" rows={stats.ugrs} empty="No UGR data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "UGR (glare)", row })} />
+        <StatCard title="R9" rows={stats.r9s} empty="No R9 data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "R9", row })} />
+        <StatCard title="SDCM" rows={stats.sdcms} empty="No colour-consistency data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "SDCM", row })} />
+        <StatCard title="Lifespan" rows={stats.lifespans} empty="No lifespan data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Lifespan", row })} />
+        <StatCard title="Operating temp" rows={stats.operatingTemps} empty="No operating-temp data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Operating temp", row })} />
+        <StatCard title="Housing material" rows={stats.housings} empty="No housing-material data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Housing material", row })} />
+        <StatCard title="Country of origin" rows={stats.origins} empty="No country-of-origin data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Country of origin", row })} />
+        <StatCard title="Warranty" rows={stats.warranties} empty="No warranty data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Warranty", row })} />
+        <StatCard title="Mounting" rows={stats.mounting} empty="Mounting not yet extracted on any product." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Mounting", row })} />
+        <StatCard title="Lens / Optic" rows={stats.lensType} empty="Lens type not yet extracted on any product." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Lens / Optic", row })} />
+        <StatCard title="Orientation" rows={stats.orientation} empty="No orientation data yet (Direct / Indirect)." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Orientation", row })} />
+        <StatCard title="Driver location" rows={stats.driverLocation} empty="Internal vs External driver — no data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Driver location", row })} />
+        <StatCard title="Dimming" rows={stats.dimming} empty="No dimming protocol data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Dimming", row })} />
+        <StatCard title="Customization" rows={stats.customization} empty="No customization data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Customization", row })} />
+        <StatCard title="Accessories" rows={stats.accessories} empty="No accessory data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Accessories", row })} />
+        <StatCard title="Categories" rows={stats.categories} empty="No categories yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Categories", row })} />
+        <StatCard title="Max length" rows={stats.maxLengths} empty="No max-length data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Max length", row })} />
+        <StatCard title="IP Rating" rows={stats.ip} empty="No IP data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "IP Rating", row })} />
+        <StatCard title="CCT" rows={stats.cct} empty="No CCT data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "CCT", row })} />
+        <StatCard title="Wattage" rows={stats.wattage} empty="No wattage data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Wattage", row })} />
+        <StatCard title="Lumens" rows={stats.lumens} empty="No lumen data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Lumens", row })} />
+        <StatCard title="Efficacy (lm/W)" rows={stats.efficacy} empty="No efficacy data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Efficacy", row })} />
+        <StatCard title="CRI" rows={stats.cri} empty="No CRI data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "CRI", row })} />
+        <StatCard title="Beam angle" rows={stats.beam} empty="No beam-angle data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Beam angle", row })} />
+        <StatCard title="Voltage" rows={stats.voltage} empty="No voltage data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Voltage", row })} />
+        <StatCard title="Finishes" rows={stats.finishes} empty="No finish data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Finishes", row })} />
+        <StatCard title="Colors" rows={stats.colors} empty="No color data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Colors", row })} />
+        <StatCard title="Certifications" rows={stats.certs} empty="No cert data yet." brandColorByName={brandColorByName} onPick={(row) => setDrillDown({ cardTitle: "Certifications", row })} />
       </div>
 
       {drillDown && (
@@ -447,7 +507,24 @@ export default function SummaryView({
                     setDrillDown(null);
                   }}
                 >
-                  <div className="summary-drilldown-brand">{p.brandName || "—"}</div>
+                  <div
+                    className="summary-drilldown-brand"
+                    style={{
+                      color: p.brandName
+                        ? brandColorByName.get(p.brandName) ?? undefined
+                        : undefined,
+                    }}
+                  >
+                    <span
+                      className="sv-product-brand-dot"
+                      style={{
+                        background: p.brandName
+                          ? brandColorByName.get(p.brandName) ?? "var(--accent)"
+                          : "var(--muted)",
+                      }}
+                    />
+                    {p.brandName || "—"}
+                  </div>
                   <div className="summary-drilldown-name">{p.name}</div>
                   <span className="summary-drilldown-arrow">→</span>
                 </button>
@@ -461,23 +538,26 @@ export default function SummaryView({
         <div className="d-card">
           <h4>Top brands by catalog size</h4>
           <div className="stat-rows">
-            {topBrands.map((b) => (
-              <div key={b.name} className="stat-row">
-                <div className="stat-row-bar">
-                  <div
-                    className="stat-row-fill"
-                    style={{
-                      width: `${Math.max(
-                        4,
-                        (b.count / Math.max(1, topBrands[0].count)) * 100,
-                      )}%`,
-                    }}
-                  />
-                  <span className="stat-row-label">{b.name}</span>
+            {topBrands.map((b) => {
+              const color = brandColorByName.get(b.name) ?? "var(--accent)";
+              return (
+                <div key={b.name} className="stat-row">
+                  <div className="stat-row-bar">
+                    <div
+                      className="stat-row-fill"
+                      style={{
+                        width: `${Math.max(4, (b.count / Math.max(1, topBrands[0].count)) * 100)}%`,
+                        background: color,
+                        borderRight: "none",
+                        opacity: 0.78,
+                      }}
+                    />
+                    <span className="stat-row-label">{b.name}</span>
+                  </div>
+                  <span className="stat-row-count">{b.count}</span>
                 </div>
-                <span className="stat-row-count">{b.count}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -556,11 +636,13 @@ function StatCard({
   rows,
   empty,
   onPick,
+  brandColorByName,
 }: {
   title: string;
   rows: StatRow[];
   empty: string;
   onPick?: (row: StatRow) => void;
+  brandColorByName: Map<string, string>;
 }) {
   if (!rows.length) {
     return (
@@ -570,7 +652,9 @@ function StatCard({
       </div>
     );
   }
-  const total = rows.reduce((s, r) => s + r.count, 0);
+  // Bar widths scale to the row with the most mentions for this stat — so
+  // each card uses its own full width and rows stay comparable inside the card.
+  const maxCount = rows.reduce((m, r) => Math.max(m, r.count), 0) || 1;
   return (
     <div className="d-card stat-card">
       <h4>
@@ -579,24 +663,43 @@ function StatCard({
       </h4>
       <div className="stat-rows-scroll">
         <div className="stat-rows">
-          {rows.map((r) => (
-            <button
-              key={r.value}
-              type="button"
-              className="stat-row stat-row-clickable"
-              onClick={() => onPick?.(r)}
-              title={`Click to see the ${r.count} product${r.count === 1 ? "" : "s"} with this value`}
-            >
-              <div className="stat-row-bar">
-                <div
-                  className="stat-row-fill"
-                  style={{ width: `${Math.max(4, (r.count / total) * 100)}%` }}
-                />
-                <span className="stat-row-label">{r.value}</span>
-              </div>
-              <span className="stat-row-count">{r.count}</span>
-            </button>
-          ))}
+          {rows.map((r) => {
+            const segments = [...r.brandCounts.entries()]
+              .sort((a, b) => b[1] - a[1]);
+            const tooltip = segments
+              .map(([brand, c]) => `${brand}: ${c}`)
+              .join(" · ");
+            return (
+              <button
+                key={r.value}
+                type="button"
+                className="stat-row stat-row-clickable"
+                onClick={() => onPick?.(r)}
+                title={`${r.value} — ${tooltip}`}
+              >
+                <div className="stat-row-bar">
+                  <div
+                    className="stat-row-fill-stack"
+                    style={{ width: `${Math.max(4, (r.count / maxCount) * 100)}%` }}
+                  >
+                    {segments.map(([brand, c]) => (
+                      <span
+                        key={brand}
+                        className="stat-row-seg"
+                        style={{
+                          flex: c,
+                          background:
+                            brandColorByName.get(brand) ?? "var(--accent-bg)",
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <span className="stat-row-label">{r.value}</span>
+                </div>
+                <span className="stat-row-count">{r.count}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
