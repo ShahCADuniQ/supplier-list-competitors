@@ -82,7 +82,7 @@ function pickSpec(p: CompetitorProduct, key: string): string[] {
 
 export default function SummaryView({
   collection,
-  brands,
+  brands: rawBrands,
   canEdit,
   onToast,
 }: {
@@ -91,8 +91,14 @@ export default function SummaryView({
   canEdit: boolean;
   onToast: (msg: string, err?: boolean) => void;
 }) {
+  // Match BenchmarkView: brands with zero products are hidden everywhere
+  // (count, product grid, top-brands list, AI summary input). A brand row
+  // with no products has nothing to contribute to a benchmark summary.
+  const brands = useMemo(
+    () => rawBrands.filter((b) => b.products.length > 0),
+    [rawBrands],
+  );
   const products = useMemo(() => brands.flatMap((b) => b.products), [brands]);
-  // Selected product → opens the drawer (clicked from card grid OR drilldown).
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const productById = useMemo(() => {
     const m = new Map<number, { product: FullCompetitorProduct; brandName: string }>();
@@ -103,7 +109,6 @@ export default function SummaryView({
   }, [brands]);
   const selected = selectedProductId !== null ? productById.get(selectedProductId) : null;
 
-  // Build a brand-id → name map so we can label products with their brand.
   const brandNameById = useMemo(() => {
     const m = new Map<number, string>();
     for (const b of brands) m.set(b.id, b.name);
