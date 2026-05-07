@@ -439,6 +439,13 @@ export async function generateMunicipalContacts(
   // never clicks through to a dead page.
   const verified = await verifyContactUrls(categorized, citations);
 
+  // Fill missing services_summary fields with a per-record Perplexity
+  // follow-up call. Don't gate-and-reject incomplete rows here — users may
+  // intentionally want partial records — but every record we DO save should
+  // have a useful summary if we can produce one. Skipped silently if the
+  // follow-up fails.
+  await fillMissingServicesSummaries(verified);
+
   // Insert search row + contacts (single transaction-ish flow: parent first,
   // then bulk insert children).
   const [searchRow] = await db
@@ -565,6 +572,52 @@ async function verifyContactUrls(
       `dropped ${droppedSource} sourceUrl(s) and ${droppedWebsite} website(s) that 404'd`,
   );
   return out;
+}
+
+// Per-record services_summary follow-up. Runs in a small parallel pool so
+// a 50-record search doesn't take 2-3 minutes longer. Mutates the records
+// in place — empty or thin summaries (< 40 chars) are replaced with a
+// follow-up Perplexity reply.
+const SUMMARY_FILL_CONCURRENCY = 4;
+
+async function fillMissingServicesSummaries(
+  contacts: CategorizedContact[],
+): Promise<void> {
+  const todo = contacts.filter(
+    (c) => !c.servicesSummary || c.servicesSummary.trim().length < 40,
+  );
+  if (todo.length === 0) return;
+  console.log(
+    `[municipal-contacts] filling services_summary for ${todo.length} record(s)`,
+  );
+  const queue = [...todo];
+  async function worker() {
+    while (queue.length) {
+      const c = queue.shift();
+      if (!c) return;
+      try {
+        const r = await perplexityChat<string>({
+          systemPrompt:
+            "You are a public-records research assistant. Reply with 2-3 specific sentences in plain prose — no markdown, no bullets, no preamble.",
+          userPrompt: `Summarize what the "${c.department}" department of "${c.municipalityName}" (Canada) actually does — what services it offers, what projects it runs, who it serves. Be specific to this municipality based on what their website says.${
+            c.sourceUrl ? ` Their listing: ${c.sourceUrl}` : ""
+          }${c.website ? ` Their homepage: ${c.website}` : ""}`,
+          maxTokens: 600,
+        });
+        const summary = (r.content ?? "").trim().replace(/^"|"$/g, "");
+        if (summary.length >= 40) {
+          c.servicesSummary = summary;
+        }
+      } catch (e) {
+        console.warn(
+          `  summary fill failed for ${c.municipalityName}: ${(e as Error).message}`,
+        );
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: SUMMARY_FILL_CONCURRENCY }, () => worker()),
+  );
 }
 
 async function checkUrl(url: string): Promise<boolean> {
