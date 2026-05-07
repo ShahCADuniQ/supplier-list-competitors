@@ -668,6 +668,10 @@ export const municipalitySearches = pgTable(
     province: text("province").notNull(),
     // Comma-list of "city" | "town" | "village" | "municipality" | "all".
     scopeTypes: text("scope_types").notNull().default("all"),
+    // Comma-list of category codes ("engineering", "public-works",
+    // "administration", "elected", "other") to bias the Perplexity research
+    // toward, or "all" for no filter. Mirrors municipalityContacts.category.
+    sectors: text("sectors").notNull().default("all"),
     cityFilter: text("city_filter"), // optional: limit to one named municipality
     requestedCount: integer("requested_count").notNull().default(25),
     title: text("title"), // free-form label set by the user

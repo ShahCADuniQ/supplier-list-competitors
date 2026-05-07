@@ -9,11 +9,13 @@ import type {
 import {
   CANADIAN_PROVINCES,
   SCOPE_TYPES,
+  SECTOR_OPTIONS,
   CONTACT_CATEGORIES,
   COUNT_OPTIONS,
   COUNT_MIN,
   COUNT_MAX,
   categoryLabel,
+  sectorLabel,
 } from "./constants";
 import {
   generateMunicipalContacts,
@@ -37,6 +39,8 @@ export default function MunicipalContactsView({
   // ── Form state ──
   const [province, setProvince] = useState("Quebec");
   const [scopeTypes, setScopeTypes] = useState<string[]>([]); // [] = all
+  // Default to engineering — the user's original use-case. Empty list = all.
+  const [sectors, setSectors] = useState<string[]>(["engineering"]);
   const [cityFilter, setCityFilter] = useState("");
   const [count, setCount] = useState<number>(25);
   const [title, setTitle] = useState("");
@@ -96,6 +100,12 @@ export default function MunicipalContactsView({
     );
   }
 
+  function toggleSector(code: string) {
+    setSectors((s) =>
+      s.includes(code) ? s.filter((x) => x !== code) : [...s, code],
+    );
+  }
+
   async function handleGenerate() {
     if (!canEdit) {
       showToast("You don't have permission to generate.", true);
@@ -107,6 +117,7 @@ export default function MunicipalContactsView({
       const r = await generateMunicipalContacts({
         province,
         scopeTypes,
+        sectors,
         cityFilter: cityFilter.trim() || null,
         count,
         title: title.trim() || null,
@@ -288,6 +299,44 @@ export default function MunicipalContactsView({
             </div>
           </div>
 
+          <div className="mc-field mc-field-wide">
+            <span className="mc-label">
+              Sectors
+              <span className="mc-hint">
+                Restricts the research to these departments. Pick none to
+                let it return contacts from any sector.
+              </span>
+            </span>
+            <div className="mc-pills">
+              {SECTOR_OPTIONS.map((s) => {
+                const active = sectors.includes(s.code);
+                return (
+                  <button
+                    key={s.code}
+                    type="button"
+                    className={`mc-pill mc-pill-cat-${s.code} ${active ? "mc-pill-on" : ""}`}
+                    onClick={() => toggleSector(s.code)}
+                    disabled={busy}
+                    title={s.promptHint}
+                  >
+                    {s.label}
+                  </button>
+                );
+              })}
+              {sectors.length > 0 && (
+                <button
+                  type="button"
+                  className="mc-pill mc-pill-clear"
+                  onClick={() => setSectors([])}
+                  disabled={busy}
+                  title="Clear all — return contacts from any sector"
+                >
+                  All sectors
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="mc-field">
             <span className="mc-label">
               Quantity
@@ -391,6 +440,12 @@ export default function MunicipalContactsView({
                     {list.length === 1 ? "" : "s"} ·{" "}
                     {new Date(s.createdAt).toLocaleDateString()}
                     {s.cityFilter ? ` · ${s.cityFilter}` : ""}
+                    {s.sectors && s.sectors !== "all"
+                      ? ` · ${s.sectors
+                          .split(",")
+                          .map((c) => sectorLabel(c.trim()))
+                          .join(", ")}`
+                      : ""}
                   </div>
                   {canEdit && (
                     <span
@@ -747,12 +802,18 @@ function MunicipalContactsCss() {
         border-color: var(--lb-accent);
       }
 
-      /* Category-coloured pills */
+      /* Category / sector-coloured pills */
       .mc-pill-cat-engineering.mc-pill-on { background: hsl(28, 100%, 52%); border-color: hsl(28, 100%, 52%); color: #fff; }
       .mc-pill-cat-public-works.mc-pill-on { background: hsl(195, 80%, 48%); border-color: hsl(195, 80%, 48%); color: #fff; }
       .mc-pill-cat-administration.mc-pill-on { background: hsl(265, 60%, 60%); border-color: hsl(265, 60%, 60%); color: #fff; }
       .mc-pill-cat-elected.mc-pill-on { background: hsl(345, 75%, 55%); border-color: hsl(345, 75%, 55%); color: #fff; }
+      .mc-pill-cat-planning.mc-pill-on { background: hsl(45, 95%, 50%); border-color: hsl(45, 95%, 50%); color: #1a1a1a; }
+      .mc-pill-cat-parks.mc-pill-on { background: hsl(135, 55%, 45%); border-color: hsl(135, 55%, 45%); color: #fff; }
+      .mc-pill-cat-environment.mc-pill-on { background: hsl(155, 65%, 38%); border-color: hsl(155, 65%, 38%); color: #fff; }
+      .mc-pill-cat-fire.mc-pill-on { background: hsl(8, 80%, 52%); border-color: hsl(8, 80%, 52%); color: #fff; }
+      .mc-pill-cat-police.mc-pill-on { background: hsl(220, 60%, 45%); border-color: hsl(220, 60%, 45%); color: #fff; }
       .mc-pill-cat-other.mc-pill-on { background: hsl(160, 35%, 50%); border-color: hsl(160, 35%, 50%); color: #fff; }
+      .mc-pill-clear { font-style: italic; opacity: 0.85; }
 
       .mc-form-actions {
         display: flex;
@@ -951,6 +1012,11 @@ function MunicipalContactsCss() {
       .mc-cat-tag.mc-pill-cat-public-works { background: hsl(195, 80%, 48%); }
       .mc-cat-tag.mc-pill-cat-administration { background: hsl(265, 60%, 60%); }
       .mc-cat-tag.mc-pill-cat-elected { background: hsl(345, 75%, 55%); }
+      .mc-cat-tag.mc-pill-cat-planning { background: hsl(45, 95%, 50%); color: #1a1a1a; }
+      .mc-cat-tag.mc-pill-cat-parks { background: hsl(135, 55%, 45%); }
+      .mc-cat-tag.mc-pill-cat-environment { background: hsl(155, 65%, 38%); }
+      .mc-cat-tag.mc-pill-cat-fire { background: hsl(8, 80%, 52%); }
+      .mc-cat-tag.mc-pill-cat-police { background: hsl(220, 60%, 45%); }
       .mc-cat-tag.mc-pill-cat-other { background: hsl(160, 35%, 50%); }
 
       .mc-contact-role {

@@ -38,7 +38,13 @@ import {
   hasClaudeKey,
 } from "@/lib/ai/claude";
 import { getOrCreateProfile, canEdit } from "@/lib/permissions";
-import { SCOPE_TYPES, COUNT_MIN, COUNT_MAX } from "./constants";
+import {
+  SCOPE_TYPES,
+  SECTOR_OPTIONS,
+  ALL_SECTOR_CODES,
+  COUNT_MIN,
+  COUNT_MAX,
+} from "./constants";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC TYPES
@@ -47,8 +53,9 @@ import { SCOPE_TYPES, COUNT_MIN, COUNT_MAX } from "./constants";
 export type GenerateInput = {
   province: string; // full province name, e.g. "Quebec"
   scopeTypes: string[]; // any subset of SCOPE_TYPES.code, or [] = "all"
+  sectors: string[]; // any subset of SECTOR_OPTIONS.code, or [] = "all"
   cityFilter?: string | null; // optional municipality name (prefix match in prompt)
-  count: number; // 5 / 10 / 25 / 50 / 100
+  count: number;
   title?: string | null;
   notes?: string | null;
 };
@@ -134,14 +141,13 @@ async function categorizeWithClaude(
     return raw.map((c) => ({ ...c, category: keywordCategory(c) }));
   }
   const client = claudeClient();
-  const systemPrompt = `You are normalizing a list of Canadian municipal contacts. For each input record, return one record with EVERY field plus a "category" — one of:
-  • "engineering" — Engineering department, City Engineer, Director of Engineering, traffic / civil / municipal engineering
-  • "public-works" — Public Works / Travaux publics, infrastructure, road maintenance, water/sewer
-  • "administration" — Mayor's office, City Manager / DG, Town Clerk / Greffier, City Hall, finance, HR
-  • "elected" — Mayor, Councillors, Conseillers
-  • "other" — anything else (parks, library, fire, police, planning if not engineering)
+  const sectorBullets = SECTOR_OPTIONS.map(
+    (s) => `  • "${s.code}" — ${s.promptHint}`,
+  ).join("\n");
+  const systemPrompt = `You are normalizing a list of Canadian municipal contacts. For each input record, return one record with EVERY field plus a "category" chosen from this fixed set:
+${sectorBullets}
 
-Trim and clean every field. Keep email / phone digits readable; strip "mailto:" prefixes; collapse whitespace. If a field is unknown, use empty string. Don't invent fields.`;
+Pick the BEST single bucket. Trim and clean every field. Keep email / phone digits readable; strip "mailto:" prefixes; collapse whitespace. If a field is unknown, use empty string. Don't invent fields.`;
 
   const userPrompt = `Normalize and categorize:\n\n${JSON.stringify(raw, null, 2)}`;
 
@@ -172,13 +178,7 @@ Trim and clean every field. Keep email / phone digits readable; strip "mailto:" 
                 notes: { type: "string" },
                 category: {
                   type: "string",
-                  enum: [
-                    "engineering",
-                    "public-works",
-                    "administration",
-                    "elected",
-                    "other",
-                  ],
+                  enum: [...ALL_SECTOR_CODES],
                 },
               },
               required: [
@@ -238,6 +238,33 @@ Trim and clean every field. Keep email / phone digits readable; strip "mailto:" 
 
 function keywordCategory(c: PerplexityContact): string {
   const hay = `${c.department} ${c.role} ${c.notes}`.toLowerCase();
+  if (/police|service[\s-]?de[\s-]?police|chief[\s-]?of[\s-]?police/.test(hay)) {
+    return "police";
+  }
+  if (
+    /fire[\s-]?chief|service[\s-]?d?[ ’']?incendie|sécurité[\s-]?incendie|emergency[\s-]?services|civil[\s-]?security|public[\s-]?safety/.test(
+      hay,
+    )
+  ) {
+    return "fire";
+  }
+  if (
+    /environment|environnement|sustainab|sanitation|matières[\s-]?résiduelles|recycl|climate|développement[\s-]?durable/.test(
+      hay,
+    )
+  ) {
+    return "environment";
+  }
+  if (/parks|parcs|recreation|loisirs|sports/.test(hay)) {
+    return "parks";
+  }
+  if (
+    /planning|urbanisme|urbaniste|land[\s-]?use|zoning|permits?|aménagement/.test(
+      hay,
+    )
+  ) {
+    return "planning";
+  }
   if (
     /engineer|génie|ingénieur|ingenieur|ing\./i.test(hay) ||
     /civil|traffic|geomatics|municipal[\s-]?engineering/.test(hay)
@@ -245,7 +272,7 @@ function keywordCategory(c: PerplexityContact): string {
     return "engineering";
   }
   if (
-    /public[\s-]?works|travaux[\s-]?publics|water|sewer|road|infrastructure/.test(
+    /public[\s-]?works|travaux[\s-]?publics|water|sewer|wastewater|road|infrastructure|voirie/.test(
       hay,
     )
   ) {
@@ -287,13 +314,18 @@ export async function generateMunicipalContacts(
   const count = clampCount(input.count);
   const scopeTypes = (input.scopeTypes ?? []).filter(Boolean);
   const scopeText = scopeTypeText(scopeTypes);
+  // Sectors: empty list means "all sectors" — same convention as scope.
+  const sectors = (input.sectors ?? []).filter((s) =>
+    ALL_SECTOR_CODES.includes(s),
+  );
   const cityFilter = (input.cityFilter ?? "").trim() || null;
 
   // Build the Perplexity prompt — explicit about only Canada, only public
-  // contacts, only the requested scope, and the categories we want filled.
+  // contacts, only the requested scope, and the sectors we want filled.
   const userPrompt = buildPerplexityPrompt({
     province,
     scopeText,
+    sectors,
     cityFilter,
     count,
   });
@@ -301,7 +333,8 @@ export async function generateMunicipalContacts(
   console.log(
     `[municipal-contacts] generating ${count} contacts for ${province}` +
       (cityFilter ? ` (filter: ${cityFilter})` : "") +
-      ` scope=${scopeTypes.join(",") || "all"}`,
+      ` scope=${scopeTypes.join(",") || "all"}` +
+      ` sectors=${sectors.join(",") || "all"}`,
   );
 
   // Budget per record × count + overhead. Each record is ~150 output tokens
@@ -339,6 +372,7 @@ export async function generateMunicipalContacts(
       country: "Canada",
       province,
       scopeTypes: scopeTypes.length ? scopeTypes.join(",") : "all",
+      sectors: sectors.length ? sectors.join(",") : "all",
       cityFilter,
       requestedCount: count,
       title: (input.title ?? "").trim() || null,
@@ -421,21 +455,41 @@ function scopeTypeText(scopeTypes: string[]): string {
 function buildPerplexityPrompt(args: {
   province: string;
   scopeText: string;
+  sectors: string[];
   cityFilter: string | null;
   count: number;
 }): string {
-  const { province, scopeText, cityFilter, count } = args;
+  const { province, scopeText, sectors, cityFilter, count } = args;
+
+  // Compose the "sectors to look for" block. Empty array → ask for engineering
+  // and admin first (the original default), but allow any. A non-empty list
+  // becomes a strict whitelist with the long-form prompt hints inlined.
+  const sectorBlock =
+    sectors.length === 0
+      ? `Sectors of interest (no hard filter — return any of these, with the first two being the priority):
+  1. Engineering / génie municipal (Director of Engineering, City Engineer, Chief Engineer, Civil Engineer, Traffic Engineer)
+  2. Public Works / Travaux publics (Director of Public Works, infrastructure, water / sewer)
+  3. Administration (Mayor, City Manager, Director General / DG, Town Clerk / Greffier)
+  4. Other relevant departments only if the above don't fill the count`
+      : `Sectors REQUESTED (return contacts for these sectors only — exclude every other department):
+${sectors
+  .map((code, i) => {
+    const opt = SECTOR_OPTIONS.find((s) => s.code === code);
+    return `  ${i + 1}. ${opt?.label ?? code} — ${opt?.promptHint ?? ""}`;
+  })
+  .join("\n")}
+
+If a municipality has no contact in any of the requested sectors, skip it and pick the next municipality.`;
+
   return `Find ${count} verified public contacts for municipalities in ${province}, Canada${
-    cityFilter ? ` (focus on the municipality named "${cityFilter}" — return contacts only for that municipality and its closest neighbours)` : ""
+    cityFilter
+      ? ` (focus on the municipality named "${cityFilter}" — return contacts only for that municipality and its closest neighbours)`
+      : ""
   }.
 
 Scope: ${scopeText}.
 
-Prioritize contacts for these departments, in this order of preference:
-  1. Engineering / génie municipal (Director of Engineering, City Engineer, Chief Engineer, Civil Engineer, Traffic Engineer)
-  2. Public Works / Travaux publics (Director of Public Works, infrastructure, water / sewer)
-  3. Administration (Mayor, City Manager, Director General / DG, Town Clerk / Greffier)
-  4. Other relevant departments only if the above don't fill the count
+${sectorBlock}
 
 For each contact, return:
   - municipalityName: the municipality name as written on its website (e.g. "Ville de Saint-Hyacinthe", "Town of Mont-Royal").
@@ -455,7 +509,7 @@ CRITICAL rules:
   - Only publicly-listed contacts. No personal cells, no unverified emails.
   - Do not invent. If you cannot verify a field on the source page, use empty string.
   - Each contact must be a different person OR the same person at a different role/department only if both are public.
-  - Be exhaustive across municipalities — don't return 30 contacts all from one big city; spread across the province where the count permits.
+  - Be exhaustive across municipalities — don't return ${count} contacts all from one big city; spread across the province where the count permits.
 
 Return JSON: { "contacts": [{ municipalityName, municipalityType, department, role, name, email, phone, address, website, sourceUrl, notes }] }`;
 }
