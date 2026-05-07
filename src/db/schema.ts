@@ -725,7 +725,33 @@ export const municipalityContacts = pgTable(
   }),
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-USER HUBSPOT EXPORT TRACKING
+//
+// Each user has their own "what have I exported?" view. So if user A pulls
+// the full directory into HubSpot, user B still sees every contact as "new"
+// for their own pipeline. Many-to-many between contacts and clerk users.
+// Row gets inserted (or its exported_at refreshed) the first time the user
+// downloads that contact.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const municipalityContactExports = pgTable(
+  "municipality_contact_exports",
+  {
+    contactId: integer("contact_id")
+      .notNull()
+      .references(() => municipalityContacts.id, { onDelete: "cascade" }),
+    clerkUserId: text("clerk_user_id").notNull(),
+    exportedAt: timestamp("exported_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.contactId, t.clerkUserId] }),
+    userIdx: index("municipality_contact_exports_user_idx").on(t.clerkUserId),
+  }),
+);
+
 export type MunicipalitySearch = typeof municipalitySearches.$inferSelect;
 export type NewMunicipalitySearch = typeof municipalitySearches.$inferInsert;
 export type MunicipalityContact = typeof municipalityContacts.$inferSelect;
 export type NewMunicipalityContact = typeof municipalityContacts.$inferInsert;
+export type MunicipalityContactExport = typeof municipalityContactExports.$inferSelect;

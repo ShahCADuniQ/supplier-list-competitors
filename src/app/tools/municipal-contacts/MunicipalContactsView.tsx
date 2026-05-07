@@ -266,13 +266,13 @@ export default function MunicipalContactsView({
 
   const [exportBusy, setExportBusy] = useState(false);
 
-  async function handleHubspotExport(mode: "new" | "all") {
+  async function handleHubspotExport(mode: "new" | "all" | "everything") {
     if (!activeSearch) return;
     setExportBusy(true);
     try {
       const r = await exportToHubspot({ searchId: activeSearch.id, mode });
       if (r.exportedCount === 0) {
-        showToast("No new leads to export", false);
+        showToast("Nothing to export", false);
         return;
       }
       const blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
@@ -591,31 +591,40 @@ export default function MunicipalContactsView({
               </div>
             </div>
             <div className="mc-results-actions">
-              {/* HubSpot export — primary path. Smart label: shows "N new"
-                  when there are unexported leads, otherwise "Re-export all". */}
-              {exportCounts.notExported > 0 ? (
-                <button
-                  type="button"
-                  className="mc-btn mc-btn-primary"
-                  onClick={() => handleHubspotExport("new")}
-                  disabled={exportBusy || exportCounts.notExported === 0}
-                  title={`Download ${exportCounts.notExported} unexported contact${exportCounts.notExported === 1 ? "" : "s"} as a HubSpot-ready CSV. Already-exported contacts are skipped.`}
-                >
-                  {exportBusy
-                    ? "Exporting…"
-                    : `↓ HubSpot — ${exportCounts.notExported} new`}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="mc-btn"
-                  onClick={() => handleHubspotExport("all")}
-                  disabled={exportBusy || exportCounts.total === 0}
-                  title="All contacts have already been exported. Click to re-download the full list (will refresh export timestamps)."
-                >
-                  {exportBusy ? "Exporting…" : `↓ HubSpot — re-export all (${exportCounts.total})`}
-                </button>
-              )}
+              {/* Primary HubSpot export — adapts to the user's export
+                  state. Shows "N new" when there are unexported-by-me
+                  leads, otherwise reads "Up to date". */}
+              <button
+                type="button"
+                className="mc-btn mc-btn-primary"
+                onClick={() => handleHubspotExport("new")}
+                disabled={exportBusy || exportCounts.notExported === 0}
+                title={
+                  exportCounts.notExported > 0
+                    ? `Download ${exportCounts.notExported} new-for-you contact${exportCounts.notExported === 1 ? "" : "s"} as a HubSpot-ready CSV. Already-exported (by you) contacts are skipped.`
+                    : "You've exported every contact in this directory."
+                }
+              >
+                {exportBusy
+                  ? "Exporting…"
+                  : exportCounts.notExported > 0
+                    ? `↓ HubSpot — ${exportCounts.notExported} new`
+                    : `↓ HubSpot — up to date`}
+              </button>
+
+              {/* Always-available "Export everything" — for ad-hoc full
+                  pulls. Does NOT change the user's export state, so the
+                  next "N new" count stays accurate. */}
+              <button
+                type="button"
+                className="mc-btn mc-btn-secondary"
+                onClick={() => handleHubspotExport("everything")}
+                disabled={exportBusy || exportCounts.total === 0}
+                title="Download every contact in this directory as a HubSpot-ready CSV. Does not change your export state — future 'N new' counts are unaffected."
+              >
+                {exportBusy ? "Exporting…" : `↓ HubSpot · all ${exportCounts.total}`}
+              </button>
+
               {/* Plain CSV — for spreadsheet / non-HubSpot use. */}
               <button
                 type="button"
@@ -1233,6 +1242,39 @@ function MunicipalContactsCss() {
       .mc-results-meta {
         font-size: 12px;
         color: var(--lb-text-3);
+      }
+      .mc-results-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      /* Visual hairline between the HubSpot export buttons (left group)
+         and the plain CSV button (right). Reads as: "two HubSpot options"
+         | "raw CSV". Implemented with a margin-left so it doesn't add a
+         DOM element and stays graceful when the bar wraps on narrow
+         screens. */
+      .mc-results-actions .mc-btn:last-child {
+        margin-left: 12px;
+        position: relative;
+      }
+      .mc-results-actions .mc-btn:last-child::before {
+        content: "";
+        position: absolute;
+        left: -10px;
+        top: 6px;
+        bottom: 6px;
+        width: 1px;
+        background: var(--lb-border);
+      }
+      .mc-btn-secondary {
+        background: var(--lb-bg-elev);
+        color: var(--lb-text);
+        border: 1px solid var(--lb-border);
+      }
+      .mc-btn-secondary:hover:not(:disabled) {
+        border-color: var(--lb-accent);
+        color: var(--lb-accent);
       }
       .mc-cat-pills {
         display: flex;

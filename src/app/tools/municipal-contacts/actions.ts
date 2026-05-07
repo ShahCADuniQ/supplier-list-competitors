@@ -29,6 +29,7 @@ import { db } from "@/db";
 import {
   municipalitySearches,
   municipalityContacts,
+  municipalityContactExports,
 } from "@/db/schema";
 import { perplexityChat, hasPerplexityKey } from "@/lib/ai/perplexity";
 import {
@@ -793,28 +794,36 @@ function bestCitationDomainFor(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HUBSPOT EXPORT
+// HUBSPOT EXPORT — per-user tracking
 //
-// Generates a CSV in HubSpot's expected contact-import shape and stamps each
-// exported row's `exported_at`. Two modes:
-//   • mode: "new"  — only rows where exported_at IS NULL. Most-common path:
-//                    re-runnable as the directory grows, only ships the diff.
-//   • mode: "all"  — every contact in the search. Use to re-import the full
-//                    list (e.g. after a HubSpot list got cleaned up).
-// Both modes update exported_at = NOW() on the rows that ship out.
+// Generates a CSV in HubSpot's expected contact-import shape. Each user has
+// their own "what have I exported?" state stored in
+// `municipality_contact_exports`, so user A pulling the full directory
+// doesn't change what user B sees as "new". Three modes:
+//
+//   • mode: "new" — only rows the CURRENT user hasn't exported yet. The
+//                   most-common path: re-runnable as the directory grows,
+//                   only ships the diff for this user.
+//   • mode: "all" — every contact in the search. Marks them as exported
+//                   for the current user too (so the next "new" export
+//                   shows nothing). Use to re-import the full list.
+//   • mode: "everything" — every contact in the search, but DOES NOT
+//                   change export state. For "give me everything for an
+//                   ad-hoc spreadsheet" without affecting future "new"
+//                   counts.
 //
 // HubSpot column names follow the "Default contact properties" import spec:
 // First Name, Last Name, Email, Phone Number, Job Title, Company, Website,
-// Address, City, State/Region, Country/Region, Lead Source, Notes, plus
-// custom properties for Department / Services Description / Source URL /
-// Municipality Type / Sector. Custom properties HubSpot doesn't recognize
-// will be created as new ones during import (or you can add them up-front
-// in HubSpot Settings → Properties).
+// Address, City, State/Region, Country/Region, Lead Source, plus custom
+// properties for Department / Services Description / Source URL /
+// Municipality Type / Sector / Notes.
 // ─────────────────────────────────────────────────────────────────────────────
+
+export type HubspotExportMode = "new" | "all" | "everything";
 
 export type HubspotExportInput = {
   searchId: number;
-  mode: "new" | "all";
+  mode: HubspotExportMode;
 };
 
 export type HubspotExportResult = {
@@ -822,7 +831,7 @@ export type HubspotExportResult = {
   fileName: string;
   exportedCount: number;
   totalInSearch: number;
-  newRemaining: number; // unexported still left after this run (always 0 here)
+  newRemaining: number;
 };
 
 export async function exportToHubspot(
@@ -831,26 +840,30 @@ export async function exportToHubspot(
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");
 
-  // Pull the rows (filtered or all)
-  const baseWhere = eq(municipalityContacts.searchId, input.searchId);
-  const where =
-    input.mode === "new"
-      ? and(baseWhere, isNull(municipalityContacts.exportedAt))
-      : baseWhere;
+  // Pull the rows. For "new" mode, exclude any contact this user has
+  // already exported. "all" and "everything" both pull every row in the
+  // search; they differ only in whether we stamp the export afterward.
+  const myExports = await db
+    .select({ contactId: municipalityContactExports.contactId })
+    .from(municipalityContactExports)
+    .where(eq(municipalityContactExports.clerkUserId, profile.clerkUserId));
+  const myExportedIds = new Set(myExports.map((e) => e.contactId));
 
-  const rows = await db
+  const allRows = await db
     .select()
     .from(municipalityContacts)
-    .where(where)
-    .orderBy(asc(municipalityContacts.municipalityName), asc(municipalityContacts.id));
+    .where(eq(municipalityContacts.searchId, input.searchId))
+    .orderBy(
+      asc(municipalityContacts.municipalityName),
+      asc(municipalityContacts.id),
+    );
 
-  // Total in this search (for the UI counter — even in "new" mode we tell
-  // the user how big the parent search is)
-  const totalRow = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(municipalityContacts)
-    .where(baseWhere);
-  const totalInSearch = totalRow[0]?.c ?? 0;
+  const rows =
+    input.mode === "new"
+      ? allRows.filter((r) => !myExportedIds.has(r.id))
+      : allRows;
+
+  const totalInSearch = allRows.length;
 
   if (rows.length === 0) {
     return {
@@ -858,30 +871,69 @@ export async function exportToHubspot(
       fileName: "",
       exportedCount: 0,
       totalInSearch,
-      newRemaining: 0,
+      newRemaining: allRows.length - myExportedIds.size,
     };
   }
 
   const csv = buildHubspotCsv(rows);
-
   const exportedAt = new Date();
-  await db
-    .update(municipalityContacts)
-    .set({ exportedAt })
-    .where(where);
 
-  // File-name encodes the search id + mode + timestamp so it's traceable
-  // when the user uploads it to HubSpot.
+  // "everything" mode is the only one that doesn't update export state.
+  if (input.mode !== "everything") {
+    // Upsert the per-user export rows. ON CONFLICT (contact_id, clerk_user_id)
+    // refreshes exported_at — useful when re-exporting the full list so the
+    // user can see "last exported on …" in the UI later.
+    if (rows.length > 0) {
+      await db
+        .insert(municipalityContactExports)
+        .values(
+          rows.map((r) => ({
+            contactId: r.id,
+            clerkUserId: profile.clerkUserId,
+            exportedAt,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [
+            municipalityContactExports.contactId,
+            municipalityContactExports.clerkUserId,
+          ],
+          set: { exportedAt },
+        });
+    }
+
+    // Also update the legacy `municipality_contacts.exported_at` column so
+    // any older code path (or a SQL viewer) still sees a timestamp. This is
+    // informational only — the per-user table is the source of truth.
+    await db
+      .update(municipalityContacts)
+      .set({ exportedAt })
+      .where(
+        sql`${municipalityContacts.id} = ANY(${rows.map((r) => r.id)}::int[])`,
+      );
+  }
+
   const stamp = exportedAt.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const fileName = `hubspot-municipal-contacts-search-${input.searchId}-${input.mode}-${stamp}.csv`;
 
   revalidatePath("/tools/municipal-contacts");
+
+  // Recompute remaining-new for THIS user after the operation.
+  let newRemaining = 0;
+  if (input.mode === "everything") {
+    newRemaining = allRows.length - myExportedIds.size;
+  } else {
+    // After "new" or "all", everything we just shipped is now exported for
+    // this user — so remaining-new is whatever wasn't included this time.
+    newRemaining = 0;
+  }
+
   return {
     csv,
     fileName,
     exportedCount: rows.length,
     totalInSearch,
-    newRemaining: 0,
+    newRemaining,
   };
 }
 
@@ -1016,9 +1068,9 @@ function formatPhone(p: string | null | undefined): string {
 }
 
 /**
- * Read-only summary of how many contacts in a search have been exported vs
- * not. Drives the "Export 12 new to HubSpot" / "Re-export all (137)" labels
- * on the export button.
+ * Per-user export status for a search. Drives the export button labels —
+ * "↓ HubSpot — N new" when there are unexported leads for this user, etc.
+ * Each user has independent state.
  */
 export async function getHubspotExportStatus(searchId: number): Promise<{
   total: number;
@@ -1026,24 +1078,47 @@ export async function getHubspotExportStatus(searchId: number): Promise<{
   notExported: number;
   lastExportedAt: Date | null;
 }> {
-  const rows = await db
-    .select({
-      exportedAt: municipalityContacts.exportedAt,
-    })
+  const profile = await getOrCreateProfile();
+  if (!profile) {
+    // Anonymous viewer (shouldn't normally happen on this page) — every
+    // contact looks "new" because they have no per-user state.
+    const total = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(municipalityContacts)
+      .where(eq(municipalityContacts.searchId, searchId));
+    const t = total[0]?.c ?? 0;
+    return { total: t, exported: 0, notExported: t, lastExportedAt: null };
+  }
+
+  const contactRows = await db
+    .select({ id: municipalityContacts.id })
     .from(municipalityContacts)
     .where(eq(municipalityContacts.searchId, searchId));
-  let exported = 0;
+  const total = contactRows.length;
+  if (total === 0) {
+    return { total: 0, exported: 0, notExported: 0, lastExportedAt: null };
+  }
+  const ids = contactRows.map((c) => c.id);
+  const exports = await db
+    .select({
+      contactId: municipalityContactExports.contactId,
+      exportedAt: municipalityContactExports.exportedAt,
+    })
+    .from(municipalityContactExports)
+    .where(
+      and(
+        eq(municipalityContactExports.clerkUserId, profile.clerkUserId),
+        sql`${municipalityContactExports.contactId} = ANY(${ids}::int[])`,
+      ),
+    );
   let lastAt: Date | null = null;
-  for (const r of rows) {
-    if (r.exportedAt) {
-      exported++;
-      if (!lastAt || r.exportedAt > lastAt) lastAt = r.exportedAt;
-    }
+  for (const e of exports) {
+    if (!lastAt || e.exportedAt > lastAt) lastAt = e.exportedAt;
   }
   return {
-    total: rows.length,
-    exported,
-    notExported: rows.length - exported,
+    total,
+    exported: exports.length,
+    notExported: total - exports.length,
     lastExportedAt: lastAt,
   };
 }
