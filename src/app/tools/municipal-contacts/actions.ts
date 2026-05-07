@@ -1070,6 +1070,60 @@ export async function deleteMunicipalityContact(
   revalidatePath("/tools/municipal-contacts");
 }
 
+/**
+ * Bulk-delete every contact in a given category (e.g. all "police" or all
+ * "elected") within a search. Returns the number of rows removed so the UI
+ * can show "Removed 7 Elected officials" in its toast. After deletion, the
+ * canonical search row's title + count is refreshed in step.
+ */
+export async function deleteContactsByCategory(input: {
+  searchId: number;
+  category: string;
+}): Promise<{ deleted: number }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  if (!canEdit(profile)) throw new Error("Insufficient permissions");
+
+  const deleted = await db
+    .delete(municipalityContacts)
+    .where(
+      and(
+        eq(municipalityContacts.searchId, input.searchId),
+        eq(municipalityContacts.category, input.category),
+      ),
+    )
+    .returning({ id: municipalityContacts.id });
+
+  // Keep the canonical "(N verified)" title in sync after a bulk delete.
+  const totalRow = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(municipalityContacts)
+    .where(eq(municipalityContacts.searchId, input.searchId));
+  const total = totalRow[0]?.c ?? 0;
+  // Find the search row to determine if it follows the canonical title shape.
+  const [search] = await db
+    .select()
+    .from(municipalitySearches)
+    .where(eq(municipalitySearches.id, input.searchId))
+    .limit(1);
+  if (search) {
+    const titlePrefix = `${search.province} municipalities — comprehensive lead list`;
+    if (search.title?.startsWith(titlePrefix)) {
+      await db
+        .update(municipalitySearches)
+        .set({
+          title: `${titlePrefix} (${total} verified)`,
+          requestedCount: total,
+          updatedAt: new Date(),
+        })
+        .where(eq(municipalitySearches.id, input.searchId));
+    }
+  }
+
+  revalidatePath("/tools/municipal-contacts");
+  return { deleted: deleted.length };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────

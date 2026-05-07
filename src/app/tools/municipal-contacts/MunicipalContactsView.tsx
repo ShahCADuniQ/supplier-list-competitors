@@ -21,6 +21,7 @@ import {
   generateMunicipalContacts,
   deleteMunicipalitySearch,
   deleteMunicipalityContact,
+  deleteContactsByCategory,
   exportToHubspot,
 } from "./actions";
 
@@ -161,6 +162,31 @@ export default function MunicipalContactsView({
       router.refresh();
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Delete failed", true);
+    }
+  }
+
+  async function handleRemoveCategory(categoryCode: string, count: number) {
+    if (!canEdit || !activeSearch) return;
+    const label =
+      CONTACT_CATEGORIES.find((c) => c.code === categoryCode)?.label ??
+      categoryCode;
+    if (
+      !confirm(
+        `Remove all ${count} "${label}" contact${count === 1 ? "" : "s"} from this directory? This can't be undone.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const r = await deleteContactsByCategory({
+        searchId: activeSearch.id,
+        category: categoryCode,
+      });
+      if (categoryFilter === categoryCode) setCategoryFilter(null);
+      showToast(`Removed ${r.deleted} ${label} contact${r.deleted === 1 ? "" : "s"}`);
+      router.refresh();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Remove failed", true);
     }
   }
 
@@ -586,7 +612,11 @@ export default function MunicipalContactsView({
             </div>
           </div>
 
-          {/* Category filter chips */}
+          {/* Category filter chips. Each chip is two buttons in a wrapper:
+              the chip itself toggles the filter; a small × button on the
+              right (visible to editors only) bulk-removes every contact in
+              that category. Buttons aren't nested — they're siblings inside
+              a flex wrapper — to keep the HTML valid. */}
           <div className="mc-cat-pills">
             <button
               type="button"
@@ -600,14 +630,32 @@ export default function MunicipalContactsView({
               if (n === 0) return null;
               const active = categoryFilter === c.code;
               return (
-                <button
+                <div
                   key={c.code}
-                  type="button"
-                  className={`mc-pill mc-pill-cat-${c.code} ${active ? "mc-pill-on" : ""}`}
-                  onClick={() => setCategoryFilter(active ? null : c.code)}
+                  className={`mc-pill-group mc-pill-cat-${c.code} ${active ? "mc-pill-on" : ""}`}
                 >
-                  {c.label} ({n})
-                </button>
+                  <button
+                    type="button"
+                    className="mc-pill-main"
+                    onClick={() => setCategoryFilter(active ? null : c.code)}
+                  >
+                    {c.label} ({n})
+                  </button>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      className="mc-pill-remove"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemoveCategory(c.code, n);
+                      }}
+                      title={`Remove all ${n} ${c.label} contact${n === 1 ? "" : "s"}`}
+                      aria-label={`Remove all ${n} ${c.label} contacts`}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -899,6 +947,64 @@ function MunicipalContactsCss() {
       .mc-pill-cat-police.mc-pill-on { background: hsl(220, 60%, 45%); border-color: hsl(220, 60%, 45%); color: #fff; }
       .mc-pill-cat-other.mc-pill-on { background: hsl(160, 35%, 50%); border-color: hsl(160, 35%, 50%); color: #fff; }
       .mc-pill-clear { font-style: italic; opacity: 0.85; }
+
+      /* Composite chip with a main filter button and a small × remove
+         button on the right. Behaves like a pill but with two click
+         targets — the user can toggle the filter without bulk-deleting. */
+      .mc-pill-group {
+        display: inline-flex;
+        align-items: stretch;
+        height: 32px;
+        background: var(--lb-bg);
+        color: var(--lb-text-2);
+        border: 1px solid var(--lb-border);
+        border-radius: 999px;
+        overflow: hidden;
+        transition: background 160ms, color 160ms, border-color 160ms;
+      }
+      .mc-pill-group:hover { border-color: var(--lb-accent); }
+      .mc-pill-main {
+        padding: 0 12px;
+        font-size: 12px;
+        font-weight: 500;
+        background: transparent;
+        color: inherit;
+        border: 0;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+      }
+      .mc-pill-remove {
+        width: 26px;
+        background: transparent;
+        color: inherit;
+        border: 0;
+        border-left: 1px solid var(--lb-border);
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+        opacity: 0.7;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .mc-pill-remove:hover { opacity: 1; background: rgba(239, 68, 68, 0.16); color: #ef4444; }
+
+      /* When the group is active, paint the whole thing in the sector colour
+         (mirrors the original .mc-pill-on look) but keep the remove button
+         readable on top. */
+      .mc-pill-group.mc-pill-on { color: #fff; border-color: transparent; }
+      .mc-pill-group.mc-pill-on .mc-pill-remove { border-left-color: rgba(255,255,255,0.3); }
+      .mc-pill-group.mc-pill-cat-engineering.mc-pill-on { background: hsl(28, 100%, 52%); }
+      .mc-pill-group.mc-pill-cat-public-works.mc-pill-on { background: hsl(195, 80%, 48%); }
+      .mc-pill-group.mc-pill-cat-administration.mc-pill-on { background: hsl(265, 60%, 60%); }
+      .mc-pill-group.mc-pill-cat-elected.mc-pill-on { background: hsl(345, 75%, 55%); }
+      .mc-pill-group.mc-pill-cat-planning.mc-pill-on { background: hsl(45, 95%, 50%); color: #1a1a1a; }
+      .mc-pill-group.mc-pill-cat-parks.mc-pill-on { background: hsl(135, 55%, 45%); }
+      .mc-pill-group.mc-pill-cat-environment.mc-pill-on { background: hsl(155, 65%, 38%); }
+      .mc-pill-group.mc-pill-cat-fire.mc-pill-on { background: hsl(8, 80%, 52%); }
+      .mc-pill-group.mc-pill-cat-police.mc-pill-on { background: hsl(220, 60%, 45%); }
+      .mc-pill-group.mc-pill-cat-other.mc-pill-on { background: hsl(160, 35%, 50%); }
 
       .mc-form-actions {
         display: flex;
