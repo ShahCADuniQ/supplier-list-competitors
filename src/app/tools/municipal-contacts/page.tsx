@@ -18,7 +18,9 @@ import MunicipalContactsView from "./MunicipalContactsView";
 
 export const dynamic = "force-dynamic";
 // Perplexity + Claude pipelines can take ~60-90s for a 100-row generation.
-export const maxDuration = 300;
+// Vercel Pro caps at 800; Hobby caps at 60 (so generations >25 contacts may
+// still time out on Hobby — that's a plan limit, not a code one).
+export const maxDuration = 800;
 
 export default async function MunicipalContactsPage() {
   const profile = await getOrCreateProfile();

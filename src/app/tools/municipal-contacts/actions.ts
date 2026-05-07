@@ -304,6 +304,24 @@ function keywordCategory(c: PerplexityContact): string {
 export async function generateMunicipalContacts(
   input: GenerateInput,
 ): Promise<GenerateResult> {
+  try {
+    return await generateMunicipalContactsImpl(input);
+  } catch (e) {
+    // Surface the real error in Vercel logs so production-only failures
+    // (timeouts, missing env vars, drizzle binding issues) are visible.
+    // The caller still gets a sanitized message via re-throw.
+    console.error(
+      "[municipal-contacts] generation failed:",
+      e instanceof Error ? `${e.name}: ${e.message}\n${e.stack}` : e,
+    );
+    if (e instanceof Error) throw e;
+    throw new Error("Generation failed (see server logs)");
+  }
+}
+
+async function generateMunicipalContactsImpl(
+  input: GenerateInput,
+): Promise<GenerateResult> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");
   if (!canEdit(profile)) throw new Error("Insufficient permissions");
@@ -466,12 +484,16 @@ export async function generateMunicipalContacts(
   // never clicks through to a dead page.
   const verified = await verifyContactUrls(categorized, citations);
 
-  // Fill missing services_summary fields with a per-record Perplexity
-  // follow-up call. Don't gate-and-reject incomplete rows here — users may
-  // intentionally want partial records — but every record we DO save should
-  // have a useful summary if we can produce one. Skipped silently if the
-  // follow-up fails.
-  await fillMissingServicesSummaries(verified);
+  // Per-record services_summary follow-up calls were ~5-15 s each and could
+  // easily blow past Vercel's serverless function timeout (60 s on Hobby,
+  // 300 s on Pro) when generating 25+ contacts at once. We now rely on
+  // whatever Perplexity returned in the main pass; the comprehensive CLI
+  // sweep (`scripts/lead-quebec-comprehensive.ts`) keeps the per-record
+  // fill since it runs without a wall-clock cap. If a record came back with
+  // a thin / empty summary it stays that way — the user can still see the
+  // role + department + source URL, and the next sweep will likely pick it
+  // up with a fuller summary.
+  // Removed: await fillMissingServicesSummaries(verified);
 
   // ── Canonical search row ──
   // All generations for a given province get folded into a single
