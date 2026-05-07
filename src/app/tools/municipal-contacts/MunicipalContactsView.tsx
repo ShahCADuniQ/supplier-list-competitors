@@ -21,6 +21,8 @@ import {
 } from "./constants";
 import {
   generateMunicipalContacts,
+  fetchMunicipalCandidates,
+  verifyAndInsertOneContact,
   deleteMunicipalitySearch,
   deleteMunicipalityContact,
   deleteContactsByCategory,
@@ -123,20 +125,22 @@ export default function MunicipalContactsView({
   }
 
   /**
-   * Generation runs as a client-side batch loop. Each iteration asks the
-   * server action for at most PER_BATCH contacts so a single Vercel
-   * function call stays well within the serverless timeout. The action
-   * already excludes municipalities the DB knows about, so each batch
-   * targets unsearched towns.
+   * Generation is a two-tier loop:
+   *   • OUTER loop calls fetchMunicipalCandidates(PER_BATCH) — one
+   *     Perplexity call returns ~10-25 candidate records. Slow (5-30 s).
+   *   • INNER loop calls verifyAndInsertOneContact for each candidate —
+   *     fast (~1-3 s each). Each successful insert immediately:
+   *       - bumps the live counter
+   *       - refreshes the page so the new contact + HubSpot count show
+   *
+   * Cancel is checked between every per-contact insert, so it takes
+   * effect within ~1-3 seconds (the time of the in-flight verify).
    *
    * The loop stops on any of:
-   *   • added >= target (user got what they asked for)
-   *   • two consecutive empty batches (Perplexity exhausted for this scope)
-   *   • the user clicks Cancel
-   *   • a batch returns ok:false (e.g. timeout, missing key)
-   *
-   * Each batch refreshes the page after insert so new contacts appear in
-   * the grid as they come in.
+   *   • added >= target
+   *   • two consecutive empty batches (Perplexity exhausted)
+   *   • user clicks Cancel
+   *   • either action returns ok:false
    */
   async function handleGenerate() {
     if (!canEdit) {
@@ -153,7 +157,7 @@ export default function MunicipalContactsView({
     let batchNum = 0;
     let lastSearchId: number | null = null;
 
-    while (added < count) {
+    outer: while (added < count) {
       if (cancelRef.current) {
         showToast(`Cancelled — ${added} new contact${added === 1 ? "" : "s"} added`);
         break;
@@ -161,43 +165,25 @@ export default function MunicipalContactsView({
       batchNum++;
       const remaining = count - added;
       const batchCount = Math.min(PER_BATCH, remaining);
-      setProgress((p) => p && { ...p, activeBatch: batchNum });
+      setProgress((p) => p && { ...p, activeBatch: batchNum, lastBatch: 0 });
 
-      let r;
-      try {
-        r = await generateMunicipalContacts({
-          province,
-          scopeTypes,
-          sectors,
-          cityFilter: cityFilter.trim() || null,
-          count: batchCount,
-          title: batchNum === 1 ? title.trim() || null : null,
-        });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "Generation failed";
-        showToast(msg, true);
+      // Fetch a batch of candidates from Perplexity.
+      const fetchRes = await fetchMunicipalCandidates({
+        province,
+        scopeTypes,
+        sectors,
+        cityFilter: cityFilter.trim() || null,
+        count: batchCount,
+        title: batchNum === 1 ? title.trim() || null : null,
+      });
+      if (!fetchRes.ok) {
+        showToast(fetchRes.error || "Generation failed", true);
         break;
       }
+      lastSearchId = fetchRes.searchId;
+      const candidates = fetchRes.candidates;
 
-      if (!r.ok) {
-        const msg = r.error || "Generation failed";
-        console.error("[municipal-contacts] action error:", msg, r.stack);
-        showToast(msg, true);
-        break;
-      }
-
-      added += r.contactCount;
-      lastSearchId = r.searchId;
-      setProgress((p) =>
-        p && {
-          ...p,
-          added,
-          lastBatch: r.contactCount,
-        },
-      );
-      router.refresh();
-
-      if (r.contactCount === 0) {
+      if (candidates.length === 0) {
         emptyStreak++;
         if (emptyStreak >= MAX_EMPTY_STREAK) {
           showToast(
@@ -205,8 +191,45 @@ export default function MunicipalContactsView({
           );
           break;
         }
-      } else {
-        emptyStreak = 0;
+        continue;
+      }
+      emptyStreak = 0;
+
+      // Verify + insert each candidate one at a time. Cancel checked
+      // between every contact so it feels instant.
+      let insertedThisBatch = 0;
+      for (const cand of candidates) {
+        if (cancelRef.current) {
+          showToast(`Cancelled — ${added} new contact${added === 1 ? "" : "s"} added`);
+          break outer;
+        }
+        if (added >= count) break;
+
+        const insertRes = await verifyAndInsertOneContact({
+          candidate: cand,
+          citations: fetchRes.citations,
+          searchId: fetchRes.searchId,
+          province,
+        });
+        if (!insertRes.ok) {
+          // A single contact's verify failed — log and keep going. Don't
+          // tear down the whole run for one bad record.
+          console.warn(
+            "[municipal-contacts] verify failed:",
+            insertRes.error,
+          );
+          continue;
+        }
+        if (insertRes.inserted) {
+          added++;
+          insertedThisBatch++;
+          setProgress((p) =>
+            p && { ...p, added, lastBatch: insertedThisBatch },
+          );
+          // Refresh after every contact so the new card + HubSpot N-new
+          // counter both update live.
+          router.refresh();
+        }
       }
     }
 
@@ -224,7 +247,7 @@ export default function MunicipalContactsView({
 
   function handleCancel() {
     cancelRef.current = true;
-    showToast("Cancel requested — finishing current batch…");
+    showToast("Cancelling — stopping after the current contact…");
   }
 
   async function handleDeleteSearch(id: number) {

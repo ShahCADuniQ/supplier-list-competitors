@@ -305,6 +305,394 @@ function keywordCategory(c: PerplexityContact): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// STREAMING-FRIENDLY ACTIONS
+//
+// The original generateMunicipalContacts ran the full pipeline (Perplexity
+// → verify → insert) in one server action. That made cancel slow and meant
+// the UI couldn't show contacts as they came in. The per-contact path
+// below splits the work into two cheap actions the client orchestrates:
+//
+//   1. fetchMunicipalCandidates(input) — one Perplexity call, returns raw
+//      candidates + citations + canonical search id. Slow (5-30 s) but
+//      runs once per batch.
+//   2. verifyAndInsertOneContact({ candidate, citations, searchId,
+//      province }) — verifies URLs, repairs broken sourceUrl/website,
+//      gates, dedupes against the DB, inserts. Fast (~1-3 s).
+//
+// Client loops fetchMunicipalCandidates → for each candidate calls
+// verifyAndInsertOneContact → router.refresh() → next contact.
+//
+// Cancel between contact-inserts feels instant (1-3 s wait, not 30-60 s),
+// and each successful insert immediately shows up in the grid.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type FetchCandidatesResult =
+  | {
+      ok: true;
+      candidates: PerplexityContact[];
+      citations: string[];
+      searchId: number;
+      existingKeys: string[]; // pre-populated dedup set for the client
+    }
+  | { ok: false; error: string };
+
+export async function fetchMunicipalCandidates(
+  input: GenerateInput,
+): Promise<FetchCandidatesResult> {
+  try {
+    const profile = await getOrCreateProfile();
+    if (!profile) throw new Error("Sign in required");
+    if (!canEdit(profile)) throw new Error("Insufficient permissions");
+    if (!hasPerplexityKey()) {
+      throw new Error("PERPLEXITY_API_KEY (or PPLX_API_KEY) is not set on this server.");
+    }
+
+    const province = input.province.trim();
+    if (!province) throw new Error("Province is required");
+    const count = clampCount(input.count);
+    const scopeTypes = (input.scopeTypes ?? []).filter(Boolean);
+    const scopeText = scopeTypeText(scopeTypes);
+    const sectors = (input.sectors ?? []).filter((s) => ALL_SECTOR_CODES.includes(s));
+    const cityFilter = (input.cityFilter ?? "").trim() || null;
+
+    // Existing-keys + excluded-municipalities for dedupe + prompt biasing.
+    const existingRows = await db
+      .select({
+        municipalityName: municipalityContacts.municipalityName,
+        role: municipalityContacts.role,
+      })
+      .from(municipalityContacts)
+      .where(eq(municipalityContacts.province, province));
+    const existingKeys = new Set<string>();
+    const existingMunicipalities = new Set<string>();
+    for (const r of existingRows) {
+      existingKeys.add(dedupKeyOf(r.municipalityName, r.role));
+      if (r.municipalityName) existingMunicipalities.add(r.municipalityName);
+    }
+
+    const userPrompt = buildPerplexityPrompt({
+      province,
+      scopeText,
+      sectors,
+      cityFilter,
+      count,
+      excludedMunicipalities: [...existingMunicipalities],
+    });
+    const maxTokens = Math.min(32_000, 1500 + count * 180);
+    const systemPrompt =
+      "You are a public-records research assistant for Canadian municipalities. Take time to actually search the web for each municipality before answering. Search BOTH English and French municipal websites. Use ONLY publicly-listed municipal contacts. Spread contacts across multiple municipalities.";
+
+    let citations: string[] = [];
+    let rawContacts: PerplexityContact[] = [];
+
+    try {
+      const passA = await perplexityChat<{ contacts: PerplexityContact[] }>({
+        systemPrompt,
+        userPrompt,
+        schema: PERPLEXITY_SCHEMA,
+        schemaName: "municipal_contacts",
+        maxTokens,
+      });
+      rawContacts = passA.content?.contacts ?? [];
+      citations = passA.citations ?? [];
+    } catch (e) {
+      console.warn("[municipal-contacts] Pass A failed:", e);
+    }
+
+    if (rawContacts.length === 0) {
+      const freeFormPrompt = buildFreeFormPrompt({
+        province,
+        scopeText,
+        sectors,
+        cityFilter,
+        count,
+        excludedMunicipalities: [...existingMunicipalities],
+      });
+      try {
+        const passB = await perplexityChat<string>({
+          systemPrompt,
+          userPrompt: freeFormPrompt,
+          maxTokens,
+        });
+        const text = passB.content ?? "";
+        const m = text.match(/\{[\s\S]*\}/);
+        if (m) {
+          try {
+            const parsed = JSON.parse(m[0]) as { contacts?: PerplexityContact[] };
+            rawContacts = parsed.contacts ?? [];
+            citations = passB.citations ?? citations;
+          } catch (e) {
+            console.warn("[municipal-contacts] Pass B parse failed:", e);
+          }
+        }
+      } catch (e) {
+        console.warn("[municipal-contacts] Pass B failed:", e);
+      }
+    }
+
+    // Filter dupes upfront so the client doesn't waste verify calls on
+    // contacts we already know we'd skip.
+    const fresh = rawContacts.filter(
+      (c) => !existingKeys.has(dedupKeyOf(c.municipalityName, c.role)),
+    );
+
+    // Find / create the canonical search row so the client can pass its id
+    // to verifyAndInsertOneContact.
+    const canonicalTitlePrefix = `${province} municipalities — comprehensive lead list`;
+    const existingCanonical = await db
+      .select()
+      .from(municipalitySearches)
+      .where(
+        and(
+          eq(municipalitySearches.province, province),
+          sql`${municipalitySearches.title} LIKE ${`${canonicalTitlePrefix}%`}`,
+        ),
+      )
+      .orderBy(asc(municipalitySearches.id))
+      .limit(1);
+
+    let searchId: number;
+    if (existingCanonical.length > 0) {
+      searchId = existingCanonical[0].id;
+    } else {
+      const [created] = await db
+        .insert(municipalitySearches)
+        .values({
+          country: "Canada",
+          province,
+          scopeTypes: scopeTypes.length ? scopeTypes.join(",") : "all",
+          sectors: sectors.length ? sectors.join(",") : "all",
+          cityFilter,
+          requestedCount: count,
+          title: canonicalTitlePrefix,
+          notes: (input.notes ?? "").trim() || null,
+          createdByClerkId: profile.clerkUserId,
+        })
+        .returning();
+      searchId = created.id;
+    }
+
+    return {
+      ok: true,
+      candidates: fresh,
+      citations,
+      searchId,
+      existingKeys: [...existingKeys],
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.error("[municipal-contacts] fetchCandidates failed:", msg);
+    return { ok: false, error: msg };
+  }
+}
+
+export type VerifyAndInsertResult =
+  | { ok: true; inserted: false; reason: string }
+  | {
+      ok: true;
+      inserted: true;
+      contact: typeof municipalityContacts.$inferSelect;
+      total: number; // total in canonical row after this insert
+    }
+  | { ok: false; error: string };
+
+export async function verifyAndInsertOneContact(input: {
+  candidate: PerplexityContact;
+  citations: string[];
+  searchId: number;
+  province: string;
+}): Promise<VerifyAndInsertResult> {
+  try {
+    const profile = await getOrCreateProfile();
+    if (!profile) throw new Error("Sign in required");
+    if (!canEdit(profile)) throw new Error("Insufficient permissions");
+
+    const c = input.candidate;
+    if (!c.municipalityName?.trim()) {
+      return { ok: true, inserted: false, reason: "missing municipality" };
+    }
+
+    // Dedupe against the live DB — handles the race where another batch
+    // inserted this same contact between fetch and verify.
+    const dupKey = dedupKeyOf(c.municipalityName, c.role);
+    const dupRow = await db
+      .select({ id: municipalityContacts.id })
+      .from(municipalityContacts)
+      .where(eq(municipalityContacts.province, input.province))
+      .limit(200);
+    for (const r of dupRow) {
+      // Re-check via dedup key. (We could narrow at SQL level but the
+      // province scope is small enough.)
+      // (skip this row's check inline to keep the query simple)
+      void r;
+    }
+    // Simpler: dedup-check at SQL level via lower-name match.
+    const sameNameRows = await db
+      .select({
+        id: municipalityContacts.id,
+        municipalityName: municipalityContacts.municipalityName,
+        role: municipalityContacts.role,
+      })
+      .from(municipalityContacts)
+      .where(
+        and(
+          eq(municipalityContacts.province, input.province),
+          sql`lower(${municipalityContacts.municipalityName}) = lower(${c.municipalityName.trim()})`,
+        ),
+      );
+    for (const row of sameNameRows) {
+      if (dedupKeyOf(row.municipalityName, row.role) === dupKey) {
+        return { ok: true, inserted: false, reason: "duplicate" };
+      }
+    }
+
+    // URL verify + repair + classify, all on this single contact.
+    const allUrls = [
+      ...(c.sourceUrl ? [c.sourceUrl] : []),
+      ...(c.website ? [c.website] : []),
+      ...input.citations,
+    ];
+    const status = await verifyUrlsForOneContact(allUrls);
+
+    let sourceUrl = c.sourceUrl?.trim() || "";
+    let website = c.website?.trim() || "";
+    if (sourceUrl && !status.get(sourceUrl)) {
+      sourceUrl = bestCitationFor(c.municipalityName, input.citations, status) ?? "";
+    }
+    if (website && !status.get(website)) {
+      try {
+        const host = new URL(website).host;
+        const root = `https://${host}/`;
+        if (status.get(root)) website = root;
+        else {
+          let pick = "";
+          for (const u of input.citations) {
+            if (!status.get(u)) continue;
+            try {
+              if (new URL(u).host === host) { pick = u; break; }
+            } catch { /* skip */ }
+          }
+          website = pick;
+        }
+      } catch { website = ""; }
+    }
+
+    // Run a one-record Claude classify pass so the inserted row lands in
+    // the right sector. Cheap (~1-2 s) and keeps the UI's category chips
+    // accurate without a batch normalize step.
+    const classified = await classifyOneContactWithClaude({ ...c, sourceUrl, website });
+
+    const [inserted] = await db
+      .insert(municipalityContacts)
+      .values({
+        searchId: input.searchId,
+        municipalityName: c.municipalityName.trim(),
+        municipalityType: nullIfEmpty(c.municipalityType),
+        province: input.province,
+        department: nullIfEmpty(c.department),
+        role: nullIfEmpty(c.role),
+        category: classified.category,
+        name: nullIfEmpty(c.name),
+        email: nullIfEmpty(c.email),
+        phone: nullIfEmpty(c.phone),
+        address: nullIfEmpty(c.address),
+        website: nullIfEmpty(website),
+        sourceUrl: nullIfEmpty(sourceUrl),
+        servicesSummary: nullIfEmpty(c.servicesSummary),
+        notes: nullIfEmpty(c.notes),
+      })
+      .returning();
+
+    // Refresh canonical title incrementally — adds 1 to the count after
+    // each insert so the saved-searches strip stays in sync as the run
+    // progresses.
+    const totalRow = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(municipalityContacts)
+      .where(eq(municipalityContacts.searchId, input.searchId));
+    const total = totalRow[0]?.c ?? 0;
+    const canonicalTitlePrefix = `${input.province} municipalities — comprehensive lead list`;
+    await db
+      .update(municipalitySearches)
+      .set({
+        title: `${canonicalTitlePrefix} (${total} verified)`,
+        requestedCount: total,
+        updatedAt: new Date(),
+      })
+      .where(eq(municipalitySearches.id, input.searchId));
+
+    revalidatePath("/tools/municipal-contacts");
+    return { ok: true, inserted: true, contact: inserted, total };
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.error("[municipal-contacts] verifyAndInsertOne failed:", msg);
+    return { ok: false, error: msg };
+  }
+}
+
+// Lightweight URL-verification helper used by the per-contact action.
+// Mirrors verifyContactUrls but stays public-API-friendly for one record.
+async function verifyUrlsForOneContact(urls: string[]): Promise<Map<string, boolean>> {
+  const distinct = [...new Set(urls.filter(Boolean))];
+  const status = new Map<string, boolean>();
+  await Promise.all(distinct.map(async (u) => status.set(u, await checkUrl(u))));
+  return status;
+}
+
+// One-shot Claude classifier — keeps the per-contact path independent of
+// the batch categorizeWithClaude. Falls back to the keyword bucket if
+// Claude isn't reachable.
+async function classifyOneContactWithClaude(
+  c: PerplexityContact,
+): Promise<{ category: string }> {
+  if (!hasClaudeKey()) return { category: keywordCategory(c) };
+  try {
+    const client = claudeClient();
+    const sectorBullets = SECTOR_OPTIONS.map(
+      (s) => `  • "${s.code}" — ${s.promptHint}`,
+    ).join("\n");
+    const tools = [{
+      name: "classify_contact",
+      description: "Pick the best sector code for one contact.",
+      input_schema: {
+        type: "object" as const,
+        additionalProperties: false,
+        properties: {
+          category: { type: "string", enum: [...ALL_SECTOR_CODES] },
+        },
+        required: ["category"],
+      },
+    }];
+    const models = [CLAUDE_MODEL, ...CLAUDE_FALLBACK_MODELS];
+    for (const model of models) {
+      try {
+        const res = await client.messages.create({
+          model,
+          max_tokens: 200,
+          system: `Pick the BEST single sector code for this Canadian municipal contact, from this set:\n${sectorBullets}`,
+          messages: [
+            { role: "user", content: `Department: ${c.department}\nRole: ${c.role}\nNotes: ${c.notes}` },
+          ],
+          tools,
+          tool_choice: { type: "tool", name: "classify_contact" },
+        });
+        const block = res.content.find(
+          (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use",
+        );
+        if (block) {
+          return block.input as { category: string };
+        }
+      } catch (e) {
+        console.warn(`[municipal-contacts] classifyOne ${model} failed:`, e);
+      }
+    }
+  } catch (e) {
+    console.warn("[municipal-contacts] classifyOne fully failed:", e);
+  }
+  return { category: keywordCategory(c) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN ENTRY — generate + persist
 // ─────────────────────────────────────────────────────────────────────────────
 
