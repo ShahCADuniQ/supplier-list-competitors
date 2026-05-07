@@ -24,7 +24,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { revalidatePath } from "next/cache";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   municipalitySearches,
@@ -908,9 +908,7 @@ export async function exportToHubspot(
     await db
       .update(municipalityContacts)
       .set({ exportedAt })
-      .where(
-        sql`${municipalityContacts.id} = ANY(${rows.map((r) => r.id)}::int[])`,
-      );
+      .where(inArray(municipalityContacts.id, rows.map((r) => r.id)));
   }
 
   const stamp = exportedAt.toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -1108,7 +1106,7 @@ export async function getHubspotExportStatus(searchId: number): Promise<{
     .where(
       and(
         eq(municipalityContactExports.clerkUserId, profile.clerkUserId),
-        sql`${municipalityContactExports.contactId} = ANY(${ids}::int[])`,
+        inArray(municipalityContactExports.contactId, ids),
       ),
     );
   let lastAt: Date | null = null;

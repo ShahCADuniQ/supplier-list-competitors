@@ -30,25 +30,44 @@ export default async function MunicipalContactsPage() {
     isAdmin(profile);
   if (!allowed) redirect("/");
 
-  // Tolerate missing tables — older environments may be a migration behind.
-  // The page renders empty in that case so the user can still see the form.
+  // Tolerate missing tables / partial migrations — each query is isolated so
+  // a missing column on one table can't tank the whole page render. The
+  // view tolerates empty lists and just shows "No searches yet".
   let searches: Array<typeof municipalitySearches.$inferSelect> = [];
   let contacts: Array<typeof municipalityContacts.$inferSelect> = [];
   let myExportMap = new Map<number, Date>();
+
   try {
     searches = await db
       .select()
       .from(municipalitySearches)
       .orderBy(desc(municipalitySearches.createdAt));
+  } catch (e) {
+    console.error(
+      "[municipal-contacts] municipality_searches query failed:",
+      e instanceof Error ? `${e.name}: ${e.message}` : e,
+    );
+  }
+
+  try {
     contacts = await db
       .select()
       .from(municipalityContacts)
       .orderBy(desc(municipalityContacts.createdAt));
+  } catch (e) {
+    console.error(
+      "[municipal-contacts] municipality_contacts query failed:",
+      e instanceof Error ? `${e.name}: ${e.message}` : e,
+    );
+  }
 
-    // Per-user export state. The view's existing UI logic looks at each
-    // contact's `exportedAt` field — we override it with the current
-    // user's per-user export timestamp so each user sees their own
-    // "exported / new" counters independently.
+  // Per-user export state. The view's existing UI logic looks at each
+  // contact's `exportedAt` field — we override it with the current user's
+  // per-user export timestamp so each user sees their own counters
+  // independently. If migration 0015 hasn't reached this environment yet,
+  // we silently fall back to an empty map and every contact shows as "new"
+  // (which is the correct behaviour for a brand-new user anyway).
+  try {
     const myExports = await db
       .select({
         contactId: municipalityContactExports.contactId,
@@ -58,9 +77,9 @@ export default async function MunicipalContactsPage() {
       .where(eq(municipalityContactExports.clerkUserId, profile.clerkUserId));
     myExportMap = new Map(myExports.map((e) => [e.contactId, e.exportedAt]));
   } catch (e) {
-    console.warn(
-      "[municipal-contacts] tables not available (run migrations):",
-      e,
+    console.error(
+      "[municipal-contacts] municipality_contact_exports query failed:",
+      e instanceof Error ? `${e.name}: ${e.message}` : e,
     );
   }
 
