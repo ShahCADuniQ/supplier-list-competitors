@@ -61,11 +61,18 @@ export type GenerateInput = {
   notes?: string | null;
 };
 
-export type GenerateResult = {
-  searchId: number;
-  contactCount: number;
-  citations: string[];
-};
+export type GenerateResult =
+  | {
+      ok: true;
+      searchId: number;
+      contactCount: number;
+      citations: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+      stack?: string;
+    };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PERPLEXITY SCHEMA — what we ask the search model to return
@@ -304,21 +311,30 @@ function keywordCategory(c: PerplexityContact): string {
 export async function generateMunicipalContacts(
   input: GenerateInput,
 ): Promise<GenerateResult> {
+  // Returns the error as DATA instead of throwing, so the production-mode
+  // server-action error sanitizer doesn't rewrite our message into the
+  // generic "Server Components render" string. The client checks `ok` and
+  // displays `error` directly.
   try {
     return await generateMunicipalContactsImpl(input);
   } catch (e) {
-    // Surface the real error in Vercel logs so production-only failures
-    // (timeouts, missing env vars, drizzle binding issues) are visible.
-    // The caller still gets a sanitized message via re-throw.
+    const name = e instanceof Error ? e.name : "Error";
+    const message = e instanceof Error ? e.message : String(e);
+    const stack = e instanceof Error ? e.stack : undefined;
     console.error(
       "[municipal-contacts] generation failed:",
-      e instanceof Error ? `${e.name}: ${e.message}\n${e.stack}` : e,
+      `${name}: ${message}\n${stack ?? "(no stack)"}`,
     );
-    if (e instanceof Error) throw e;
-    throw new Error("Generation failed (see server logs)");
+    return {
+      ok: false,
+      error: `${name}: ${message}`,
+      stack,
+    };
   }
 }
 
+// Internal worker that throws on error. Wrapper above turns thrown errors
+// into a `{ ok: false, error }` so they survive Next's prod sanitizer.
 async function generateMunicipalContactsImpl(
   input: GenerateInput,
 ): Promise<GenerateResult> {
@@ -591,6 +607,7 @@ async function generateMunicipalContactsImpl(
 
   revalidatePath("/tools/municipal-contacts");
   return {
+    ok: true,
     searchId: searchRow.id,
     contactCount: fresh.length,
     citations,

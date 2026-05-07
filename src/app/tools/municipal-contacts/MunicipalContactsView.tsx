@@ -124,11 +124,20 @@ export default function MunicipalContactsView({
         count,
         title: title.trim() || null,
       });
+      // The action returns the error as data so we get the real message
+      // (Next sanitizes thrown errors in production).
+      if (!r.ok) {
+        const msg = r.error || "Generation failed";
+        console.error("[municipal-contacts] action error:", msg, r.stack);
+        showToast(msg, true);
+        return;
+      }
       showToast(`Generated ${r.contactCount} contact${r.contactCount === 1 ? "" : "s"}`);
       setActiveSearchId(r.searchId);
       setCategoryFilter(null);
       router.refresh();
     } catch (e) {
+      // Should be rare now — only client-side / network errors land here.
       showToast(e instanceof Error ? e.message : "Generation failed", true);
     } finally {
       setBusy(false);
