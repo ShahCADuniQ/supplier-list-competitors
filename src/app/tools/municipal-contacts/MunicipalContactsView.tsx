@@ -21,6 +21,7 @@ import {
   generateMunicipalContacts,
   deleteMunicipalitySearch,
   deleteMunicipalityContact,
+  exportToHubspot,
 } from "./actions";
 
 type Props = {
@@ -222,6 +223,49 @@ export default function MunicipalContactsView({
     }
     return m;
   }, [activeSearchId, contactsBySearch]);
+
+  // Export-status counters for the active search (drives the smart HubSpot
+  // button label).
+  const exportCounts = useMemo(() => {
+    if (!activeSearchId) return { total: 0, exported: 0, notExported: 0 };
+    const list = contactsBySearch.get(activeSearchId) ?? [];
+    let exported = 0;
+    for (const c of list) if (c.exportedAt) exported++;
+    return {
+      total: list.length,
+      exported,
+      notExported: list.length - exported,
+    };
+  }, [activeSearchId, contactsBySearch]);
+
+  const [exportBusy, setExportBusy] = useState(false);
+
+  async function handleHubspotExport(mode: "new" | "all") {
+    if (!activeSearch) return;
+    setExportBusy(true);
+    try {
+      const r = await exportToHubspot({ searchId: activeSearch.id, mode });
+      if (r.exportedCount === 0) {
+        showToast("No new leads to export", false);
+        return;
+      }
+      const blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = r.fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast(`Exported ${r.exportedCount} contact${r.exportedCount === 1 ? "" : "s"} for HubSpot`);
+      router.refresh();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Export failed", true);
+    } finally {
+      setExportBusy(false);
+    }
+  }
 
   return (
     <div className="mc-wrap">
@@ -492,14 +536,50 @@ export default function MunicipalContactsView({
                   : "s"}{" "}
                 · across {activeContactsByMunicipality.length} municipalit
                 {activeContactsByMunicipality.length === 1 ? "y" : "ies"}
+                {exportCounts.total > 0 && (
+                  <>
+                    {" "}
+                    ·{" "}
+                    <span title="Tracked separately for HubSpot export — only unexported leads ship in the next download.">
+                      {exportCounts.exported} exported / {exportCounts.notExported} new
+                    </span>
+                  </>
+                )}
               </div>
             </div>
             <div className="mc-results-actions">
+              {/* HubSpot export — primary path. Smart label: shows "N new"
+                  when there are unexported leads, otherwise "Re-export all". */}
+              {exportCounts.notExported > 0 ? (
+                <button
+                  type="button"
+                  className="mc-btn mc-btn-primary"
+                  onClick={() => handleHubspotExport("new")}
+                  disabled={exportBusy || exportCounts.notExported === 0}
+                  title={`Download ${exportCounts.notExported} unexported contact${exportCounts.notExported === 1 ? "" : "s"} as a HubSpot-ready CSV. Already-exported contacts are skipped.`}
+                >
+                  {exportBusy
+                    ? "Exporting…"
+                    : `↓ HubSpot — ${exportCounts.notExported} new`}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="mc-btn"
+                  onClick={() => handleHubspotExport("all")}
+                  disabled={exportBusy || exportCounts.total === 0}
+                  title="All contacts have already been exported. Click to re-download the full list (will refresh export timestamps)."
+                >
+                  {exportBusy ? "Exporting…" : `↓ HubSpot — re-export all (${exportCounts.total})`}
+                </button>
+              )}
+              {/* Plain CSV — for spreadsheet / non-HubSpot use. */}
               <button
                 type="button"
                 className="mc-btn"
                 onClick={exportCsv}
                 disabled={!activeContacts.length}
+                title="Plain CSV — all visible columns, no HubSpot column mapping."
               >
                 ↓ CSV
               </button>

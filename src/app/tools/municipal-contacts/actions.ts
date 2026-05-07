@@ -24,7 +24,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { revalidatePath } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   municipalitySearches,
@@ -472,22 +472,45 @@ export async function generateMunicipalContacts(
   // follow-up fails.
   await fillMissingServicesSummaries(verified);
 
-  // Insert search row + contacts (single transaction-ish flow: parent first,
-  // then bulk insert children).
-  const [searchRow] = await db
-    .insert(municipalitySearches)
-    .values({
-      country: "Canada",
-      province,
-      scopeTypes: scopeTypes.length ? scopeTypes.join(",") : "all",
-      sectors: sectors.length ? sectors.join(",") : "all",
-      cityFilter,
-      requestedCount: count,
-      title: (input.title ?? "").trim() || null,
-      notes: (input.notes ?? "").trim() || null,
-      createdByClerkId: profile.clerkUserId,
-    })
-    .returning();
+  // ── Canonical search row ──
+  // All generations for a given province get folded into a single
+  // "<Province> municipalities — comprehensive lead list" row so the user
+  // sees one growing directory per province instead of N saved searches.
+  // Reuse the existing canonical row when present; otherwise create it.
+  const canonicalTitlePrefix = `${province} municipalities — comprehensive lead list`;
+  const existingCanonical = await db
+    .select()
+    .from(municipalitySearches)
+    .where(
+      and(
+        eq(municipalitySearches.province, province),
+        sql`${municipalitySearches.title} LIKE ${`${canonicalTitlePrefix}%`}`,
+      ),
+    )
+    .orderBy(asc(municipalitySearches.id))
+    .limit(1);
+
+  let searchRow: typeof municipalitySearches.$inferSelect;
+  if (existingCanonical.length > 0) {
+    searchRow = existingCanonical[0];
+    console.log(`[municipal-contacts] appending to canonical search #${searchRow.id}`);
+  } else {
+    [searchRow] = await db
+      .insert(municipalitySearches)
+      .values({
+        country: "Canada",
+        province,
+        scopeTypes: scopeTypes.length ? scopeTypes.join(",") : "all",
+        sectors: sectors.length ? sectors.join(",") : "all",
+        cityFilter,
+        requestedCount: count,
+        title: canonicalTitlePrefix,
+        notes: (input.notes ?? "").trim() || null,
+        createdByClerkId: profile.clerkUserId,
+      })
+      .returning();
+    console.log(`[municipal-contacts] created canonical search #${searchRow.id}`);
+  }
 
   // Filter out duplicates against the existing-keys set built at the top.
   // Identical (municipality::role) records already in the DB would just clutter
@@ -526,6 +549,22 @@ export async function generateMunicipalContacts(
       })),
     );
   }
+
+  // Refresh the canonical title with the post-insert total so the saved-
+  // searches strip always shows accurate counts.
+  const totalRow = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(municipalityContacts)
+    .where(eq(municipalityContacts.searchId, searchRow.id));
+  const total = totalRow[0]?.c ?? 0;
+  await db
+    .update(municipalitySearches)
+    .set({
+      title: `${canonicalTitlePrefix} (${total} verified)`,
+      requestedCount: total,
+      updatedAt: new Date(),
+    })
+    .where(eq(municipalitySearches.id, searchRow.id));
 
   revalidatePath("/tools/municipal-contacts");
   return {
@@ -751,6 +790,262 @@ function bestCitationDomainFor(
     }
   }
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HUBSPOT EXPORT
+//
+// Generates a CSV in HubSpot's expected contact-import shape and stamps each
+// exported row's `exported_at`. Two modes:
+//   • mode: "new"  — only rows where exported_at IS NULL. Most-common path:
+//                    re-runnable as the directory grows, only ships the diff.
+//   • mode: "all"  — every contact in the search. Use to re-import the full
+//                    list (e.g. after a HubSpot list got cleaned up).
+// Both modes update exported_at = NOW() on the rows that ship out.
+//
+// HubSpot column names follow the "Default contact properties" import spec:
+// First Name, Last Name, Email, Phone Number, Job Title, Company, Website,
+// Address, City, State/Region, Country/Region, Lead Source, Notes, plus
+// custom properties for Department / Services Description / Source URL /
+// Municipality Type / Sector. Custom properties HubSpot doesn't recognize
+// will be created as new ones during import (or you can add them up-front
+// in HubSpot Settings → Properties).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type HubspotExportInput = {
+  searchId: number;
+  mode: "new" | "all";
+};
+
+export type HubspotExportResult = {
+  csv: string;
+  fileName: string;
+  exportedCount: number;
+  totalInSearch: number;
+  newRemaining: number; // unexported still left after this run (always 0 here)
+};
+
+export async function exportToHubspot(
+  input: HubspotExportInput,
+): Promise<HubspotExportResult> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+
+  // Pull the rows (filtered or all)
+  const baseWhere = eq(municipalityContacts.searchId, input.searchId);
+  const where =
+    input.mode === "new"
+      ? and(baseWhere, isNull(municipalityContacts.exportedAt))
+      : baseWhere;
+
+  const rows = await db
+    .select()
+    .from(municipalityContacts)
+    .where(where)
+    .orderBy(asc(municipalityContacts.municipalityName), asc(municipalityContacts.id));
+
+  // Total in this search (for the UI counter — even in "new" mode we tell
+  // the user how big the parent search is)
+  const totalRow = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(municipalityContacts)
+    .where(baseWhere);
+  const totalInSearch = totalRow[0]?.c ?? 0;
+
+  if (rows.length === 0) {
+    return {
+      csv: "",
+      fileName: "",
+      exportedCount: 0,
+      totalInSearch,
+      newRemaining: 0,
+    };
+  }
+
+  const csv = buildHubspotCsv(rows);
+
+  const exportedAt = new Date();
+  await db
+    .update(municipalityContacts)
+    .set({ exportedAt })
+    .where(where);
+
+  // File-name encodes the search id + mode + timestamp so it's traceable
+  // when the user uploads it to HubSpot.
+  const stamp = exportedAt.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const fileName = `hubspot-municipal-contacts-search-${input.searchId}-${input.mode}-${stamp}.csv`;
+
+  revalidatePath("/tools/municipal-contacts");
+  return {
+    csv,
+    fileName,
+    exportedCount: rows.length,
+    totalInSearch,
+    newRemaining: 0,
+  };
+}
+
+/**
+ * Build a HubSpot-import-ready CSV from a contact list. Each row is a
+ * single contact (one person + their municipal context). HubSpot's contact
+ * import will create both a Contact and (if Company Name + Domain are set)
+ * an associated Company record.
+ */
+function buildHubspotCsv(
+  rows: Array<typeof municipalityContacts.$inferSelect>,
+): string {
+  const headers = [
+    "First Name",
+    "Last Name",
+    "Email",
+    "Phone Number",
+    "Job Title",
+    "Company",
+    "Website",
+    "Address",
+    "City",
+    "State/Region",
+    "Country/Region",
+    "Lead Source",
+    "Department",
+    "Services Description",
+    "Source URL",
+    "Municipality Type",
+    "Sector",
+    "Notes",
+  ];
+  const lines: string[] = [headers.map(csvCell).join(",")];
+
+  for (const r of rows) {
+    const { firstName, lastName } = splitName(r.name);
+    const { city, region, country } = splitAddress(r.address, r.province);
+    const company = (r.municipalityName ?? "").trim();
+    const phone = formatPhone(r.phone);
+    const email = (r.email ?? "").trim();
+    const role = (r.role ?? "").trim();
+    const dept = (r.department ?? "").trim();
+    const services = (r.servicesSummary ?? "").trim();
+    const source = (r.sourceUrl ?? "").trim();
+    const website = (r.website ?? "").trim();
+    const muniType = (r.municipalityType ?? "").trim();
+    const category = (r.category ?? "").trim();
+    const notes = (r.notes ?? "").trim();
+
+    lines.push(
+      [
+        firstName,
+        lastName,
+        email,
+        phone,
+        role,
+        company,
+        website,
+        // Address: fall back to the raw `address` string if we can't split.
+        r.address ?? "",
+        city,
+        region,
+        country,
+        "Lightbase municipal lead generator",
+        dept,
+        services,
+        source,
+        muniType,
+        category,
+        notes,
+      ]
+        .map(csvCell)
+        .join(","),
+    );
+  }
+  // CRLF line endings — HubSpot's CSV importer is Excel-friendly, prefers
+  // \r\n + UTF-8 BOM. Add the BOM so accented French names (Greffier,
+  // Saint-Hyacinthe) render correctly in Excel before re-saving.
+  const BOM = "﻿";
+  return BOM + lines.join("\r\n") + "\r\n";
+}
+
+function csvCell(v: unknown): string {
+  const s = v == null ? "" : String(v);
+  // HubSpot tolerates quoted multiline values; we always quote to be safe.
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function splitName(full: string | null | undefined): {
+  firstName: string;
+  lastName: string;
+} {
+  const t = (full ?? "").trim().replace(/\s+/g, " ");
+  if (!t) return { firstName: "", lastName: "" };
+  // French ordering is the same as English (Prénom Nom), but accented and
+  // hyphenated last names are common ("Saint-Pierre", "Lajoie-Bergeron").
+  // Take the first whitespace-separated token as first name, the rest as
+  // last name. Single-word entries (e.g. "Direction générale") become the
+  // last name only.
+  const parts = t.split(" ");
+  if (parts.length === 1) return { firstName: "", lastName: parts[0] };
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" "),
+  };
+}
+
+function splitAddress(
+  address: string | null | undefined,
+  fallbackProvince: string,
+): { city: string; region: string; country: string } {
+  // We don't try to parse the street out of free-form addresses — HubSpot's
+  // import accepts the full address in the "Address" column and only needs
+  // City / State / Country split for filtering. Best-effort:
+  //   "275 Rue Notre-Dame Est, Montréal, QC H2Y 1C6"
+  //   "1085, rue de la Concorde, Saint-Hyacinthe (Québec) J2S 5W3"
+  if (!address) {
+    return { city: "", region: fallbackProvince, country: "Canada" };
+  }
+  const t = address.trim();
+  // Pull the postal code (e.g., "H2Y 1C6") to anchor the right-side split
+  const cityMatch = t.match(/,\s*([A-Za-zÀ-ÿ\s'-]+?)(?:,|\s*\(|\s+[A-Z]{2}\b|\s+[A-Z]\d[A-Z]\s*\d[A-Z]\d)/);
+  const city = cityMatch ? cityMatch[1].trim() : "";
+  return { city, region: fallbackProvince, country: "Canada" };
+}
+
+function formatPhone(p: string | null | undefined): string {
+  // HubSpot tolerates any human-readable form. Strip cruft (extension labels,
+  // duplicated parentheses) and standardize separators.
+  if (!p) return "";
+  return p.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Read-only summary of how many contacts in a search have been exported vs
+ * not. Drives the "Export 12 new to HubSpot" / "Re-export all (137)" labels
+ * on the export button.
+ */
+export async function getHubspotExportStatus(searchId: number): Promise<{
+  total: number;
+  exported: number;
+  notExported: number;
+  lastExportedAt: Date | null;
+}> {
+  const rows = await db
+    .select({
+      exportedAt: municipalityContacts.exportedAt,
+    })
+    .from(municipalityContacts)
+    .where(eq(municipalityContacts.searchId, searchId));
+  let exported = 0;
+  let lastAt: Date | null = null;
+  for (const r of rows) {
+    if (r.exportedAt) {
+      exported++;
+      if (!lastAt || r.exportedAt > lastAt) lastAt = r.exportedAt;
+    }
+  }
+  return {
+    total: rows.length,
+    exported,
+    notExported: rows.length - exported,
+    lastExportedAt: lastAt,
+  };
 }
 
 export async function deleteMunicipalitySearch(searchId: number): Promise<void> {

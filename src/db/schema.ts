@@ -711,12 +711,17 @@ export const municipalityContacts = pgTable(
     // contact card so users don't have to click through to a source page
     // to know whether the lead is relevant.
     servicesSummary: text("services_summary"),
+    // Timestamp set when this contact was downloaded as part of a HubSpot
+    // export. Drives the "Export N new" vs "Re-export all" UI logic so the
+    // user only re-exports what's been added since the last download.
+    exportedAt: timestamp("exported_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
     searchIdx: index("municipality_contacts_search_idx").on(t.searchId),
     categoryIdx: index("municipality_contacts_category_idx").on(t.category),
     provinceIdx: index("municipality_contacts_province_idx").on(t.province),
+    exportedAtIdx: index("municipality_contacts_exported_at_idx").on(t.exportedAt),
   }),
 );
 
