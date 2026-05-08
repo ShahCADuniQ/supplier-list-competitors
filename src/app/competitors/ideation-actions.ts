@@ -288,13 +288,20 @@ export async function deleteAllIdeationItems(input: {
 // page through Chromium and listen on the network for every i.pinimg.com
 // response (extractor in @/lib/ai/pinterest).
 
-export type PinterestExtractResult = {
-  imageCount: number;
-  duplicateCount: number;
-  sourceUrl: string;
-};
+export type PinterestExtractResult =
+  | {
+      ok: true;
+      imageCount: number;
+      duplicateCount: number;
+      sourceUrl: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      stack?: string;
+    };
 
-export async function aiAddPinterestLink(input: {
+export type PinterestExtractInput = {
   collectionId: number;
   url: string;
   comment?: string | null;
@@ -310,7 +317,38 @@ export async function aiAddPinterestLink(input: {
   productLinkage?:
     | { kind: "all" }
     | { kind: "product"; productId: number };
-}): Promise<PinterestExtractResult> {
+};
+
+// Returns the error as DATA instead of throwing, so the production-mode
+// server-action error sanitizer doesn't rewrite our message into the
+// generic "Server Components render" string. The client checks `ok` and
+// displays `error` directly.
+export async function aiAddPinterestLink(
+  input: PinterestExtractInput,
+): Promise<PinterestExtractResult> {
+  try {
+    return await aiAddPinterestLinkImpl(input);
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "Error";
+    const message = e instanceof Error ? e.message : String(e);
+    const stack = e instanceof Error ? e.stack : undefined;
+    console.error(
+      "[pinterest] extract failed:",
+      `${name}: ${message}\n${stack ?? "(no stack)"}`,
+    );
+    return {
+      ok: false,
+      error: `${name}: ${message}`,
+      stack,
+    };
+  }
+}
+
+// Internal worker that throws on error. Wrapper above turns thrown errors
+// into a `{ ok: false, error }` so they survive Next's prod sanitizer.
+async function aiAddPinterestLinkImpl(
+  input: PinterestExtractInput,
+): Promise<PinterestExtractResult> {
   await requireCompetitorEditor();
   const url = (input.url ?? "").trim();
   const comment = (input.comment ?? "").trim();
@@ -384,6 +422,7 @@ export async function aiAddPinterestLink(input: {
 
   if (newImages.length === 0) {
     return {
+      ok: true,
       imageCount: 0,
       duplicateCount,
       sourceUrl: url,
@@ -446,6 +485,7 @@ export async function aiAddPinterestLink(input: {
   revalidatePath("/competitors");
 
   return {
+    ok: true,
     imageCount: rows.length,
     duplicateCount,
     sourceUrl: url,

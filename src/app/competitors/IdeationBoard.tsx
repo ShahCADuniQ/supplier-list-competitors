@@ -273,6 +273,11 @@ export default function IdeationBoard({
             ? { kind: "all" }
             : { kind: "product", productId: effectivePinterestProduct },
       });
+      if (!r.ok) {
+        if (r.stack) console.error("[pinterest]", r.stack);
+        onToast(r.error, true);
+        return;
+      }
       setPinterestUrl("");
       setPinterestComment("");
       router.refresh();
