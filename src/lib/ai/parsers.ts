@@ -1,5 +1,23 @@
-import { PDFParse } from "pdf-parse";
 import * as XLSX from "xlsx";
+
+// pdf-parse v2 transitively imports pdfjs-dist, which references the
+// browser-only `DOMMatrix` at module-evaluation time. A static top-level
+// import therefore crashes Node with
+//   `ReferenceError: DOMMatrix is not defined`
+// the FIRST time anything in this file is imported — taking down every
+// server route that pulls in `fetchWithTimeout` (the entire /competitors
+// page tree). The fix has two parts:
+//   1. Defer the pdf-parse import to inside `pdfBufferToText` (below) so
+//      importing parsers.ts no longer evaluates pdfjs-dist.
+//   2. Stub `globalThis.DOMMatrix` so when a PDF actually IS parsed, the
+//      runtime call doesn't fail. Text extraction never touches matrix
+//      math, so a no-op class is sufficient.
+function ensureDomMatrixPolyfill(): void {
+  const g = globalThis as unknown as { DOMMatrix?: unknown };
+  if (typeof g.DOMMatrix !== "undefined") return;
+  class DOMMatrixStub {}
+  g.DOMMatrix = DOMMatrixStub;
+}
 
 /** Cap input size sent to the model so a 50-page catalog doesn't burn tokens. */
 const MAX_TEXT_CHARS = 60_000;
@@ -40,6 +58,8 @@ export async function fetchWithTimeout(
 
 /** Extract text from a PDF buffer. Returns an empty string for scanned PDFs. */
 export async function pdfBufferToText(buf: Buffer | Uint8Array): Promise<string> {
+  ensureDomMatrixPolyfill();
+  const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data: new Uint8Array(buf) });
   try {
     const result = await parser.getText();
