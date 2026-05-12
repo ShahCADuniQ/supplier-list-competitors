@@ -93,13 +93,34 @@ export default function AddProductForm({
     setBusy(true);
     setStatus("Reading inputs…");
     try {
+      const trimmedUrl = url.trim();
+      if (trimmedUrl) {
+        // Static fetch + render + Perplexity fallback can take 30–90s end-to-end.
+        // Keep the user looking at something useful while it runs.
+        setStatus(
+          `Fetching ${(() => {
+            try {
+              return new URL(trimmedUrl).host;
+            } catch {
+              return "page";
+            }
+          })()} (and falling back to Perplexity if blocked)…`,
+        );
+      } else {
+        setStatus("Reading inputs…");
+      }
       const r = await aiAddProductFromInput({
         collectionId,
-        url: url.trim() || undefined,
+        url: trimmedUrl || undefined,
         attachments: files,
         hint: hint.trim() || undefined,
         niche,
       });
+      if (!r.ok) {
+        if (r.stack) console.error("[aiAddProduct]", r.stack);
+        onToast(r.error, true);
+        return;
+      }
       const parts: string[] = [];
       parts.push(r.brandCreated ? `New brand: ${r.brandName}` : r.brandName);
       parts.push(`+ ${r.productName}`);
@@ -107,6 +128,14 @@ export default function AddProductForm({
         parts.push(
           `${r.attachedFileCount} file${r.attachedFileCount === 1 ? "" : "s"} attached`,
         );
+      }
+      if (r.imageUrls.length > 0) {
+        parts.push(
+          `${r.imageUrls.length} image${r.imageUrls.length === 1 ? "" : "s"}`,
+        );
+      }
+      if (r.sourceMode !== "static") {
+        parts.push(`source: ${r.sourceMode}`);
       }
       onToast(parts.join(" · "));
       onAdded?.({

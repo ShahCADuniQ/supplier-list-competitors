@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { CLIENT_CONFIG } from "@/lib/client-config";
 
 type Props = {
   email: string | null;
@@ -90,8 +91,8 @@ export default function Sidebar({
       {/* Brand mark — solid accent square */}
       <Link
         href="/"
-        title="Lightbase"
-        aria-label="Lightbase home"
+        title={CLIENT_CONFIG.name}
+        aria-label={`${CLIENT_CONFIG.name} home`}
         className="inline-flex items-center justify-center mb-3 transition-transform hover:scale-105"
         style={{
           width: 44,
@@ -104,7 +105,7 @@ export default function Sidebar({
           letterSpacing: "-0.02em",
         }}
       >
-        L
+        {CLIENT_CONFIG.name.slice(0, 1).toUpperCase()}
       </Link>
 
       {/* Primary nav rail */}

@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 import { getOrCreateProfile, canViewEngineering } from "@/lib/permissions";
+import { CLIENT_CONFIG } from "@/lib/client-config";
 import ThemedIframe from "@/components/ThemedIframe";
 
 export const metadata = {
-  title: "Engineering Handbook — Lightbase",
+  title: `Engineering Handbook — ${CLIENT_CONFIG.name}`,
 };
 
 export default async function EngineeringPage() {
@@ -21,7 +22,7 @@ export default async function EngineeringPage() {
       >
         <ThemedIframe
           src="/engineering-handbook.html"
-          title="Lightbase Engineering Handbook"
+          title={`${CLIENT_CONFIG.name} Engineering Handbook`}
           className="w-full h-full border-0"
         />
       </div>

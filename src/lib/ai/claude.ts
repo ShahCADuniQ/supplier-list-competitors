@@ -30,23 +30,26 @@ export function hasClaudeKey(): boolean {
 }
 
 /**
- * Default model — Opus 4.7, Anthropic's strongest at reading densely-laid-out
- * spec tables and dimensional drawings. Override via ANTHROPIC_MODEL.
+ * Default model — Sonnet 4.5. Reads architectural-lighting spec tables and
+ * dimensional drawings well at ~1/5 the per-token cost of Opus 4.7. Override
+ * via ANTHROPIC_MODEL when a particular collection benefits from Opus's
+ * extra rigor on dense / multi-variant catalogs.
  *
  * If the API key's tier doesn't include the primary model, the analyzer
  * automatically retries with one of the fallbacks below — so a 404 / 403
  * "model not available" doesn't surface as an error to the user.
  */
 export const CLAUDE_MODEL =
-  process.env.ANTHROPIC_MODEL || "claude-opus-4-7";
+  process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
 
 /**
- * Fallback chain when the primary model returns a "model not found" or
- * "permission" error. Ordered by capability — Opus 4.6 is closest in spec-
- * reading ability, Sonnet 4.5 is broadly available, Haiku is the safety net.
+ * Fallback chain when the primary model returns a "model not found" /
+ * "permission" / "invalid model" error. Ordered cheapest-acceptable →
+ * cheapest-safe so a downgrade still gets work done (Haiku 4.5 is the
+ * safety net — fast and cheap, less thorough on dense spec tables but
+ * better than failing).
  */
 export const CLAUDE_FALLBACK_MODELS = [
-  "claude-opus-4-6",
-  "claude-sonnet-4-5",
+  "claude-sonnet-4-6",
   "claude-haiku-4-5",
 ] as const;

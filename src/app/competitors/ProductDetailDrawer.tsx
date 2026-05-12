@@ -246,6 +246,11 @@ export default function ProductDetailDrawer({
     try {
       onToast(`Extracting docs for ${product.name}… specs will refresh automatically.`);
       const r = await aiExtractProductFiles({ productId: product.id });
+      if (!r.ok) {
+        if (r.stack) console.error("[aiExtractProductFiles]", r.stack);
+        onToast(r.error, true);
+        return;
+      }
       router.refresh();
       const total = r.pdfsAttached + r.otherDocsAttached;
       const parts: string[] = [r.productName];
@@ -270,7 +275,13 @@ export default function ProductDetailDrawer({
     setRefreshSpecsBusy(true);
     try {
       onToast(`Reading specs from files for ${product.name}…`);
-      const r = await refreshProductSpecsFromFiles({ productId: product.id });
+      const r = await refreshProductSpecsFromFiles({
+        productId: product.id,
+        // Manual click should always re-run, even if inputs haven't changed
+        // (the cache lives at the input-hash level, not at the model output
+        // level — user may want a fresh extraction with current Claude).
+        force: true,
+      });
       router.refresh();
       onToast(
         `${r.productName}: read ${r.filesRead} file${r.filesRead === 1 ? "" : "s"}, updated ${r.fieldsUpdated} field${r.fieldsUpdated === 1 ? "" : "s"}`,

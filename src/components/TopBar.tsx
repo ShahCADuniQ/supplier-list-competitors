@@ -3,6 +3,7 @@
 import { Show, UserButton, SignInButton, SignUpButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
+import { CLIENT_CONFIG, CADUNIQ_INDUSTRY_SUFFIX } from "@/lib/client-config";
 
 const TITLE_BY_PREFIX: { prefix: string; title: string }[] = [
   { prefix: "/suppliers", title: "INVENTORY" },
@@ -19,7 +20,7 @@ function pageTitle(pathname: string): string {
   const match = TITLE_BY_PREFIX.find(
     (m) => pathname === m.prefix || pathname.startsWith(m.prefix + "/"),
   );
-  return match?.title ?? "LIGHTBASE";
+  return match?.title ?? CLIENT_CONFIG.name.toUpperCase();
 }
 
 export default function TopBar() {
@@ -79,6 +80,81 @@ export default function TopBar() {
       </div>
 
       <ThemeToggle />
+
+      <a
+        href="https://caduniq.com"
+        target="_blank"
+        rel="noopener noreferrer"
+        title={`CADuniQ ${CADUNIQ_INDUSTRY_SUFFIX} — property & software`}
+        aria-label={`CADuniQ ${CADUNIQ_INDUSTRY_SUFFIX} — property and software`}
+        className="hidden sm:inline-flex items-center gap-2.5 px-4 transition-colors"
+        style={{
+          height: 40,
+          borderRadius: "var(--lb-radius-pill)",
+          background: "var(--lb-bg-elev)",
+          border: "1px solid var(--lb-border)",
+          color: "var(--lb-text-2)",
+          textDecoration: "none",
+          whiteSpace: "nowrap",
+          letterSpacing: "-0.005em",
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 26,
+            height: 26,
+            borderRadius: 8,
+            background: "var(--lb-accent)",
+            color: "var(--lb-accent-fg)",
+            fontSize: 14,
+            fontWeight: 800,
+            letterSpacing: "-0.02em",
+          }}
+        >
+          C
+        </span>
+        <span
+          style={{
+            color: "var(--lb-text)",
+            fontWeight: 700,
+            fontSize: 15,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          CADuniQ{" "}
+          <span
+            style={{
+              color: "var(--lb-text-2)",
+              fontWeight: 500,
+            }}
+          >
+            {CADUNIQ_INDUSTRY_SUFFIX}
+          </span>
+        </span>
+        <span
+          aria-hidden
+          style={{
+            width: 1,
+            height: 18,
+            background: "var(--lb-border)",
+          }}
+        />
+        <span
+          style={{
+            color: "var(--lb-text-3)",
+            fontSize: 11,
+            fontWeight: 500,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          property &amp; software
+        </span>
+      </a>
 
       <Show when="signed-out">
         <SignInButton>

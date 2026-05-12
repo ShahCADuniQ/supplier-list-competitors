@@ -168,6 +168,11 @@ export default function BenchmarkView({
       parts.push(
         `Re-analyzed ${r.productsRefreshed}/${r.productsScanned} products`,
       );
+      if (r.productsSkipped > 0) {
+        parts.push(
+          `${r.productsSkipped} skipped (unchanged — saved Claude call)`,
+        );
+      }
       parts.push(`${r.totalFilesRead} files read`);
       parts.push(
         `${r.totalFieldsUpdated} field${r.totalFieldsUpdated === 1 ? "" : "s"} updated`,

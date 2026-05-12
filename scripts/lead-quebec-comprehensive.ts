@@ -410,6 +410,13 @@ async function categorizeWithClaude(contacts: Contact[]): Promise<Contact[]> {
     },
   }];
   const models = [CLAUDE_MODEL, ...CLAUDE_FALLBACK_MODELS];
+  // System + tools are identical across every batch in this run — mark
+  // them ephemeral so Anthropic serves them from cache on batches 2…N.
+  const SYSTEM_PROMPT =
+    'Normalize each contact and assign category from this enum: engineering, public-works, administration, elected, planning, parks, environment, fire, police, other. Pick "engineering" for génie / ingénierie / civil engineering. Pick "parks" for loisirs / parcs / sports / recreation. Pick "public-works" for travaux publics / voirie / infrastructures. Pick "administration" for direction générale / greffe / mairie. Trim whitespace. Strip mailto: prefixes. Don\'t invent fields.';
+  const cachedTools = tools.map((t, i, arr) =>
+    i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+  );
 
   // Batch by 25 to stay under output-token caps.
   const out: Contact[] = [];
@@ -421,10 +428,11 @@ async function categorizeWithClaude(contacts: Contact[]): Promise<Contact[]> {
         const res = await client.messages.create({
           model,
           max_tokens: 8000,
-          system:
-            'Normalize each contact and assign category from this enum: engineering, public-works, administration, elected, planning, parks, environment, fire, police, other. Pick "engineering" for génie / ingénierie / civil engineering. Pick "parks" for loisirs / parcs / sports / recreation. Pick "public-works" for travaux publics / voirie / infrastructures. Pick "administration" for direction générale / greffe / mairie. Trim whitespace. Strip mailto: prefixes. Don\'t invent fields.',
+          system: [
+            { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+          ],
           messages: [{ role: "user", content: `Normalize:\n\n${JSON.stringify(batch, null, 2)}` }],
-          tools,
+          tools: cachedTools,
           tool_choice: { type: "tool", name: "record_contacts" },
         });
         const block = res.content.find((b: any) => b.type === "tool_use") as any;

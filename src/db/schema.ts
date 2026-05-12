@@ -299,6 +299,12 @@ export const competitorProducts = pgTable(
     // Loose, flexible spec bag — see `ProductSpecs` shape in extract.ts.
     specs: jsonb("specs").$type<Record<string, string | string[]>>().notNull().default({}),
     sourceUrl: text("source_url"), // deep link to the product page if known
+    // Content hash of the inputs that produced the current `specs` value
+    // (sorted attachment url:size pairs + sourceUrl + Claude model).
+    // refreshProductSpecsFromFiles skips re-analysis when this matches the
+    // current input hash, so bulk "Re-analyze all" only pays for products
+    // whose attachments actually changed.
+    specsAnalysisHash: text("specs_analysis_hash"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

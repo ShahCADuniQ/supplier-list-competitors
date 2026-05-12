@@ -294,14 +294,21 @@ Output FORMAT — fenced JSON block, no preamble:
           required: ["contacts"],
         },
       }];
+      const SYSTEM_PROMPT =
+        "Normalize each contact. Trim. Strip mailto:. Don't invent fields. Pick \"engineering\" as category for génie / ingénierie / civil.";
+      const cachedTools = tools.map((t, i, arr) =>
+        i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+      );
       for (const model of [CLAUDE_MODEL, ...CLAUDE_FALLBACK_MODELS]) {
         try {
           const res = await client.messages.create({
             model,
             max_tokens: 6000,
-            system: "Normalize each contact. Trim. Strip mailto:. Don't invent fields. Pick \"engineering\" as category for génie / ingénierie / civil.",
+            system: [
+              { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+            ],
             messages: [{ role: "user", content: `Normalize:\n\n${JSON.stringify(accepted, null, 2)}` }],
-            tools,
+            tools: cachedTools,
             tool_choice: { type: "tool", name: "record_contacts" },
           });
           const block = res.content.find((b: any) => b.type === "tool_use") as any;

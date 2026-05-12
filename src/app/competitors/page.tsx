@@ -45,10 +45,50 @@ export default async function CompetitorsPage() {
       .orderBy(asc(competitorCollections.name));
   }
 
+  // competitor_products.specs_analysis_hash was added in migration 0018.
+  // Until that migration has been applied, the full SELECT fails on the
+  // missing column. Fall back to selecting only the pre-0018 columns and
+  // stamp specsAnalysisHash=null onto each row so downstream components
+  // get the schema shape they expect. Same defensive pattern used for
+  // competitor_ideation_items.is_global below.
+  async function loadProducts(): Promise<
+    Array<typeof competitorProducts.$inferSelect>
+  > {
+    try {
+      return await db
+        .select()
+        .from(competitorProducts)
+        .orderBy(asc(competitorProducts.name));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (!/specs_analysis_hash/i.test(msg)) throw e;
+      console.warn(
+        "[competitors/page] specs_analysis_hash column missing — run `npm run db:apply` to apply migration 0018. Falling back to legacy columns.",
+      );
+      const rows = await db
+        .select({
+          id: competitorProducts.id,
+          competitorId: competitorProducts.competitorId,
+          name: competitorProducts.name,
+          productCode: competitorProducts.productCode,
+          productCategory: competitorProducts.productCategory,
+          description: competitorProducts.description,
+          imageUrls: competitorProducts.imageUrls,
+          specs: competitorProducts.specs,
+          sourceUrl: competitorProducts.sourceUrl,
+          createdAt: competitorProducts.createdAt,
+          updatedAt: competitorProducts.updatedAt,
+        })
+        .from(competitorProducts)
+        .orderBy(asc(competitorProducts.name));
+      return rows.map((r) => ({ ...r, specsAnalysisHash: null }));
+    }
+  }
+
   const [comps, atts, prods, prodAtts] = await Promise.all([
     db.select().from(competitors).orderBy(asc(competitors.name)),
     db.select().from(competitorAttachments).orderBy(desc(competitorAttachments.addedAt)),
-    db.select().from(competitorProducts).orderBy(asc(competitorProducts.name)),
+    loadProducts(),
     db.select().from(competitorProductAttachments).orderBy(desc(competitorProductAttachments.addedAt)),
   ]);
 

@@ -15,8 +15,10 @@ import {
   canViewHandbook,
   canViewEngineering,
   isAdmin,
-  ADMIN_EMAIL,
+  ADMIN_EMAILS,
+  ADMIN_EMAIL_DOMAINS,
 } from "@/lib/permissions";
+import { CLIENT_CONFIG, CADUNIQ_INDUSTRY_SUFFIX } from "@/lib/client-config";
 
 export const dynamic = "force-dynamic";
 
@@ -210,7 +212,7 @@ function SignedOutHero() {
             fontSize: 12,
           }}
         >
-          Lightbase · Operations
+          {CLIENT_CONFIG.name} · Operations
         </span>
         <h1
           className="mt-5"
@@ -238,11 +240,70 @@ function SignedOutHero() {
             letterSpacing: "-0.005em",
           }}
         >
-          The internal operations console for the Lightbase team — suppliers,
-          inventory, manufacturing, competitor research, and the full process
-          and engineering handbooks. Sign in to continue. New accounts require
-          admin approval before any module unlocks.
+          The internal operations console for the {CLIENT_CONFIG.name} team —
+          suppliers, inventory, {CLIENT_CONFIG.industry}, competitor research,
+          and the full process and engineering handbooks. Sign in to continue.
+          New accounts require admin approval before any module unlocks.
         </p>
+        <div
+          className="mt-8 inline-flex items-center gap-3 px-5 py-2.5"
+          style={{
+            borderRadius: "var(--lb-radius-pill)",
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+            color: "var(--lb-text-3)",
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 30,
+              height: 30,
+              borderRadius: 9,
+              background: "var(--lb-accent)",
+              color: "var(--lb-accent-fg)",
+              fontSize: 16,
+              fontWeight: 800,
+              letterSpacing: "-0.02em",
+            }}
+          >
+            C
+          </span>
+          <span
+            style={{
+              color: "var(--lb-text)",
+              fontWeight: 700,
+              fontSize: 18,
+              letterSpacing: "-0.01em",
+            }}
+          >
+            CADuniQ{" "}
+            <span style={{ color: "var(--lb-text-2)", fontWeight: 500 }}>
+              {CADUNIQ_INDUSTRY_SUFFIX}
+            </span>
+          </span>
+          <span
+            aria-hidden
+            style={{
+              width: 1,
+              height: 22,
+              background: "var(--lb-border)",
+            }}
+          />
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 500,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+            }}
+          >
+            property &amp; software
+          </span>
+        </div>
       </div>
     </section>
   );
@@ -288,12 +349,26 @@ function AwaitingAccess() {
           style={{ color: "var(--lb-text-2)", fontSize: 15, lineHeight: 1.55 }}
         >
           Your account is signed in but doesn&apos;t have access to anything
-          yet. An administrator (
-          <span style={{ color: "var(--lb-text)", fontWeight: 500 }}>
-            {ADMIN_EMAIL}
-          </span>
-          ) needs to grant you access to the supplier list, competitor tracker,
-          or both.
+          yet. Any CADuniQ staff member (any{" "}
+          {ADMIN_EMAIL_DOMAINS.map((d, i) => (
+            <span key={d}>
+              <span style={{ color: "var(--lb-text)", fontWeight: 500 }}>
+                @{d}
+              </span>
+              {i < ADMIN_EMAIL_DOMAINS.length - 1 ? " or " : ""}
+            </span>
+          ))}{" "}
+          address), or an administrator (
+          {ADMIN_EMAILS.map((email, i) => (
+            <span key={email}>
+              <span style={{ color: "var(--lb-text)", fontWeight: 500 }}>
+                {email}
+              </span>
+              {i < ADMIN_EMAILS.length - 1 ? " or " : ""}
+            </span>
+          ))}
+          ), can grant you access to the supplier list, competitor tracker, or
+          both.
         </p>
         <p style={{ color: "var(--lb-text-3)", fontSize: 13 }}>
           Once approved this page will show your dashboard. You can{" "}
@@ -326,7 +401,7 @@ function BrandHero({ displayName }: { displayName: string }) {
           color: "rgba(255,255,255,0.78)",
         }}
       >
-        Lightbase · Operations
+        {CLIENT_CONFIG.name} · Operations
       </span>
       <h1
         style={{

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { userProfiles } from "@/db/schema";
-import { ADMIN_EMAIL, requireAdmin } from "@/lib/permissions";
+import { isSeededAdminEmail, requireAdmin } from "@/lib/permissions";
 
 export type AccessUpdate = {
   clerkUserId: string;
@@ -26,9 +26,9 @@ export async function updateUserAccess(update: AccessUpdate) {
     .limit(1);
   if (!target) throw new Error("User not found");
 
-  // Prevent the seeded admin from being demoted via the UI.
-  if (target.email === ADMIN_EMAIL.toLowerCase() && update.role && update.role !== "admin") {
-    throw new Error("Cannot demote the primary admin account");
+  // Prevent the seeded admin accounts from being demoted via the UI.
+  if (isSeededAdminEmail(target.email) && update.role && update.role !== "admin") {
+    throw new Error("Cannot demote a seeded admin account");
   }
 
   const wasPending = target.role === "pending";

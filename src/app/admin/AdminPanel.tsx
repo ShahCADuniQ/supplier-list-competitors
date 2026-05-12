@@ -6,12 +6,22 @@ import type { UserProfile } from "@/db/schema";
 import { updateUserAccess, approveUser, revokeUser } from "./actions";
 
 export default function AdminPanel({
-  users, adminEmail, currentClerkId,
+  users, adminEmails, adminDomains, currentClerkId,
 }: {
   users: UserProfile[];
-  adminEmail: string;
+  adminEmails: string[];
+  adminDomains: string[];
   currentClerkId: string;
 }) {
+  const seededAdminSet = new Set(adminEmails.map((e) => e.toLowerCase()));
+  const seededDomainSet = new Set(adminDomains.map((d) => d.toLowerCase()));
+  function isSeeded(email: string): boolean {
+    const lower = email.toLowerCase();
+    if (seededAdminSet.has(lower)) return true;
+    const at = lower.lastIndexOf("@");
+    if (at === -1) return false;
+    return seededDomainSet.has(lower.slice(at + 1));
+  }
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [filter, setFilter] = useState<"all" | "pending" | "members" | "admins">("all");
@@ -60,7 +70,23 @@ export default function AdminPanel({
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">User Access</h1>
         <p className="text-zinc-600 dark:text-zinc-400 text-sm mt-1">
-          Approve sign-ups and control which areas each member can see. Primary admin: <span className="font-medium">{adminEmail}</span>.
+          Approve sign-ups and control which areas each member can see. Any
+          mailbox on{" "}
+          {adminDomains.map((d, i) => (
+            <span key={d}>
+              <span className="font-medium">@{d}</span>
+              {i < adminDomains.length - 1 ? ", " : ""}
+            </span>
+          ))}{" "}
+          is auto-promoted to admin (CADuniQ staff). Named admin
+          {adminEmails.length === 1 ? "" : "s"}:{" "}
+          {adminEmails.map((email, i) => (
+            <span key={email}>
+              <span className="font-medium">{email}</span>
+              {i < adminEmails.length - 1 ? ", " : ""}
+            </span>
+          ))}
+          .
         </p>
       </header>
 
@@ -91,7 +117,7 @@ export default function AdminPanel({
                 <tr><td colSpan={8} className="px-4 py-12 text-center text-zinc-500">No users in this filter.</td></tr>
               ) : filtered.map((u) => {
                 const isSelf = u.clerkUserId === currentClerkId;
-                const isPrimary = u.email === adminEmail.toLowerCase();
+                const isPrimary = isSeeded(u.email);
                 const isPending = u.role === "pending";
                 return (
                   <tr key={u.clerkUserId} className="border-t border-zinc-100 dark:border-zinc-900">
@@ -105,7 +131,7 @@ export default function AdminPanel({
                     </td>
                     <td className="px-4 py-3">
                       <RoleBadge role={u.role} />
-                      {isPrimary && <span className="ml-1 text-[10px] text-amber-700 uppercase tracking-wider">primary</span>}
+                      {isPrimary && <span className="ml-1 text-[10px] text-amber-700 uppercase tracking-wider">seeded</span>}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <Toggle

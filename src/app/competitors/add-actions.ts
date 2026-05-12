@@ -9,6 +9,7 @@
 // catalog from a brand URL). Here the user curates the input one product at
 // a time and the brand records accumulate as a side-effect.
 
+import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -33,6 +34,7 @@ import {
 } from "@/lib/ai/parsers";
 import { renderPageHtml } from "@/lib/ai/render";
 import { extractImageUrls } from "@/lib/ai/parsers";
+import { hasPerplexityKey, perplexityChat } from "@/lib/ai/perplexity";
 import { requireCompetitorEditor } from "@/lib/permissions";
 import { classifyDocument } from "./_attachments";
 
@@ -199,22 +201,186 @@ export type AddProductInput = {
   niche?: string | null;
 };
 
-export type AddProductResult = {
-  brandId: number;
-  brandName: string;
-  brandCreated: boolean;
-  productId: number;
-  productName: string;
-  attachedFileCount: number;
+export type AddProductResult =
+  | {
+      ok: true;
+      brandId: number;
+      brandName: string;
+      brandCreated: boolean;
+      productId: number;
+      productName: string;
+      attachedFileCount: number;
+      /** Source of the product text we ingested. Useful for diagnostics. */
+      sourceMode: "static" | "render" | "perplexity" | "files-only";
+      /** Image URLs we attached. Surfaced for the toast / debug. */
+      imageUrls: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+      stack?: string;
+    };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PERPLEXITY FALLBACK — used when static fetch + headless render both yield no
+// readable page text (typical of Cloudflare-fronted brand sites like Axis when
+// running from a Vercel datacenter IP). Perplexity has the page indexed via
+// its own crawl, so it can return the product text + image URLs + document
+// URLs even when our server can't reach the live page.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PerplexityProductContext = {
+  text: string;
+  imageUrls: string[];
+  documentUrls: Array<{ url: string; label: string }>;
+  citations: string[];
+};
+
+const PERPLEXITY_PRODUCT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    productName: { type: "string" },
+    brandName: { type: "string" },
+    description: { type: "string" },
+    summary: { type: "string", description: "Long-form summary covering geometry, photometry, electrical, mounting, certifications, finishes — every spec a lighting designer would need. Multiple paragraphs OK." },
+    imageUrls: { type: "array", items: { type: "string" }, description: "Direct https:// URLs to product photos / renderings on the brand site or its CDN." },
+    documents: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          url: { type: "string" },
+          label: { type: "string" },
+        },
+        required: ["url", "label"],
+      },
+      description: "Direct download URLs for spec sheets, IES files, drawings, brochures, install guides — anything the brand publishes for this product.",
+    },
+  },
+  required: ["productName", "brandName", "description", "summary", "imageUrls", "documents"],
+} as const;
+
+async function perplexityProductContext(
+  url: string,
+  hint: string | null,
+): Promise<PerplexityProductContext | null> {
+  if (!hasPerplexityKey()) return null;
+  let host = "";
+  try {
+    host = new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+  const userPrompt = `Read the product page at ${url}${hint ? ` (user note: "${hint}")` : ""} and return everything a lighting designer would need to know about this single product.
+
+Be thorough — pull from the page itself AND any spec-sheet PDF / brochure linked from it. Cover at minimum:
+  - Brand and product name (exactly as the brand prints it)
+  - Product category (e.g. "linear pendant", "recessed downlight", "wall sconce")
+  - 1–2 sentence description plus a longer multi-paragraph summary
+  - Geometry (dimensions, profile face size, length variants, max continuous run, cut-out, weight)
+  - Photometry (lumens, wattage, efficacy, CCT options, CRI, R9, beam angles, optic type, UGR)
+  - Electrical (voltage, power factor, dimming protocols, driver location/type)
+  - Mounting (Surface / Suspended / Recessed / Wall / Cove / Track / Inground / Pole / Stem / Magnetic)
+  - Lens / orientation / housing / finishes / colors
+  - IP / IK / operating-temp ratings
+  - Lifespan, warranty, country of origin, certifications
+  - Customisation + accessories
+  - Direct https:// image URLs (product photography on the brand's site / CDN)
+  - Direct download URLs for spec sheets, IES files, CAD drawings, BIM, brochures, install guides
+
+Return ONLY valid JSON matching the schema. URLs MUST be absolute https://. Do not invent values — leave fields empty if the page does not state them.`;
+
+  try {
+    const r = await perplexityChat<{
+      productName: string;
+      brandName: string;
+      description: string;
+      summary: string;
+      imageUrls: string[];
+      documents: Array<{ url: string; label: string }>;
+    }>({
+      systemPrompt:
+        "You read product pages on lighting-manufacturer websites and return exhaustive structured data. Always return only valid JSON matching the requested schema.",
+      userPrompt,
+      schema: PERPLEXITY_PRODUCT_SCHEMA,
+      schemaName: "product_page_context",
+      searchDomains: [host],
+      maxTokens: 4000,
+    });
+    const c = r.content;
+    const imageUrls = (c.imageUrls ?? [])
+      .map((u) => (typeof u === "string" ? u.trim() : ""))
+      .filter((u) => /^https?:\/\//i.test(u));
+    const documents = (c.documents ?? [])
+      .map((d) => ({
+        url: typeof d?.url === "string" ? d.url.trim() : "",
+        label: typeof d?.label === "string" ? d.label.trim() : "",
+      }))
+      .filter((d) => /^https?:\/\//i.test(d.url));
+    const text = [
+      c.brandName ? `BRAND: ${c.brandName}` : "",
+      c.productName ? `PRODUCT NAME: ${c.productName}` : "",
+      c.description ? `DESCRIPTION: ${c.description}` : "",
+      c.summary ? `\nSUMMARY:\n${c.summary}` : "",
+      imageUrls.length ? `\nIMAGE URLS:\n${imageUrls.join("\n")}` : "",
+      documents.length
+        ? `\nDOCUMENT URLS:\n${documents.map((d) => `${d.url} — ${d.label}`).join("\n")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return {
+      text,
+      imageUrls,
+      documentUrls: documents,
+      citations: r.citations ?? [],
+    };
+  } catch (e) {
+    console.warn("[aiAddProduct] perplexityProductContext failed:", e);
+    return null;
+  }
+}
+
+/** Per-step progress event emitted by the URL-paste pipeline. */
+export type AddProductProgress = {
+  step: string;
+  detail?: string;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN ENTRY
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Returns the error as DATA so the production-mode server-action sanitizer
+// doesn't replace our message with the generic "Server Components render"
+// string. The internal worker keeps throw-based control flow.
 export async function aiAddProductFromInput(
   input: AddProductInput,
 ): Promise<AddProductResult> {
+  try {
+    return await aiAddProductFromInputImpl(input);
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "Error";
+    const message = e instanceof Error ? e.message : String(e);
+    const stack = e instanceof Error ? e.stack : undefined;
+    console.error(
+      "[aiAddProduct] failed:",
+      `${name}: ${message}\n${stack ?? "(no stack)"}`,
+    );
+    return { ok: false, error: `${name}: ${message}`, stack };
+  }
+}
+
+async function aiAddProductFromInputImpl(
+  input: AddProductInput,
+  onProgress?: (e: AddProductProgress) => void,
+): Promise<AddProductResult> {
+  const emit = (step: string, detail?: string) => {
+    onProgress?.({ step, detail });
+    console.log(`[aiAddProduct] ${step}${detail ? ` — ${detail}` : ""}`);
+  };
   await requireCompetitorEditor();
 
   const url = (input.url ?? "").trim();
@@ -230,19 +396,34 @@ export async function aiAddProductFromInput(
   // ── 1. Build the source context the AI will read ──
   const sources: ParsedSource[] = [];
   let pageHtml = "";
+  let sourceMode: "static" | "render" | "perplexity" | "files-only" = "files-only";
+  // Image URLs surfaced by Perplexity when the scrape returned nothing — used
+  // as a fallback below if the AI extraction can't find any.
+  let perplexityImageUrls: string[] = [];
+  // Document URLs surfaced by Perplexity — attached to the new product so the
+  // user can immediately click "Refresh from files" / "Re-analyze with Claude".
+  let perplexityDocumentUrls: Array<{ url: string; label: string }> = [];
 
   if (url) {
+    emit("fetching", `Fetching ${url} (static)…`);
     let html = "";
     let text = "";
     try {
       const r = await fetchUrlFully(url);
       html = r.html;
       text = r.text;
+      if (text && text.length >= 200) {
+        sourceMode = "static";
+      }
     } catch (e) {
       console.warn("[aiAddProduct] static fetch failed, will try render", url, e);
     }
     // For SPA brand sites the static HTML is empty — fall back to a render.
     if (!text || text.length < 200) {
+      emit(
+        "rendering",
+        "Static fetch returned no readable text — running headless render…",
+      );
       try {
         const rendered = await renderPageHtml(url, {
           waitUntil: "networkidle",
@@ -265,18 +446,56 @@ export async function aiAddProductFromInput(
             .replace(/\s+/g, " ")
             .trim()
             .slice(0, 60_000);
+          if (text.length >= 200) sourceMode = "render";
         }
       } catch (e) {
         console.warn("[aiAddProduct] headless render failed", url, e);
       }
     }
     pageHtml = html;
+
+    // Perplexity fallback: scraping returned little or nothing (Cloudflare
+    // wall, no Chromium on Vercel, etc.). Perplexity has the page indexed and
+    // can return product text + image URLs + document URLs even when our
+    // server can't reach the live URL. We always do this when text is short,
+    // never give up empty.
+    if (!text || text.length < 600) {
+      emit(
+        "perplexity",
+        `Page text was sparse (${text.length} chars) — asking Perplexity to read ${url}…`,
+      );
+      const ctx = await perplexityProductContext(url, input.hint ?? null);
+      if (ctx && ctx.text.length > 200) {
+        sources.push({
+          label: `${url} (via Perplexity)`,
+          text: `PERPLEXITY-FETCHED CONTENT FOR ${url}:\n${ctx.text}`,
+        });
+        perplexityImageUrls = ctx.imageUrls;
+        perplexityDocumentUrls = ctx.documentUrls;
+        if (sourceMode === "files-only") sourceMode = "perplexity";
+        emit(
+          "perplexity-ok",
+          `Perplexity returned ${ctx.text.length} chars · ${ctx.imageUrls.length} images · ${ctx.documentUrls.length} docs`,
+        );
+      } else {
+        emit(
+          "perplexity-empty",
+          ctx
+            ? "Perplexity returned no usable text"
+            : "Perplexity unavailable (PPLX_API_KEY missing or call failed)",
+        );
+      }
+    }
+
     sources.push({
       label: url,
-      text: `URL CONTENT (${url}):\n${text || "[no readable text]"}`,
+      text: `URL CONTENT (${url}):\n${text || "[no readable text — see Perplexity fallback if present]"}`,
     });
   }
 
+  if (attachments.length > 0) {
+    emit("reading-files", `Reading ${attachments.length} attached file(s)…`);
+  }
   // Fetch + parse each user-uploaded file from the blob URL.
   for (const att of attachments) {
     try {
@@ -384,6 +603,7 @@ For the product:
 
 ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but DO NOT exclude the product because of it.` : ""}`;
 
+  emit("ai-extract", `Extracting structured product data with ${AI_MODEL}…`);
   const client = openaiClient();
   const res = await client.chat.completions.create({
     model: AI_MODEL,
@@ -459,12 +679,18 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
   }
 
   // ── 5. Build the imageUrls list — prefer AI-extracted URLs that resolve;
-  //      fall back to the page's HTML-extracted gallery if AI gave nothing.
+  //      fall back to the page's HTML-extracted gallery if AI gave nothing,
+  //      then to Perplexity-discovered URLs, then to user-uploaded blobs.
+  //      Order matters: AI > scraped HTML > Perplexity > user blobs.
   let imageUrls: string[] = (parsed.product.imageUrls ?? [])
     .map((u) => (typeof u === "string" ? u.trim() : ""))
     .filter((u) => /^https?:\/\//i.test(u));
   if (imageUrls.length === 0 && pageHtml && url) {
     imageUrls = extractImageUrls(pageHtml, url);
+  }
+  if (imageUrls.length === 0 && perplexityImageUrls.length > 0) {
+    imageUrls = perplexityImageUrls.slice(0, 12);
+    emit("images-perplexity", `Using ${imageUrls.length} Perplexity image URLs`);
   }
   // If the user uploaded images themselves, use those blob URLs as fallbacks.
   if (imageUrls.length === 0) {
@@ -474,6 +700,7 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
   }
 
   // ── 6. Persist the product row ──
+  emit("saving", `Saving "${parsed.product.name?.trim() || "product"}"…`);
   const [productRow] = await db
     .insert(competitorProducts)
     .values({
@@ -512,14 +739,78 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
     }
   }
 
+  // ── 8. Auto-attach Perplexity-discovered documents (spec sheets, IES,
+  //      drawings, brochures). When the page scrape failed but Perplexity
+  //      surfaced direct download URLs, we fetch them and attach them right
+  //      now so the user can immediately re-analyze with Claude. We classify
+  //      each by URL+label so the right `kind` is set. Failures are logged
+  //      but don't fail the whole add — the product row is already created.
+  if (perplexityDocumentUrls.length > 0) {
+    emit(
+      "attaching-docs",
+      `Fetching ${Math.min(perplexityDocumentUrls.length, 25)} Perplexity-discovered document(s)…`,
+    );
+    const docList = perplexityDocumentUrls.slice(0, 25);
+    let pdocsAttached = 0;
+    await Promise.all(
+      docList.map(async (d) => {
+        try {
+          const res = await fetch(d.url, { redirect: "follow" });
+          if (!res.ok) return;
+          const buf = new Uint8Array(await res.arrayBuffer());
+          const ct = res.headers.get("content-type") ?? "";
+          const fileName = (() => {
+            try {
+              const p = new URL(d.url).pathname.split("/").filter(Boolean).pop();
+              return p && p.length > 0 ? decodeURIComponent(p).slice(0, 200) : d.label.slice(0, 100) || "document";
+            } catch {
+              return d.label.slice(0, 100) || "document";
+            }
+          })();
+          const classified = classifyDocument({
+            url: d.url,
+            label: d.label || fileName,
+            contentType: ct,
+          });
+          await db.insert(competitorProductAttachments).values({
+            productId: productRow.id,
+            name: fileName,
+            size: buf.byteLength,
+            mimeType: ct || null,
+            kind: classified.kind,
+            url: d.url,
+            blobPathname: null,
+          });
+          pdocsAttached++;
+          attachedFileCount++;
+        } catch (e) {
+          console.warn(
+            "[aiAddProduct] perplexity doc fetch/attach failed:",
+            d.url,
+            e,
+          );
+        }
+      }),
+    );
+    emit("docs-attached", `Attached ${pdocsAttached} Perplexity document(s)`);
+  }
+
+  emit(
+    "done",
+    `Added ${parsed.product.name?.trim() || "product"} · ${imageUrls.length} image(s) · ${attachedFileCount} file(s) · source=${sourceMode}`,
+  );
+
   revalidatePath("/competitors");
   return {
+    ok: true,
     brandId: brandRow.id,
     brandName: brandRow.name,
     brandCreated,
     productId: productRow.id,
     productName: productRow.name,
     attachedFileCount,
+    sourceMode,
+    imageUrls,
   };
 }
 
@@ -557,7 +848,32 @@ export type RefreshSpecsResult = {
   productName: string;
   filesRead: number;
   fieldsUpdated: number;
+  /** True when the input hash matched the last analysis and Claude was skipped. */
+  skippedFromCache?: boolean;
 };
+
+// Hash of the inputs that determine the spec-extraction outcome:
+// configured Claude model + sourceUrl + sorted (attachment URL, byte size)
+// pairs. When this matches `competitorProducts.specsAnalysisHash` we skip
+// the (expensive) Claude call entirely. Including the model in the hash
+// means an ANTHROPIC_MODEL change naturally invalidates the cache so the
+// next refresh re-runs once with the new model.
+function computeAnalysisHash(input: {
+  model: string;
+  sourceUrl: string | null;
+  attachments: Array<{ url: string; size: number }>;
+}): string {
+  const sortedAtts = [...input.attachments]
+    .map((a) => `${a.url}\t${a.size}`)
+    .sort()
+    .join("\n");
+  const payload = [
+    `model=${input.model}`,
+    `source=${input.sourceUrl ?? ""}`,
+    `attachments:\n${sortedAtts}`,
+  ].join("\n---\n");
+  return createHash("sha256").update(payload).digest("hex");
+}
 
 const SPEC_REFRESH_SYSTEM_PROMPT = `You are an exhaustive spec-sheet extractor for architectural lighting. The product is already identified (name + brand). Your job: read EVERY page of EVERY attached PDF (spec sheets, photometric reports, install guides, brochures, dimensional drawings, IES summaries) plus the product page text, and fill EVERY field below the source actually states.
 
@@ -628,6 +944,13 @@ CUSTOMISATION:
 
 export async function refreshProductSpecsFromFiles(input: {
   productId: number;
+  /**
+   * Bypass the input-hash cache. The bulk "Re-analyze all" button and the
+   * post-extract auto-chain leave this off so unchanged products skip the
+   * expensive Claude call. The single-product "🔄 Refresh from files"
+   * button passes `true` so a manual click always re-runs.
+   */
+  force?: boolean;
 }): Promise<RefreshSpecsResult> {
   await requireCompetitorEditor();
 
@@ -637,11 +960,48 @@ export async function refreshProductSpecsFromFiles(input: {
     );
   }
 
-  const [row] = await db
-    .select()
-    .from(competitorProducts)
-    .where(eq(competitorProducts.id, input.productId))
-    .limit(1);
+  // Defensive load: migration 0018 added `specs_analysis_hash`. Until it's
+  // applied, a full SELECT throws on the missing column. We try the full
+  // select first, and on the specific column-missing error fall back to
+  // explicit pre-0018 columns + null hash. The optimization then degrades
+  // to "always analyze" (same as before the optimization existed) while
+  // the rest of the action keeps working.
+  let row: typeof competitorProducts.$inferSelect | undefined;
+  let analysisHashColumnExists = true;
+  try {
+    [row] = await db
+      .select()
+      .from(competitorProducts)
+      .where(eq(competitorProducts.id, input.productId))
+      .limit(1);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (!/specs_analysis_hash/i.test(msg)) throw e;
+    analysisHashColumnExists = false;
+    console.warn(
+      "[refreshSpecs] specs_analysis_hash column missing — run `npm run db:apply` to apply migration 0018 and unlock the hash-skip optimization. Continuing without it.",
+    );
+    const rows = await db
+      .select({
+        id: competitorProducts.id,
+        competitorId: competitorProducts.competitorId,
+        name: competitorProducts.name,
+        productCode: competitorProducts.productCode,
+        productCategory: competitorProducts.productCategory,
+        description: competitorProducts.description,
+        imageUrls: competitorProducts.imageUrls,
+        specs: competitorProducts.specs,
+        sourceUrl: competitorProducts.sourceUrl,
+        createdAt: competitorProducts.createdAt,
+        updatedAt: competitorProducts.updatedAt,
+      })
+      .from(competitorProducts)
+      .where(eq(competitorProducts.id, input.productId))
+      .limit(1);
+    row = rows[0]
+      ? { ...rows[0], specsAnalysisHash: null }
+      : undefined;
+  }
   if (!row) throw new Error("Product not found");
 
   // Pull every attached file. Only PDFs are forwarded to Claude — IES, DWG,
@@ -651,6 +1011,35 @@ export async function refreshProductSpecsFromFiles(input: {
     .select()
     .from(competitorProductAttachments)
     .where(eq(competitorProductAttachments.productId, input.productId));
+
+  // ── Hash-based skip ──
+  // Compute a hash of the inputs that drive the Claude extraction. If it
+  // matches the hash stored from the last successful run, the answer
+  // hasn't changed and we skip the (expensive) call entirely. The bulk
+  // "Re-analyze all" + auto-chain after Extract documents pass force=false
+  // (default) so they're idempotent on repeat clicks. The manual single-
+  // product Refresh button passes force=true to bypass this cache.
+  const currentHash = computeAnalysisHash({
+    model: CLAUDE_MODEL,
+    sourceUrl: row.sourceUrl,
+    attachments: atts.map((a) => ({ url: a.url, size: a.size })),
+  });
+  if (
+    analysisHashColumnExists &&
+    !input.force &&
+    row.specsAnalysisHash === currentHash
+  ) {
+    console.log(
+      `[refreshSpecs] product ${input.productId}: input hash unchanged — skipping Claude analysis (hash=${currentHash.slice(0, 12)}…)`,
+    );
+    return {
+      productId: input.productId,
+      productName: row.name,
+      filesRead: 0,
+      fieldsUpdated: 0,
+      skippedFromCache: true,
+    };
+  }
 
   // PDFs: fetched as base64 to send to Claude as document content blocks.
   const pdfDocuments: Array<{ name: string; base64: string; bytes: number }> = [];
@@ -891,14 +1280,31 @@ export async function refreshProductSpecsFromFiles(input: {
       ? parsed.description.trim()
       : row.description ?? null;
 
-  await db
-    .update(competitorProducts)
-    .set({
-      specs: merged,
-      description: newDescription,
-      updatedAt: new Date(),
-    })
-    .where(eq(competitorProducts.id, input.productId));
+  // Try to write the hash too. If migration 0018 hasn't been applied, fall
+  // back to updating just the existing columns so the spec refresh still
+  // succeeds — the optimization just doesn't activate yet.
+  if (analysisHashColumnExists) {
+    await db
+      .update(competitorProducts)
+      .set({
+        specs: merged,
+        description: newDescription,
+        // Stash the input hash so the next refresh with identical inputs
+        // can short-circuit without paying for another Claude call.
+        specsAnalysisHash: currentHash,
+        updatedAt: new Date(),
+      })
+      .where(eq(competitorProducts.id, input.productId));
+  } else {
+    await db
+      .update(competitorProducts)
+      .set({
+        specs: merged,
+        description: newDescription,
+        updatedAt: new Date(),
+      })
+      .where(eq(competitorProducts.id, input.productId));
+  }
 
   revalidatePath("/competitors");
   return {
@@ -922,6 +1328,12 @@ export async function refreshProductSpecsFromFiles(input: {
 export type BulkRefreshResult = {
   productsScanned: number;
   productsRefreshed: number;
+  /**
+   * Products whose input hash matched the last successful run — Claude was
+   * not called. Re-running "Re-analyze all" with no changes lands them all
+   * here, costing essentially nothing.
+   */
+  productsSkipped: number;
   totalFilesRead: number;
   totalFieldsUpdated: number;
   errors: Array<{ productId: number; productName: string; error: string }>;
@@ -943,6 +1355,7 @@ export async function aiRefreshAllProductSpecs(input: {
     return {
       productsScanned: 0,
       productsRefreshed: 0,
+      productsSkipped: 0,
       totalFilesRead: 0,
       totalFieldsUpdated: 0,
       errors: [],
@@ -962,6 +1375,7 @@ export async function aiRefreshAllProductSpecs(input: {
     return {
       productsScanned: 0,
       productsRefreshed: 0,
+      productsSkipped: 0,
       totalFilesRead: 0,
       totalFieldsUpdated: 0,
       errors: [],
@@ -988,6 +1402,7 @@ export async function aiRefreshAllProductSpecs(input: {
   const result: BulkRefreshResult = {
     productsScanned: queue.length,
     productsRefreshed: 0,
+    productsSkipped: 0,
     totalFilesRead: 0,
     totalFieldsUpdated: 0,
     errors: [],
@@ -1005,9 +1420,13 @@ export async function aiRefreshAllProductSpecs(input: {
       if (!p) return;
       try {
         const r = await refreshProductSpecsFromFiles({ productId: p.id });
-        result.productsRefreshed++;
-        result.totalFilesRead += r.filesRead;
-        result.totalFieldsUpdated += r.fieldsUpdated;
+        if (r.skippedFromCache) {
+          result.productsSkipped++;
+        } else {
+          result.productsRefreshed++;
+          result.totalFilesRead += r.filesRead;
+          result.totalFieldsUpdated += r.fieldsUpdated;
+        }
       } catch (e) {
         result.errors.push({
           productId: p.id,
@@ -1111,24 +1530,34 @@ function mergeExtractions(
  * Caches the first working model in module memory so subsequent batches
  * (and subsequent products in a bulk re-analyze) skip straight to it
  * instead of paying the round-trip to discover Opus 4.7 isn't available.
+ *
+ * `modelOverride` lets callers (e.g. the sparse-result escalation below)
+ * force a specific model for one call without disturbing the cached
+ * working model used by every other call in this process.
  */
 let _resolvedClaudeModel: string | null = null;
 
 async function callClaudeWithFallback(
   client: ReturnType<typeof claudeClient>,
   params: Omit<Anthropic.MessageCreateParamsNonStreaming, "model">,
+  modelOverride?: string,
 ): Promise<Anthropic.Message> {
-  const primary = _resolvedClaudeModel ?? CLAUDE_MODEL;
-  const candidates = [primary, ...CLAUDE_FALLBACK_MODELS].filter(
-    (m, i, a) => a.indexOf(m) === i, // dedupe
-  );
+  const primary = modelOverride ?? _resolvedClaudeModel ?? CLAUDE_MODEL;
+  const candidates = modelOverride
+    ? [modelOverride] // explicit override: don't fall back, the caller wants this model
+    : [primary, ...CLAUDE_FALLBACK_MODELS].filter(
+        (m, i, a) => a.indexOf(m) === i, // dedupe
+      );
   let lastErr: unknown = null;
   for (const model of candidates) {
     try {
       const res = await client.messages.create({ ...params, model });
       // First success — cache for this process so we don't retry the
-      // failing primary on every subsequent batch / product.
-      if (model !== _resolvedClaudeModel) {
+      // failing primary on every subsequent batch / product. Only cache
+      // when we WEREN'T given an explicit override; the override is a
+      // one-shot escalation and shouldn't change the default for the rest
+      // of the process.
+      if (!modelOverride && model !== _resolvedClaudeModel) {
         if (_resolvedClaudeModel === null && model !== CLAUDE_MODEL) {
           console.log(
             `[refreshSpecs] caching working model "${model}" for the rest of this process (configured ${CLAUDE_MODEL} unavailable)`,
@@ -1163,8 +1592,80 @@ async function callClaudeWithFallback(
   );
 }
 
+// ── Sparse-result detection + Opus escalation ──
+// Count how many fields in a SpecsOnlyExtraction came back populated. A
+// non-empty string or a non-empty array counts; empty string / empty array
+// / undefined do not. Used to decide when the cheap default model didn't
+// pull enough and we should escalate to a more capable model for a second
+// pass. Schema lists 38 spec fields total; threshold of <40% (i.e. <16
+// fields) is a reasonable "this came back too thin" line.
+function countFilledSpecFields(
+  specs: Record<string, string | string[]> | undefined,
+): number {
+  if (!specs) return 0;
+  let n = 0;
+  for (const v of Object.values(specs)) {
+    if (Array.isArray(v)) {
+      if (v.some((s) => typeof s === "string" && s.trim().length > 0)) n++;
+    } else if (typeof v === "string" && v.trim().length > 0) {
+      n++;
+    }
+  }
+  return n;
+}
+
+const SPEC_TOTAL_FIELDS = 38; // count of properties in PRODUCT_SPECS_SCHEMA
+const SPEC_SPARSE_THRESHOLD = 0.4; // <40% filled triggers Opus escalation
+const ESCALATION_MODEL = "claude-opus-4-7";
+
+// Public entry: analyze with the default model (Sonnet 4.5), then escalate
+// to Opus 4.7 for a second pass if the result is sparse. This is the "don't
+// give up until everything is filled out" path. Sonnet handles ~80% of
+// catalogs cheaply; Opus catches the dense / multi-variant ones the cheap
+// model misses. We only do the second pass when:
+//   1. The configured default model isn't already Opus, AND
+//   2. There were PDFs to read in the first place (text-only inputs are
+//      sparse by nature — extra Opus pass won't help), AND
+//   3. The first pass left more than ~60% of the schema empty.
 async function analyzeProductWithClaude(
   input: AnalyzerInput,
+): Promise<SpecsOnlyExtraction> {
+  const firstPass = await runClaudeBatches(input);
+  const filled = countFilledSpecFields(firstPass.specs);
+  const ratio = filled / SPEC_TOTAL_FIELDS;
+  const onOpusAlready = /opus/i.test(_resolvedClaudeModel ?? CLAUDE_MODEL);
+  const haveDocs = input.pdfDocuments.length > 0;
+  if (
+    haveDocs &&
+    !onOpusAlready &&
+    ratio < SPEC_SPARSE_THRESHOLD
+  ) {
+    console.log(
+      `[refreshSpecs] sparse first pass (${filled}/${SPEC_TOTAL_FIELDS} fields, ${(ratio * 100).toFixed(0)}%) — escalating to ${ESCALATION_MODEL} for a second pass`,
+    );
+    try {
+      const opusPass = await runClaudeBatches(input, ESCALATION_MODEL);
+      const merged = mergeExtractions(firstPass, opusPass);
+      const finalFilled = countFilledSpecFields(merged.specs);
+      console.log(
+        `[refreshSpecs] after Opus escalation: ${finalFilled}/${SPEC_TOTAL_FIELDS} fields filled (was ${filled})`,
+      );
+      return merged;
+    } catch (e) {
+      // Opus escalation failed (rate limit, no access, etc.). Keep what
+      // we have from the first pass — better partial than empty.
+      console.warn(
+        `[refreshSpecs] Opus escalation failed; keeping first-pass result:`,
+        e,
+      );
+    }
+  }
+  return firstPass;
+}
+
+async function runClaudeBatches(
+  input: AnalyzerInput,
+  modelOverride?: string,
 ): Promise<SpecsOnlyExtraction> {
   // Guard early — Claude rejects empty content with a 400.
   if (
@@ -1235,20 +1736,40 @@ async function analyzeProductWithClaude(
       // NOTE: no `temperature` — Claude Opus 4.7 deprecated that parameter
       // and rejects requests that include it. The default sampling is fine
       // since strict tool_use already constrains output to our schema.
-      const res = await callClaudeWithFallback(client, {
-        max_tokens: 8192,
-        system: SPEC_REFRESH_SYSTEM_PROMPT,
-        tools: [
-          {
-            name: "record_product_specs",
-            description:
-              "Record the extracted product specs and a 1-2 sentence description.",
-            input_schema: SPECS_ONLY_SCHEMA as unknown as Anthropic.Tool.InputSchema,
-          },
-        ],
-        tool_choice: { type: "tool", name: "record_product_specs" },
-        messages: [{ role: "user", content }],
-      });
+      //
+      // PROMPT CACHING — `system` and `tools` are identical across every
+      // batch and every product, so we mark the LAST block of each as an
+      // ephemeral cache breakpoint. Anthropic stores them for ~5 min; the
+      // next call within that window pays 10% of normal input cost on those
+      // blocks. With concurrency=3 and bulk re-analyze hitting 30 products,
+      // this cuts input tokens on the system+schema portion by ~90%. Two
+      // breakpoints ≪ the 4-breakpoint limit. The user-content (PDFs +
+      // intro text) varies per call and is intentionally not cached.
+      const res = await callClaudeWithFallback(
+        client,
+        {
+          max_tokens: 8192,
+          system: [
+            {
+              type: "text",
+              text: SPEC_REFRESH_SYSTEM_PROMPT,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+          tools: [
+            {
+              name: "record_product_specs",
+              description:
+                "Record the extracted product specs and a 1-2 sentence description.",
+              input_schema: SPECS_ONLY_SCHEMA as unknown as Anthropic.Tool.InputSchema,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+          tool_choice: { type: "tool", name: "record_product_specs" },
+          messages: [{ role: "user", content }],
+        },
+        modelOverride,
+      );
       let parsed: SpecsOnlyExtraction | null = null;
       for (const block of res.content) {
         if (block.type === "tool_use" && block.name === "record_product_specs") {

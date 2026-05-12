@@ -218,14 +218,28 @@ Pick the BEST single bucket. Trim and clean every field. Keep email / phone digi
 
   const models = [CLAUDE_MODEL, ...CLAUDE_FALLBACK_MODELS];
   let lastErr: unknown = null;
+  // Cache the system prompt + tool schema so back-to-back generations (and
+  // model retries within this same call) read the prefix at 10% of normal
+  // input cost. Anthropic skips the cache write when the cached prefix is
+  // under the model minimum (~1024 tokens), so this is a no-op for short
+  // prompts and a real saving once the system prompt grows.
+  const cachedTools = tools.map((t, i, arr) =>
+    i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+  );
   for (const model of models) {
     try {
       const res = await client.messages.create({
         model,
         max_tokens: 8000,
-        system: systemPrompt,
+        system: [
+          {
+            type: "text",
+            text: systemPrompt,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
         messages: [{ role: "user", content: userPrompt }],
-        tools,
+        tools: cachedTools,
         tool_choice: { type: "tool", name: "record_contacts" },
       });
       const block = res.content.find(
@@ -664,16 +678,29 @@ async function classifyOneContactWithClaude(
       },
     }];
     const models = [CLAUDE_MODEL, ...CLAUDE_FALLBACK_MODELS];
+    // System + tools are identical for every contact in a generation run.
+    // Marking them ephemeral lets Anthropic serve them from cache on the
+    // 2nd…Nth contact (subject to the model's prefix-minimum). Saves a
+    // significant share of tokens on a 100-contact streamed run.
+    const cachedTools = tools.map((t, i, arr) =>
+      i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+    );
     for (const model of models) {
       try {
         const res = await client.messages.create({
           model,
           max_tokens: 200,
-          system: `Pick the BEST single sector code for this Canadian municipal contact, from this set:\n${sectorBullets}`,
+          system: [
+            {
+              type: "text",
+              text: `Pick the BEST single sector code for this Canadian municipal contact, from this set:\n${sectorBullets}`,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
           messages: [
             { role: "user", content: `Department: ${c.department}\nRole: ${c.role}\nNotes: ${c.notes}` },
           ],
-          tools,
+          tools: cachedTools,
           tool_choice: { type: "tool", name: "classify_contact" },
         });
         const block = res.content.find(

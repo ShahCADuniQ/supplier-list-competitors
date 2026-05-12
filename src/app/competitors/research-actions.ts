@@ -2446,7 +2446,12 @@ function hostnameLabel(u: string): string {
 // avoiding 25 PDF downloads per product across 30+ products.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type ProductFilesResult = {
+export type ProductFilesResult =
+  | ProductFilesResultOk
+  | { ok: false; error: string; stack?: string };
+
+type ProductFilesResultOk = {
+  ok: true;
   productId: number;
   productName: string;
   pdfsAttached: number;
@@ -2495,16 +2500,67 @@ const PRODUCT_DOCUMENTS_SCHEMA = {
   required: ["documents"],
 } as const;
 
+// Returns the error as DATA so production-mode server-action sanitization
+// doesn't replace the message with the generic "Server Components render"
+// string. The internal worker keeps throw-based control flow.
 export async function aiExtractProductFiles(input: {
   productId: number;
 }): Promise<ProductFilesResult> {
+  try {
+    return await aiExtractProductFilesImpl(input);
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "Error";
+    const message = e instanceof Error ? e.message : String(e);
+    const stack = e instanceof Error ? e.stack : undefined;
+    console.error(
+      "[aiExtractProductFiles] failed:",
+      `${name}: ${message}\n${stack ?? "(no stack)"}`,
+    );
+    return { ok: false, error: `${name}: ${message}`, stack };
+  }
+}
+
+async function aiExtractProductFilesImpl(input: {
+  productId: number;
+}): Promise<ProductFilesResultOk> {
   await requireCompetitorEditor();
 
-  const [row] = await db
-    .select()
-    .from(competitorProducts)
-    .where(eq(competitorProducts.id, input.productId))
-    .limit(1);
+  // Defensive load — same pattern used by refreshProductSpecsFromFiles.
+  // Migration 0018 added competitor_products.specs_analysis_hash; until
+  // that's applied, the full SELECT throws on the missing column. Fall
+  // back to legacy columns + null hash so this action still works.
+  let row: typeof competitorProducts.$inferSelect | undefined;
+  try {
+    [row] = await db
+      .select()
+      .from(competitorProducts)
+      .where(eq(competitorProducts.id, input.productId))
+      .limit(1);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (!/specs_analysis_hash/i.test(msg)) throw e;
+    console.warn(
+      "[aiExtractProductFiles] specs_analysis_hash column missing — run `npm run db:apply` to apply migration 0018. Continuing without the hash-skip optimization.",
+    );
+    const rows = await db
+      .select({
+        id: competitorProducts.id,
+        competitorId: competitorProducts.competitorId,
+        name: competitorProducts.name,
+        productCode: competitorProducts.productCode,
+        productCategory: competitorProducts.productCategory,
+        description: competitorProducts.description,
+        imageUrls: competitorProducts.imageUrls,
+        specs: competitorProducts.specs,
+        sourceUrl: competitorProducts.sourceUrl,
+        createdAt: competitorProducts.createdAt,
+        updatedAt: competitorProducts.updatedAt,
+      })
+      .from(competitorProducts)
+      .where(eq(competitorProducts.id, input.productId))
+      .limit(1);
+    row = rows[0] ? { ...rows[0], specsAnalysisHash: null } : undefined;
+  }
   if (!row) throw new Error("Product not found");
   if (!row.sourceUrl) {
     throw new Error("Product has no source URL — can't extract files");
@@ -2747,6 +2803,7 @@ Return JSON: { "documents": [{ url, label, kind }] }`;
   }
 
   return {
+    ok: true,
     productId: input.productId,
     productName: row.name,
     pdfsAttached,

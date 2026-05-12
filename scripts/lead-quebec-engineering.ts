@@ -334,15 +334,25 @@ async function categorizeWithClaude(contacts: Contact[]): Promise<Contact[]> {
     },
   }];
   const models = [CLAUDE_MODEL, ...CLAUDE_FALLBACK_MODELS];
+  // Cache the system prompt + tool schema so retries within this run / a
+  // re-run within 5 min hit the cache. Anthropic skips the cache write
+  // when the prefix is below the model minimum, so this is harmless when
+  // the prompt is short.
+  const SYSTEM_PROMPT =
+    'Normalize each contact and assign category. Pick "engineering" when the department is engineering / génie / ingénierie / civil. Trim whitespace. Strip "mailto:" prefixes. Don\'t invent fields.';
+  const cachedTools = tools.map((t, i, arr) =>
+    i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+  );
   for (const model of models) {
     try {
       const res = await client.messages.create({
         model,
         max_tokens: 8000,
-        system:
-          'Normalize each contact and assign category. Pick "engineering" when the department is engineering / génie / ingénierie / civil. Trim whitespace. Strip "mailto:" prefixes. Don\'t invent fields.',
+        system: [
+          { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+        ],
         messages: [{ role: "user", content: `Normalize:\n\n${JSON.stringify(contacts, null, 2)}` }],
-        tools,
+        tools: cachedTools,
         tool_choice: { type: "tool", name: "record_contacts" },
       });
       const block = res.content.find((b: any) => b.type === "tool_use") as any;

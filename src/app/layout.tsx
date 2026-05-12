@@ -11,6 +11,7 @@ import {
   canViewHandbook,
   canViewEngineering,
 } from "@/lib/permissions";
+import { CLIENT_CONFIG, CADUNIQ_PRODUCT_LABEL } from "@/lib/client-config";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -24,9 +25,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Lightbase — Operations",
-  description:
-    "Internal operations console: suppliers, inventory, manufacturing, and competitor intelligence.",
+  title: `${CLIENT_CONFIG.name} — Operations · a ${CADUNIQ_PRODUCT_LABEL} product`,
+  description: `Internal operations console for ${CLIENT_CONFIG.name}: suppliers, inventory, ${CLIENT_CONFIG.industry}, and competitor intelligence. Property & software of ${CADUNIQ_PRODUCT_LABEL}.`,
 };
 
 export default async function RootLayout({

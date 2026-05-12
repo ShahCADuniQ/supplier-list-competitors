@@ -266,15 +266,21 @@ Take your time. Visit municipal directory pages. Each contact must have a real s
         },
       }];
       const models = [CLAUDE_MODEL, ...CLAUDE_FALLBACK_MODELS];
+      const SYSTEM_PROMPT = `You are normalizing a list of Canadian municipal contacts. For each input record, return one record with EVERY field plus a "category" chosen from this fixed set:\n${sectorBullets}\n\nPick the BEST single bucket. Trim and clean every field. Don't invent fields.`;
+      const cachedTools = tools.map((t, i, arr) =>
+        i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+      );
       let used = "";
       for (const model of models) {
         try {
           const res = await client.messages.create({
             model,
             max_tokens: 8000,
-            system: `You are normalizing a list of Canadian municipal contacts. For each input record, return one record with EVERY field plus a "category" chosen from this fixed set:\n${sectorBullets}\n\nPick the BEST single bucket. Trim and clean every field. Don't invent fields.`,
+            system: [
+              { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+            ],
             messages: [{ role: "user", content: `Normalize and categorize:\n\n${JSON.stringify(raw, null, 2)}` }],
-            tools,
+            tools: cachedTools,
             tool_choice: { type: "tool", name: "record_contacts" },
           });
           const block = res.content.find((b: any) => b.type === "tool_use") as any;

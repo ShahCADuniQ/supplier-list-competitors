@@ -3,12 +3,42 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { userProfiles, type UserProfile } from "@/db/schema";
 
-export const ADMIN_EMAIL = "hshah@lightbase.ca";
+// CADuniQ is the operator/vendor — every @caduniq.com mailbox is automatically
+// a full admin across every client dashboard hosted on this codebase. The
+// named list below covers explicit non-domain admins (e.g. legacy Lightbase
+// owner) plus the canonical contact emails surfaced in the UI.
+export const ADMIN_EMAIL_DOMAINS = ["caduniq.com"] as const;
+
+export const ADMIN_EMAILS = [
+  "hshah@caduniq.com",
+  "hshah@lightbase.ca",
+] as const;
+
+export const ADMIN_EMAIL = ADMIN_EMAILS[0];
+
+function emailDomain(email: string): string {
+  const at = email.lastIndexOf("@");
+  return at === -1 ? "" : email.slice(at + 1).toLowerCase();
+}
+
+/**
+ * Returns true if the email should be auto-promoted to admin on sign-in and
+ * protected from being demoted via the UI. Matches either:
+ *   - any address on a CADuniQ-staff domain (ADMIN_EMAIL_DOMAINS), or
+ *   - one of the explicit named admin accounts (ADMIN_EMAILS).
+ */
+export function isSeededAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const normalized = email.toLowerCase();
+  if (ADMIN_EMAILS.some((a) => a.toLowerCase() === normalized)) return true;
+  const domain = emailDomain(normalized);
+  return ADMIN_EMAIL_DOMAINS.some((d) => d.toLowerCase() === domain);
+}
 
 /**
  * Resolve the current Clerk user's profile. If they don't have one yet, create
- * it. The seeded admin email gets full access automatically; everyone else
- * starts as `pending` and has to be approved by an admin.
+ * it. Seeded admin emails get full access automatically; everyone else starts
+ * as `pending` and has to be approved by an admin.
  */
 export async function getOrCreateProfile(): Promise<UserProfile | null> {
   const { userId } = await auth();
@@ -22,13 +52,55 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
 
   if (existing.length) return existing[0];
 
-  // First request after sign-in — pull the email from Clerk and create a row.
+  // First request after this Clerk user signed in — pull the email from Clerk.
   const user = await currentUser();
   const email = user?.emailAddresses?.[0]?.emailAddress?.toLowerCase() ?? "";
   const displayName =
     [user?.firstName, user?.lastName].filter(Boolean).join(" ") || null;
 
-  const isAdmin = email === ADMIN_EMAIL.toLowerCase();
+  const isAdmin = isSeededAdminEmail(email);
+
+  // A row may already exist for this email under a *different* clerk_user_id
+  // (e.g. a previous Clerk user for the same address, or a pre-seeded row).
+  // The table has a UNIQUE index on email, so a naked INSERT would fail. Adopt
+  // the existing row by repointing it at the current Clerk user.
+  if (email) {
+    const [existingByEmail] = await db
+      .select()
+      .from(userProfiles)
+      .where(eq(userProfiles.email, email))
+      .limit(1);
+
+    if (existingByEmail) {
+      const updates: Partial<typeof userProfiles.$inferInsert> = {
+        clerkUserId: userId,
+        updatedAt: new Date(),
+      };
+      if (displayName && !existingByEmail.displayName) {
+        updates.displayName = displayName;
+      }
+      // If this email is a seeded admin but the row was created in a less-
+      // privileged state (pending/member from an earlier life), bring it up
+      // to full admin so the bootstrap promise still holds.
+      if (isAdmin && existingByEmail.role !== "admin") {
+        updates.role = "admin";
+        updates.canViewSuppliers = true;
+        updates.canViewCompetitors = true;
+        updates.canViewHandbook = true;
+        updates.canViewEngineering = true;
+        updates.canEdit = true;
+        if (!existingByEmail.approvedAt) updates.approvedAt = new Date();
+        if (!existingByEmail.approvedBy) updates.approvedBy = "system:bootstrap";
+      }
+
+      const [adopted] = await db
+        .update(userProfiles)
+        .set(updates)
+        .where(eq(userProfiles.email, email))
+        .returning();
+      return adopted ?? existingByEmail;
+    }
+  }
 
   const [created] = await db
     .insert(userProfiles)

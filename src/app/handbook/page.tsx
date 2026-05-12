@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 import { getOrCreateProfile, canViewHandbook } from "@/lib/permissions";
+import { CLIENT_CONFIG } from "@/lib/client-config";
 import ThemedIframe from "@/components/ThemedIframe";
 
 export const metadata = {
-  title: "Handbook — Lightbase",
+  title: `Handbook — ${CLIENT_CONFIG.name}`,
 };
 
 export default async function HandbookPage() {
@@ -23,7 +24,7 @@ export default async function HandbookPage() {
       >
         <ThemedIframe
           src="/handbook.html"
-          title="Lightbase Process Handbook"
+          title={`${CLIENT_CONFIG.name} Process Handbook`}
           className="w-full h-full border-0"
         />
       </div>
