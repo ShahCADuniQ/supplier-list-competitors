@@ -101,13 +101,17 @@ export default function AdminPanel({
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-zinc-50 dark:bg-zinc-900 text-xs uppercase tracking-wide text-zinc-500">
+              {/* Column order mirrors the sidebar: Design & Engineering
+                  (Competitors / Process / Engineering) → ERP System → Edit.
+                  Every sidebar surface has its own toggle; adding a new
+                  surface to the rail means adding a column here too. */}
               <tr>
                 <th className="text-left px-4 py-3 font-medium">User</th>
                 <th className="text-left px-4 py-3 font-medium">Role</th>
-                <th className="text-center px-4 py-3 font-medium">Suppliers</th>
                 <th className="text-center px-4 py-3 font-medium">Competitors</th>
                 <th className="text-center px-4 py-3 font-medium">Process</th>
                 <th className="text-center px-4 py-3 font-medium">Engineering</th>
+                <th className="text-center px-4 py-3 font-medium">ERP System</th>
                 <th className="text-center px-4 py-3 font-medium">Edit</th>
                 <th className="text-right px-4 py-3 font-medium">Actions</th>
               </tr>
@@ -135,13 +139,6 @@ export default function AdminPanel({
                     </td>
                     <td className="px-4 py-3 text-center">
                       <Toggle
-                        checked={u.role === "admin" || u.canViewSuppliers}
-                        disabled={isPending || u.role === "admin" || busy === u.clerkUserId}
-                        onChange={(v) => action(u.clerkUserId, () => updateUserAccess({ clerkUserId: u.clerkUserId, canViewSuppliers: v }), "Updated")}
-                      />
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <Toggle
                         checked={u.role === "admin" || u.canViewCompetitors}
                         disabled={isPending || u.role === "admin" || busy === u.clerkUserId}
                         onChange={(v) => action(u.clerkUserId, () => updateUserAccess({ clerkUserId: u.clerkUserId, canViewCompetitors: v }), "Updated")}
@@ -163,6 +160,13 @@ export default function AdminPanel({
                     </td>
                     <td className="px-4 py-3 text-center">
                       <Toggle
+                        checked={u.role === "admin" || u.canViewSuppliers}
+                        disabled={isPending || u.role === "admin" || busy === u.clerkUserId}
+                        onChange={(v) => action(u.clerkUserId, () => updateUserAccess({ clerkUserId: u.clerkUserId, canViewSuppliers: v }), "Updated")}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <Toggle
                         checked={u.role === "admin" || u.canEdit}
                         disabled={isPending || u.role === "admin" || busy === u.clerkUserId}
                         onChange={(v) => action(u.clerkUserId, () => updateUserAccess({ clerkUserId: u.clerkUserId, canEdit: v }), "Updated")}
@@ -175,8 +179,8 @@ export default function AdminPanel({
                             <Btn onClick={() => action(u.clerkUserId, () => approveUser(u.clerkUserId, { canViewSuppliers: true, canViewCompetitors: true, canEdit: false }), "Approved with full view access")}>
                               Approve · view both
                             </Btn>
-                            <Btn variant="ghost" onClick={() => action(u.clerkUserId, () => approveUser(u.clerkUserId, { canViewSuppliers: true, canViewCompetitors: false, canEdit: false }), "Approved · suppliers only")}>
-                              Suppliers only
+                            <Btn variant="ghost" onClick={() => action(u.clerkUserId, () => approveUser(u.clerkUserId, { canViewSuppliers: true, canViewCompetitors: false, canEdit: false }), "Approved · ERP only")}>
+                              ERP only
                             </Btn>
                             <Btn variant="ghost" onClick={() => action(u.clerkUserId, () => approveUser(u.clerkUserId, { canViewSuppliers: false, canViewCompetitors: true, canEdit: false }), "Approved · competitors only")}>
                               Competitors only

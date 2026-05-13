@@ -6,12 +6,11 @@
 // rail to flip through every image, the spec table, and the attached files
 // (each previewable inline via FilePreviewModal).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  aiExtractProductFiles,
-} from "./research-actions";
+import type { ProductFilesResult } from "./research-actions";
 import { refreshProductSpecsFromFiles } from "./add-actions";
+import { ProgressPanel, consumeSseStream, formatDuration } from "./_progress";
 import {
   deleteProductAttachment,
   deleteAllProductAttachments,
@@ -47,6 +46,33 @@ function fmtBytes(b: number) {
   if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
   return (b / 1048576).toFixed(2) + " MB";
 }
+
+// Machine-readable step → user-friendly label for the extract progress UI.
+// Concrete text per master guide §5.1 ("Extracting page 3 of 12" beats
+// "Working…"). Anything not in this map falls through to the raw key, which
+// the server already logs.
+const EXTRACT_STEP_LABELS: Record<string, string> = {
+  starting: "Starting up",
+  fetching: "Fetching the product page",
+  "embedded-docs": "Reading embedded document list",
+  "static-resilience": "Scanning JSON-LD + inline scripts for doc URLs",
+  perplexity: "Asking Perplexity for downloadable docs",
+  "anchor-scrape": "Scraping document links from HTML",
+  rendering: "Headless render — clicking Downloads tabs + scrolling",
+  "tab-variants": "Trying alternate tab URLs (#downloads, ?tab=…)",
+  "ai-classify": "Claude classifying every URL on the page",
+  "ai-classified": "Claude finished URL classification",
+  "downloading-docs": "Downloading documents to our storage",
+  "reading-specs": "Reading PDFs with Claude to fill specs",
+  loading: "Loading product + attachments",
+  "hash-check": "Cache check — inputs changed, re-running",
+  "skipped-cache": "Skipped (inputs unchanged — cached result reused)",
+  "fetching-pdfs": "Fetching PDF bytes for Claude",
+  analyzing: "Claude reading every PDF",
+  analyzed: "Claude returned extracted specs",
+  merging: "Merging specs & writing to DB",
+  done: "Done",
+};
 
 // Spec sections — every field that the Summary view tracks is rendered
 // in the drawer too, organised by topic. Empty values show "—" so the user
@@ -163,6 +189,50 @@ export default function ProductDetailDrawer({
   const router = useRouter();
   const [extractBusy, setExtractBusy] = useState(false);
   const [refreshSpecsBusy, setRefreshSpecsBusy] = useState(false);
+
+  // §5 progress UX for the Extract Documents flow. Same architecture as
+  // AddProductForm: SSE-driven percent bar tied to real work units,
+  // elapsed/ETA, current-step label, heartbeat, cancel button, and a
+  // completeness summary surfaced at the end.
+  const [extractProgress, setExtractProgress] = useState<{
+    startedAt: number;
+    percent: number;
+    step: string;
+    detail: string | null;
+  } | null>(null);
+  const [extractSummary, setExtractSummary] = useState<
+    | null
+    | {
+        ok: true;
+        result: Extract<ProductFilesResult, { ok: true }>;
+        elapsedSec: number;
+      }
+    | { ok: false; error: string; elapsedSec: number }
+  >(null);
+  const extractAbortRef = useRef<AbortController | null>(null);
+  const extractTickRef = useRef<number | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    if (!extractBusy) {
+      if (extractTickRef.current) {
+        window.clearInterval(extractTickRef.current);
+        extractTickRef.current = null;
+      }
+      return;
+    }
+    extractTickRef.current = window.setInterval(
+      () => setNowMs(Date.now()),
+      500,
+    );
+    return () => {
+      if (extractTickRef.current) {
+        window.clearInterval(extractTickRef.current);
+        extractTickRef.current = null;
+      }
+    };
+  }, [extractBusy]);
+
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteAllBusy, setDeleteAllBusy] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
@@ -243,15 +313,93 @@ export default function ProductDetailDrawer({
   async function handleExtractFiles() {
     if (!canEdit) return;
     setExtractBusy(true);
+    setExtractSummary(null);
+    const startedAt = Date.now();
+    setExtractProgress({
+      startedAt,
+      percent: 0,
+      step: "starting",
+      detail: "Sending request…",
+    });
+
+    const controller = new AbortController();
+    extractAbortRef.current = controller;
+
+    // TS-friendly mutable holder so onDone / onError can assign without
+    // confusing control-flow narrowing later.
+    const state: {
+      result: Extract<ProductFilesResult, { ok: true }> | null;
+      failResult: Extract<ProductFilesResult, { ok: false }> | null;
+      streamError: string | null;
+    } = { result: null, failResult: null, streamError: null };
+
     try {
-      onToast(`Extracting docs for ${product.name}… specs will refresh automatically.`);
-      const r = await aiExtractProductFiles({ productId: product.id });
-      if (!r.ok) {
-        if (r.stack) console.error("[aiExtractProductFiles]", r.stack);
-        onToast(r.error, true);
+      const res = await fetch("/api/competitors/extract-product-files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({ productId: product.id }),
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`Stream request failed (HTTP ${res.status})`);
+      }
+
+      await consumeSseStream<ProductFilesResult>(res, {
+        onProgress: (evt) =>
+          setExtractProgress((prev) => ({
+            startedAt,
+            percent: Math.max(
+              prev?.percent ?? 0,
+              Math.min(100, Math.max(0, evt.percent ?? 0)),
+            ),
+            step: evt.step,
+            detail: evt.detail ?? null,
+          })),
+        onDone: (result) => {
+          if (result.ok) state.result = result;
+          else state.failResult = result;
+        },
+        onError: (message) => {
+          state.streamError = message;
+        },
+      });
+
+      const elapsedSec = (Date.now() - startedAt) / 1000;
+
+      if (state.streamError) {
+        setExtractSummary({ ok: false, error: state.streamError, elapsedSec });
+        onToast(state.streamError, true);
         return;
       }
+      if (state.failResult) {
+        setExtractSummary({
+          ok: false,
+          error: state.failResult.error,
+          elapsedSec,
+        });
+        if (state.failResult.stack) {
+          console.error("[aiExtractProductFiles]", state.failResult.stack);
+        }
+        onToast(state.failResult.error, true);
+        return;
+      }
+      const r = state.result;
+      if (!r) {
+        const msg = "Stream ended without a result";
+        setExtractSummary({ ok: false, error: msg, elapsedSec });
+        onToast(msg, true);
+        return;
+      }
+
+      setExtractProgress({
+        startedAt,
+        percent: 100,
+        step: "done",
+        detail: "Complete",
+      });
+      setExtractSummary({ ok: true, result: r, elapsedSec });
       router.refresh();
+
       const total = r.pdfsAttached + r.otherDocsAttached;
       const parts: string[] = [r.productName];
       parts.push(`${r.pdfsAttached} PDFs · ${r.otherDocsAttached} other docs`);
@@ -264,10 +412,24 @@ export default function ProductDetailDrawer({
       if (total === 0) parts.push("(no files found)");
       onToast(parts.join(" · "), total === 0 && r.fetchErrors > 0);
     } catch (e) {
-      onToast(e instanceof Error ? e.message : "Doc extraction failed", true);
+      const elapsedSec = (Date.now() - startedAt) / 1000;
+      const aborted =
+        e instanceof DOMException && e.name === "AbortError";
+      const message = aborted
+        ? "Cancelled"
+        : e instanceof Error
+          ? e.message
+          : "Doc extraction failed";
+      setExtractSummary({ ok: false, error: message, elapsedSec });
+      if (!aborted) onToast(message, true);
     } finally {
       setExtractBusy(false);
+      extractAbortRef.current = null;
     }
+  }
+
+  function handleCancelExtract() {
+    extractAbortRef.current?.abort();
   }
 
   async function handleRefreshSpecs() {
@@ -791,6 +953,29 @@ export default function ProductDetailDrawer({
                 </button>
               </div>
             )}
+            {extractProgress && (
+              <ProgressPanel
+                percent={extractProgress.percent}
+                stepLabel={
+                  EXTRACT_STEP_LABELS[extractProgress.step] ??
+                  extractProgress.step
+                }
+                detail={extractProgress.detail}
+                elapsedSec={(nowMs - extractProgress.startedAt) / 1000}
+                etaSec={
+                  extractProgress.percent > 2 && extractProgress.percent < 100
+                    ? ((nowMs - extractProgress.startedAt) / 1000) *
+                      ((100 - extractProgress.percent) /
+                        extractProgress.percent)
+                    : null
+                }
+                busy={extractBusy}
+                onCancel={handleCancelExtract}
+              />
+            )}
+            {extractSummary && (
+              <ExtractCompletenessPanel summary={extractSummary} />
+            )}
             {allAttachments.length === 0 ? (
               <p className="pd-empty">
                 No files yet. Use Extract to crawl this product&apos;s downloads.
@@ -877,6 +1062,105 @@ export default function ProductDetailDrawer({
           onClose={() => setPreviewIndex(null)}
         />
       )}
+    </div>
+  );
+}
+
+// Completeness panel for the Extract Documents flow — §5.3 Layer 3. Shows
+// PDFs attached, other docs attached, fetch errors, and the count of spec
+// fields auto-refreshed so the user sees the full picture instead of just
+// "done".
+function ExtractCompletenessPanel(props: {
+  summary:
+    | {
+        ok: true;
+        result: Extract<ProductFilesResult, { ok: true }>;
+        elapsedSec: number;
+      }
+    | { ok: false; error: string; elapsedSec: number };
+}) {
+  const { summary } = props;
+  if (!summary.ok) {
+    return (
+      <div
+        role="alert"
+        style={{
+          marginTop: 12,
+          padding: "10px 14px",
+          borderRadius: 10,
+          background: "rgba(239, 68, 68, 0.12)",
+          border: "1px solid rgba(239, 68, 68, 0.32)",
+          fontSize: 13,
+        }}
+      >
+        <strong>Failed</strong> after {formatDuration(summary.elapsedSec)} —{" "}
+        {summary.error}
+      </div>
+    );
+  }
+  const { result, elapsedSec } = summary;
+  const total = result.pdfsAttached + result.otherDocsAttached;
+  const allOk = result.fetchErrors === 0 && total > 0;
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        padding: "10px 14px",
+        borderRadius: 10,
+        background: "rgba(34, 197, 94, 0.10)",
+        border: "1px solid rgba(34, 197, 94, 0.32)",
+        fontSize: 13,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <div>
+        <strong>{result.productName}</strong>{" "}
+        <span style={{ color: "var(--lb-text-2, rgba(255,255,255,0.66))" }}>
+          ({formatDuration(elapsedSec)})
+        </span>
+      </div>
+      <div
+        style={{
+          fontSize: 12,
+          color: "var(--lb-text-2, rgba(255,255,255,0.66))",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 14,
+        }}
+      >
+        <span>
+          Docs:{" "}
+          <strong
+            style={{
+              color: allOk
+                ? "rgb(74,222,128)"
+                : total > 0
+                  ? "rgb(250,204,21)"
+                  : "rgb(239,68,68)",
+            }}
+          >
+            {total}
+          </strong>{" "}
+          attached ({result.pdfsAttached} PDFs, {result.otherDocsAttached}{" "}
+          other)
+        </span>
+        {result.fetchErrors > 0 && (
+          <span style={{ color: "rgb(250,204,21)" }}>
+            {result.fetchErrors} fetch error(s)
+          </span>
+        )}
+        <span>
+          Specs:{" "}
+          <strong>
+            {result.specFieldsUpdated} field
+            {result.specFieldsUpdated === 1 ? "" : "s"} updated
+          </strong>{" "}
+          from {result.specFilesRead} file
+          {result.specFilesRead === 1 ? "" : "s"}
+        </span>
+      </div>
     </div>
   );
 }

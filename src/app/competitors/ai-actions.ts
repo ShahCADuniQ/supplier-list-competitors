@@ -18,7 +18,10 @@ import {
   canEdit,
   getOrCreateProfile,
 } from "@/lib/permissions";
-import { attachProductDocument } from "./_attachments";
+import {
+  attachProductDocument,
+  insertCompetitorProductCompat,
+} from "./_attachments";
 
 export type AiSourceUpload = {
   url: string;
@@ -87,27 +90,27 @@ async function insertProducts(
   products: CompetitorProductExtraction[],
 ): Promise<Array<{ id: number; specsheetUrl: string }>> {
   if (!products.length) return [];
-  const rows = await db
-    .insert(competitorProducts)
-    .values(
-      products.map((p) => ({
-        competitorId,
-        name: p.name,
-        productCode: p.productCode || null,
-        productCategory: p.productCategory || null,
-        description: p.description || null,
-        imageUrls: Array.isArray(p.imageUrls)
-          ? p.imageUrls.filter((u) => /^https?:\/\//i.test(u))
-          : [],
-        sourceUrl: p.sourceUrl || null,
-        specs: (p.specs ?? {}) as unknown as Record<string, string | string[]>,
-      })),
-    )
-    .returning({ id: competitorProducts.id });
-  return rows.map((r, i) => ({
-    id: r.id,
-    specsheetUrl: products[i].specsheetUrl ?? "",
-  }));
+  // Sequential per-row so the migration-forward compat helper can seed its
+  // column-presence cache from the first INSERT. Sequential cost is small
+  // for catalog extractions (~50–100ms / row on Neon HTTP) and the path
+  // matters more than the throughput here.
+  const out: Array<{ id: number; specsheetUrl: string }> = [];
+  for (const p of products) {
+    const row = await insertCompetitorProductCompat({
+      competitorId,
+      name: p.name,
+      productCode: p.productCode || null,
+      productCategory: p.productCategory || null,
+      description: p.description || null,
+      imageUrls: Array.isArray(p.imageUrls)
+        ? p.imageUrls.filter((u) => /^https?:\/\//i.test(u))
+        : [],
+      sourceUrl: p.sourceUrl || null,
+      specs: (p.specs ?? {}) as unknown as Record<string, string | string[]>,
+    });
+    out.push({ id: row.id, specsheetUrl: p.specsheetUrl ?? "" });
+  }
+  return out;
 }
 
 /**

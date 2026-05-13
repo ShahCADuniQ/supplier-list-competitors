@@ -30,26 +30,28 @@ export function hasClaudeKey(): boolean {
 }
 
 /**
- * Default model — Sonnet 4.5. Reads architectural-lighting spec tables and
- * dimensional drawings well at ~1/5 the per-token cost of Opus 4.7. Override
- * via ANTHROPIC_MODEL when a particular collection benefits from Opus's
- * extra rigor on dense / multi-variant catalogs.
+ * Default model — Opus 4.7. Per the AI Project Master Guide (§1, §7),
+ * Opus is the always-on default; cost is controlled via prompt caching,
+ * system-prompt trimming, hash-based skip on recomputes, batch API, and
+ * tight context — not by downgrading models. Override via ANTHROPIC_MODEL
+ * only for explicit experimentation.
  *
  * If the API key's tier doesn't include the primary model, the analyzer
  * automatically retries with one of the fallbacks below — so a 404 / 403
  * "model not available" doesn't surface as an error to the user.
  */
 export const CLAUDE_MODEL =
-  process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+  process.env.ANTHROPIC_MODEL || "claude-opus-4-7";
 
 /**
  * Fallback chain when the primary model returns a "model not found" /
- * "permission" / "invalid model" error. Ordered cheapest-acceptable →
- * cheapest-safe so a downgrade still gets work done (Haiku 4.5 is the
- * safety net — fast and cheap, less thorough on dense spec tables but
- * better than failing).
+ * "permission" / "invalid model" error. Ordered by closeness in capability
+ * to Opus 4.7 — Opus 4.6 first, then Sonnet 4.6 as a credible step-down,
+ * Haiku 4.5 as the absolute safety net. A downgrade is only ever a fallback
+ * here, never a default (master guide §7).
  */
 export const CLAUDE_FALLBACK_MODELS = [
+  "claude-opus-4-6",
   "claude-sonnet-4-6",
   "claude-haiku-4-5",
 ] as const;

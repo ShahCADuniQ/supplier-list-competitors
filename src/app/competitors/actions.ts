@@ -13,6 +13,7 @@ import {
   suppliers,
 } from "@/db/schema";
 import { requireCompetitorEditor } from "@/lib/permissions";
+import { insertCompetitorProductCompat } from "./_attachments";
 
 const TIER_KEYS = ["mass", "mid", "spec", "premium"] as const;
 type TierKey = (typeof TIER_KEYS)[number];
@@ -345,7 +346,9 @@ export async function upsertProduct(input: ProductInput) {
     await db.update(competitorProducts).set(values).where(eq(competitorProducts.id, input.id));
     revalidatePath("/competitors");
   } else {
-    const [row] = await db.insert(competitorProducts).values(values).returning();
+    // Uses the migration-forward compat wrapper so a fresh deploy without
+    // `npm run db:apply` still saves the product.
+    const row = await insertCompetitorProductCompat(values);
     revalidatePath("/competitors");
     return row;
   }

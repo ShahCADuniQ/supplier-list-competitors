@@ -6,10 +6,15 @@ import { usePathname } from "next/navigation";
 // Static map. Add entries here as new routes ship.
 const ROUTE_LABELS: Record<string, string> = {
   "": "Home",
-  suppliers: "Inventory & Manufacturing",
+  suppliers: "ERP System",
+  "design-engineering": "Design & Engineering",
+  // /competitors, /handbook, /engineering now live under the Tools group
+  // in the navigation, but their breadcrumb label is still the resource
+  // name — that's what the segment URL means.
   competitors: "Competitors & Market Research",
   handbook: "Process",
   engineering: "Engineering",
+  tools: "Tools",
   admin: "Admin",
   "sign-in": "Sign in",
   "sign-up": "Sign up",

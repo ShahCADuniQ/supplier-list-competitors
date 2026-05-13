@@ -42,9 +42,11 @@ export default function AppShell({
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar />
         <SubNav
+          canViewSuppliers={canViewSuppliers}
           canViewCompetitors={canViewCompetitors}
           canViewHandbook={canViewHandbook}
           canViewEngineering={canViewEngineering}
+          isAdmin={isAdmin}
         />
         <main className="flex-1 overflow-auto">{children}</main>
       </div>

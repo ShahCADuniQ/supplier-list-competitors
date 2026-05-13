@@ -452,7 +452,7 @@ export type DocumentLink = {
 const DOC_TEXT_PATTERNS: Array<{ regex: RegExp; kind: DocumentLink["kind"] }> = [
   { regex: /\b(spec(?:ification)?\s?sheet|cut\s?sheet|datasheet|tech\s?(?:nical)?\s?sheet|product\s?sheet|specsheet)\b/i, kind: "datasheet" },
   { regex: /\b(brochure|catalog(?:ue)?|family\s?brochure|leaflet)\b/i, kind: "datasheet" },
-  { regex: /\b(installation|install\s?guide|installation\s?instructions?|user\s?guide|operating|warranty)\b/i, kind: "datasheet" },
+  { regex: /\b(installation|install\s?guide|installation\s?instructions?|instruction\s?sheets?|instructions?|user\s?guide|operating|warranty)\b/i, kind: "datasheet" },
   { regex: /\b(ies\s?file|photometric|ldt\s?file|ldt|ies)\b/i, kind: "ies" },
   { regex: /\b(bim|revit|rfa|family\s?file|3d\s?model|step|sketch\s?up|skp)\b/i, kind: "drawing" },
   { regex: /\b(drawing|cad|dwg|dxf|dimension(?:al)?\s?drawing|technical\s?drawing|line\s?drawing)\b/i, kind: "drawing" },
@@ -1050,4 +1050,381 @@ export async function parseFile(
   // Plain-ish text file
   const text = clip(Buffer.from(buf).toString("utf8"));
   return { label: name, text };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional document-discovery extractors for doc-extractor resilience.
+// All three are pure HTML→URL functions: no I/O, no AI. They run AFTER the
+// existing embedded-JSON + anchor-scrape passes and are cheap, so we can
+// stack them defensively. iGuzzini-class sites with tab-hidden docs benefit
+// most. Lumenpulse/Axis/etc. who already surface docs via embedded JSON or
+// plain anchors won't change behaviour (extractors return [] or duplicates
+// the caller dedupes).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DOC_EXTENSION_RX =
+  /\.(pdf|ies|ldt|dwg|dxf|rfa|rvt|skp|step|stp|obj|3ds|zip|csv|xlsx?)(?:\?|#|$)/i;
+
+/**
+ * Extract document URLs from any `<script type="application/ld+json">` block.
+ * Common shapes:
+ *  - Product schema with `manualUrl`, `documentation`, `installationManual`,
+ *    `additionalProperty` containing URL values.
+ *  - Custom keys like `downloads`, `documents`, `files`, `assets`, `pdf`
+ *    appearing anywhere in the JSON tree.
+ * Strategy: recursively walk the parsed JSON-LD and collect every string
+ * that looks like an absolute URL with a known doc extension.
+ */
+export function extractJsonLdDocuments(
+  html: string,
+): Array<{ url: string; label: string }> {
+  const out: Array<{ url: string; label: string }> = [];
+  const seen = new Set<string>();
+  const re =
+    /<script\b[^>]*?type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const raw = m[1].trim();
+    if (!raw) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    walkJsonForDocUrls(parsed, "", (url, label) => {
+      const u = url.trim();
+      if (seen.has(u)) return;
+      seen.add(u);
+      out.push({ url: u, label });
+    });
+  }
+  return out;
+}
+
+function walkJsonForDocUrls(
+  node: unknown,
+  pathKey: string,
+  emit: (url: string, label: string) => void,
+): void {
+  if (node == null) return;
+  if (typeof node === "string") {
+    if (/^https?:\/\//i.test(node) && DOC_EXTENSION_RX.test(node)) {
+      emit(node, pathKey || "JSON-LD asset");
+    }
+    return;
+  }
+  if (Array.isArray(node)) {
+    for (const item of node) walkJsonForDocUrls(item, pathKey, emit);
+    return;
+  }
+  if (typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      walkJsonForDocUrls(v, pathKey ? `${pathKey}.${k}` : k, emit);
+    }
+  }
+}
+
+/**
+ * Extract absolute document URLs embedded in any inline `<script>` blob.
+ * Many enterprise sites (iGuzzini, ERCO, others) inject product asset data
+ * into `window.__INITIAL_STATE__`, `__NEXT_DATA__`, `__NUXT__`, or a custom
+ * global as a JSON string. The URLs are there but not in a parseable JSON-LD
+ * block — a regex over script content surfaces them.
+ *
+ * The regex looks for `https://…` strings ending in a known document
+ * extension and rejects obvious image-CDN spam. Returns deduped URLs.
+ */
+export function extractInlineScriptDocumentUrls(html: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // Pull every <script>…</script> body. We intentionally skip
+  // type="application/ld+json" (handled separately) but match the rest.
+  const scriptRe =
+    /<script\b(?![^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi;
+  // URLs ending in a known doc extension. Captures the full URL via a
+  // tightly-bounded character set so we don't grab the rest of the JS line.
+  const urlRe =
+    /https?:\/\/[\w.\-/%?&=:@~,!*+#]+?\.(?:pdf|ies|ldt|dwg|dxf|rfa|rvt|skp|step|stp|obj|3ds|zip|csv|xlsx?)(?:\?[\w.\-/%?&=:@~,!*+#]*)?/gi;
+  let sm: RegExpExecArray | null;
+  while ((sm = scriptRe.exec(html)) !== null) {
+    const body = sm[1];
+    if (!body) continue;
+    // JSON strings often have backslash escapes — convert \/ → / and
+    // / → / before scanning so escaped URLs aren't missed.
+    const clean = body
+      .replace(/\\\//g, "/")
+      .replace(/\\u002[fF]/g, "/")
+      .replace(/\\u0026/g, "&");
+    let um: RegExpExecArray | null;
+    while ((um = urlRe.exec(clean)) !== null) {
+      const u = um[0]
+        // Strip trailing punctuation that the regex may have grabbed.
+        .replace(/[",;)]+$/, "");
+      if (seen.has(u)) continue;
+      seen.add(u);
+      out.push(u);
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "Download button" extractor — handles the iGuzzini / ERCO / XAL pattern
+// where the anchor text is just "DOWNLOAD" (generic verb) and the actual
+// document label lives in a SIBLING element, often grouped under a section
+// heading. The plain anchor scrape in `extractDocumentLinks` misses these
+// because:
+//   1. The URL frequently has NO file extension (e.g. /download/abc123).
+//   2. The anchor text alone ("DOWNLOAD") doesn't match doc text patterns.
+// We rescue them by walking back through the surrounding HTML to find the
+// nearest preceding non-anchor text element (the row's title) and the
+// nearest preceding heading (the section). Combined → label + section.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Anchor text that's "just a download verb" — these are the buttons whose
+// container text holds the real label.
+const DOWNLOAD_VERB_RX =
+  /^\s*(?:[↓⇓⬇]|download|télécharger|telecharger|scarica|descargar|herunterladen|baixar|下载|ダウンロード|загрузить|загрузка|tải xuống|pdf|get(?:[\s-]?(?:file|download|pdf))?|view(?:[\s-]?(?:pdf|file))?|open[\s-]?pdf)\s*$/i;
+
+// URL patterns we trust as asset/file routes even without a known extension.
+const ASSET_URL_RX =
+  /(?:\/download|\/file|\/asset|\/media|\/uploads|\/wp-content|\/cdn-cgi|\/get|\/dl|\/files|\/documents|\/datasheets?|\/spec-sheets?|\/cut-sheets?|\?download|\?file|\?asset|\?dl)/i;
+
+/**
+ * Walk back through `prefix` (the HTML chunk immediately preceding an
+ * anchor) and return the nearest non-anchor text content. This is the
+ * row's descriptive label when the page uses a "label + DOWNLOAD button"
+ * layout. Returns "" if no plausible label was found.
+ */
+function nearestPrecedingLabel(prefix: string): string {
+  // Strip out any <a>...</a> content fully — we don't want anchor text from
+  // an earlier row to leak in. Replace with a boundary marker so the chunk
+  // split below still respects row separation.
+  let clean = prefix.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, "│");
+  // Strip <script>, <style>, <noscript>, <svg> bodies entirely.
+  clean = clean
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, " ");
+  // Treat block-level tag boundaries as chunk separators so the row's
+  // label stays distinct from preceding rows / section headers.
+  clean = clean.replace(
+    /<\/?(?:tr|td|th|li|dl|dt|dd|h[1-6]|div|section|article|p|header|footer|nav|main|tbody|thead|tfoot|table|ul|ol|details|summary|figure|figcaption)\b[^>]*>/gi,
+    "│",
+  );
+  // Strip remaining inline tags (span, strong, em, i, b, etc.).
+  clean = clean.replace(/<[^>]+>/g, " ");
+  // Decode common entities.
+  clean = clean
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&[a-z]+;/gi, " ");
+
+  // Split on the boundary marker and walk backwards for the first chunk that
+  // looks like a real label. Skip empty chunks, chunks that are just a
+  // download verb, and chunks that are too long (those are paragraphs of
+  // marketing copy, not labels).
+  const chunks = clean.split("│");
+  for (let i = chunks.length - 1; i >= 0; i--) {
+    const c = chunks[i].replace(/\s+/g, " ").trim();
+    if (!c) continue;
+    if (c.length < 3) continue;
+    if (c.length > 200) continue;
+    if (DOWNLOAD_VERB_RX.test(c)) continue;
+    return c;
+  }
+  return "";
+}
+
+/**
+ * Walk back through `prefix` to find the nearest `<h1>-<h6>` heading. Used
+ * to give a label its section context — e.g. an anchor whose row says "IES"
+ * sitting under a "PHOTOMETRIC DATA" heading should be classified as ies.
+ */
+function nearestPrecedingHeading(prefix: string): string {
+  const re = /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi;
+  let last = "";
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(prefix)) !== null) {
+    const txt = m[1]
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&[a-z]+;/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (txt && txt.length < 120) last = txt;
+  }
+  return last;
+}
+
+/**
+ * Find every "Download" button on the page where the descriptive label sits
+ * in a sibling element. Returns DocumentLinks with the rescued label so the
+ * classifier downstream picks the right `kind` (spec-sheet, IES, drawing…).
+ *
+ * Complements `extractDocumentLinks`: that one matches anchors by anchor
+ * text + URL extension. This one matches anchors whose text is too generic
+ * to recognise on its own but whose surrounding HTML reveals the label.
+ */
+export function extractDownloadButtonLinks(
+  html: string,
+  baseUrl: string,
+): DocumentLink[] {
+  const out: DocumentLink[] = [];
+  const seen = new Set<string>();
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return out;
+  }
+
+  const aRe =
+    /<a\b[^>]*?href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = aRe.exec(html)) !== null) {
+    const rawHref = (m[1] ?? m[2] ?? m[3] ?? "").trim();
+    if (!rawHref) continue;
+    if (
+      rawHref.startsWith("#") ||
+      rawHref.startsWith("javascript:") ||
+      rawHref.startsWith("mailto:") ||
+      rawHref.startsWith("tel:")
+    ) continue;
+    let abs: URL;
+    try {
+      abs = new URL(rawHref, base);
+    } catch {
+      continue;
+    }
+    abs.hash = "";
+    const norm = abs.toString();
+    if (seen.has(norm)) continue;
+
+    // Anchor's raw text (inner HTML stripped to text).
+    const anchorText = m[4]
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&[a-z]+;/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Two gates — keep ONLY if BOTH triggered:
+    //  (a) anchor text is just a "download" verb (no useful info on its own)
+    //  (b) URL points to the same host OR has an asset-route hint
+    // The combination keeps noise out (random "Download our app" CTAs on
+    // unrelated hosts) while catching the real product downloads.
+    const isGenericDownload = DOWNLOAD_VERB_RX.test(anchorText);
+    if (!isGenericDownload) continue;
+
+    const sameHost =
+      abs.host.replace(/^www\./, "") === base.host.replace(/^www\./, "");
+    const looksLikeAsset = ASSET_URL_RX.test(norm);
+    const hasDocExt = !!kindFromPathExtension(abs.pathname.toLowerCase());
+    if (!sameHost && !looksLikeAsset && !hasDocExt) continue;
+
+    // Recover the label from surrounding HTML.
+    const prefixStart = Math.max(0, m.index - 1200);
+    const prefix = html.slice(prefixStart, m.index);
+    const rowLabel = nearestPrecedingLabel(prefix);
+    if (!rowLabel) {
+      // No nearby label means we can't tell what this file is. Skip rather
+      // than store an unhelpful "DOWNLOAD" entry — the AI rung will see it
+      // separately via the anchor pool.
+      continue;
+    }
+    // Section heading (search a bit further back) for kind classification.
+    const headingPrefix = html.slice(Math.max(0, m.index - 4000), m.index);
+    const section = nearestPrecedingHeading(headingPrefix);
+
+    // Classify by URL extension if present; otherwise by the label, then
+    // by the section heading as a last resort. Order matters: extension is
+    // ground truth; label is usually more specific than section.
+    let kind: DocumentLink["kind"] | null = kindFromPathExtension(
+      abs.pathname.toLowerCase(),
+    );
+    if (!kind) {
+      const haystack = `${section} | ${rowLabel}`;
+      for (const p of DOC_TEXT_PATTERNS) {
+        if (p.regex.test(haystack)) {
+          kind = p.kind;
+          break;
+        }
+      }
+    }
+    if (!kind) kind = "other";
+
+    // Build a display label that includes the section so downstream UIs
+    // group these properly (e.g. "PHOTOMETRIC DATA — IES").
+    const label = section
+      ? `${section.replace(/[\s·]+/g, " ").trim()} — ${rowLabel}`.slice(
+          0,
+          200,
+        )
+      : rowLabel.slice(0, 200);
+
+    seen.add(norm);
+    out.push({ href: norm, text: label, kind });
+  }
+  return out;
+}
+
+/**
+ * Generate alternative tab-URL variants for a product page that didn't
+ * surface any documents on the default tab. Many enterprise lighting sites
+ * use either URL fragments (`#downloads`) or query params (`?tab=downloads`)
+ * to switch tabs. We try a few common ones — anything beyond this list is
+ * unlikely to be standard.
+ *
+ * Returns URLs that DIFFER from the input (no duplicates, no the-same-URL).
+ * Caller is expected to fetch/render each one and re-run the doc extractors.
+ */
+export function alternateTabUrls(productUrl: string): string[] {
+  let base: URL;
+  try {
+    base = new URL(productUrl);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  const seen = new Set<string>([productUrl]);
+  const fragments = [
+    "downloads",
+    "documentation",
+    "documents",
+    "technical-data",
+    "technical",
+    "specs",
+    "tech-data",
+    "resources",
+    "files",
+    "downloads-and-files",
+  ];
+  for (const frag of fragments) {
+    const u = new URL(base.toString());
+    u.hash = frag;
+    const s = u.toString();
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  // Also try `?tab=` query variants for SPAs that read state from query.
+  for (const frag of ["downloads", "documentation", "tech-data", "resources"]) {
+    const u = new URL(base.toString());
+    u.hash = "";
+    u.searchParams.set("tab", frag);
+    const s = u.toString();
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
 }

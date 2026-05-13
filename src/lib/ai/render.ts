@@ -77,6 +77,14 @@ export type RenderOptions = {
    * UI that hides products behind a single button. Default false.
    */
   clickToReveal?: boolean;
+  /**
+   * Click tab/button elements whose visible text is exactly a document-area
+   * label ("Downloads", "Documents", "Technical Data", "Specs", "CAD", "BIM",
+   * "Resources", "Files"…) to reveal sections that lazy-load doc lists on
+   * tab activation. Used by the product doc-extractor when the default tab
+   * (Overview) doesn't list documents. Default false.
+   */
+  clickDownloadTabs?: boolean;
 };
 
 export type RenderResult = {
@@ -269,6 +277,74 @@ async function renderPageHtmlInner(
         await page.waitForTimeout(400);
       } catch {
         // ignore
+      }
+    }
+
+    // ── Click document-area tabs ────────────────────────────────────────
+    // Many product pages (iGuzzini, ERCO, XAL, Lithonia variants) tuck their
+    // doc list behind a tab labelled "Downloads" / "Technical Data" / etc.
+    // The default landing tab usually shows marketing content, not docs.
+    // We try every matching element once per pass, give the page time to
+    // load the panel, and repeat for a few passes so multi-step tab UIs
+    // (e.g. Resources → Technical Data → Spec Sheets) get fully expanded.
+    if (options.clickDownloadTabs) {
+      const TAB_RE =
+        /^(downloads?|documents?|documentation|tech(?:nical)?[\s-]?(?:data|specs?|files|info|details|info(?:rmation)?)|resources?|files|literature|spec(?:ifications?)?(?:[\s-]?sheets?)?|data[\s-]?sheets?|cad(?:[\s-]?(?:files?|drawings?))?|bim(?:[\s-]?files?)?|revit|drawings?|photometrics?|ies[\s-]?files?|files?[\s-]?(?:&|and|\+)[\s-]?downloads?|downloads?[\s-]?(?:&|and|\+)[\s-]?files?|specs?[\s-]?(?:&|and|\+)[\s-]?downloads?|product[\s-]?(?:data|info|details)|installation|warranty|certifications?)$/i;
+      const seenLabels = new Set<string>();
+      for (let pass = 0; pass < 5; pass++) {
+        const clicked: string | null = await page.evaluate(
+          ({ TAB_PATTERN, alreadyClicked }) => {
+            const re = new RegExp(TAB_PATTERN, "i");
+            const seen = new Set(alreadyClicked);
+            const all = Array.from(
+              document.querySelectorAll<HTMLElement>(
+                [
+                  "button",
+                  "a",
+                  "[role='tab']",
+                  "[role='button']",
+                  "li[data-tab]",
+                  "li[data-target]",
+                  "[data-tab]",
+                  "[aria-controls]",
+                  ".nav-link",
+                  ".tab",
+                  ".tabs__item",
+                  ".accordion__title",
+                  "summary",
+                ].join(","),
+              ),
+            );
+            for (const el of all) {
+              const txt = (el.textContent || "").replace(/\s+/g, " ").trim();
+              if (!txt || txt.length > 60) continue;
+              if (!re.test(txt)) continue;
+              if (seen.has(txt.toLowerCase())) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              try {
+                el.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior });
+              } catch {
+                /* ignore */
+              }
+              try {
+                el.click();
+              } catch {
+                continue;
+              }
+              return txt;
+            }
+            return null;
+          },
+          {
+            TAB_PATTERN: TAB_RE.source,
+            alreadyClicked: Array.from(seenLabels),
+          },
+        );
+        if (!clicked) break;
+        seenLabels.add(clicked.toLowerCase());
+        // Let the panel load — many tab UIs do an XHR on activation.
+        await page.waitForTimeout(1100);
       }
     }
 

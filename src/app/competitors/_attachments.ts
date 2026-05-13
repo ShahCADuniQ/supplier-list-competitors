@@ -3,12 +3,265 @@
 // they're imported by actions that already enforce auth at their boundary.
 
 import { put } from "@vercel/blob";
+import { sql, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   competitorAttachments,
   competitorProductAttachments,
+  competitorProducts,
 } from "@/db/schema";
 import { fetchWithTimeout } from "@/lib/ai/parsers";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION-FORWARD-COMPAT
+//
+// Migration 0018 added competitor_products.specs_analysis_hash. Until that
+// migration has been applied to the live database, a naked
+// `db.select().from(competitorProducts)` crashes because Drizzle issues
+// `SELECT … "specs_analysis_hash" …`. This wrapper does the full select
+// first and on the specific column-missing error falls back to the
+// pre-0018 column set, stamping specsAnalysisHash=null onto each row so
+// consumers still see the full Row shape.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ProductRow = typeof competitorProducts.$inferSelect;
+
+export async function withProductHashFallback<T extends ProductRow[]>(
+  fullQuery: () => Promise<T>,
+  legacyQuery: () => Promise<Array<Omit<ProductRow, "specsAnalysisHash">>>,
+): Promise<ProductRow[]> {
+  try {
+    return await fullQuery();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (!/specs_analysis_hash/i.test(msg)) throw e;
+    console.warn(
+      "[competitors] specs_analysis_hash column missing — run `npm run db:apply` to apply migration 0018. Falling back to legacy column set.",
+    );
+    const rows = await legacyQuery();
+    return rows.map((r) => ({ ...r, specsAnalysisHash: null }));
+  }
+}
+
+/**
+ * Explicit column selector for `competitor_products` minus the post-0018
+ * specs_analysis_hash field. Pass this to `db.select(LEGACY_PRODUCT_COLS)`
+ * inside a fallback branch.
+ */
+export const LEGACY_PRODUCT_COLS = {
+  id: competitorProducts.id,
+  competitorId: competitorProducts.competitorId,
+  name: competitorProducts.name,
+  productCode: competitorProducts.productCode,
+  productCategory: competitorProducts.productCategory,
+  description: competitorProducts.description,
+  imageUrls: competitorProducts.imageUrls,
+  specs: competitorProducts.specs,
+  sourceUrl: competitorProducts.sourceUrl,
+  createdAt: competitorProducts.createdAt,
+  updatedAt: competitorProducts.updatedAt,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SELF-HEALING SCHEMA — idempotently apply migration 0018 on first call.
+//
+// `ALTER TABLE … ADD COLUMN IF NOT EXISTS` is atomic + safe to repeat. Once
+// per process we run it before doing any writes that touch the column. This
+// removes the manual `npm run db:apply` step for the post-0018 column so
+// that a fresh deploy doesn't blow up if someone forgets to run migrations.
+// Also stamps the `__applied_migrations` ledger so a later manual run sees
+// the migration already as applied.
+//
+// We DON'T do this for arbitrary migrations — only schema additions that
+// match the deployed code's schema declarations. Destructive changes
+// (column drops, type changes, table renames) still go through the manual
+// migration runner. See feedback_migration_forward_compat.md in memory.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _schemaEnsured: Promise<boolean> | null = null;
+
+export function ensureCompetitorProductsSchema(): Promise<boolean> {
+  if (_schemaEnsured) return _schemaEnsured;
+  _schemaEnsured = (async () => {
+    try {
+      // Migration ledger — created by scripts/apply-migrations.ts but we
+      // need it here too so the auto-applied migration shows up if the
+      // user later runs `npm run db:apply` manually.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS __applied_migrations (
+          filename text PRIMARY KEY,
+          applied_at timestamp DEFAULT now() NOT NULL
+        )
+      `);
+      // Migration 0018: add specs_analysis_hash. Idempotent via IF NOT EXISTS.
+      await db.execute(sql`
+        ALTER TABLE "competitor_products"
+        ADD COLUMN IF NOT EXISTS "specs_analysis_hash" text
+      `);
+      await db.execute(sql`
+        INSERT INTO __applied_migrations (filename)
+        VALUES ('0018_product_specs_analysis_hash.sql')
+        ON CONFLICT DO NOTHING
+      `);
+      return true;
+    } catch (e) {
+      console.warn(
+        "[competitors] auto-ensure schema failed — the INSERT/UPDATE compat helpers will catch column-missing errors as a fallback. Run `npm run db:apply` to apply migrations manually.",
+        e,
+      );
+      return false;
+    }
+  })();
+  return _schemaEnsured;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION-FORWARD-COMPAT — INSERT / UPDATE WRAPPERS
+//
+// Belt-and-suspenders for the auto-ensure above. Even if the ALTER fails
+// (e.g. the DB role can't ALTER), these wrappers catch the resulting
+// column-missing error on the actual write and fall back to a raw-SQL
+// statement that omits the column. After a successful Drizzle write they
+// cache that the column exists so subsequent calls skip the optimistic
+// path's overhead.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ProductInsertValues = typeof competitorProducts.$inferInsert;
+
+let _hashColumnPresent: boolean | null = null;
+
+function isHashMissingError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  return /specs_analysis_hash/i.test(e.message);
+}
+
+async function rawInsertWithoutHash(
+  values: ProductInsertValues,
+): Promise<ProductRow> {
+  // Explicit INSERT that omits specs_analysis_hash. text[] and jsonb get
+  // explicit casts so the Neon HTTP driver doesn't choke on the params.
+  const rows = (await db.execute(sql`
+    INSERT INTO competitor_products (
+      competitor_id, name, product_code, product_category, description,
+      image_urls, specs, source_url
+    ) VALUES (
+      ${values.competitorId},
+      ${values.name},
+      ${values.productCode ?? null},
+      ${values.productCategory ?? null},
+      ${values.description ?? null},
+      ${(values.imageUrls ?? []) as string[]}::text[],
+      ${JSON.stringify(values.specs ?? {})}::jsonb,
+      ${values.sourceUrl ?? null}
+    )
+    RETURNING
+      id, competitor_id, name, product_code, product_category, description,
+      image_urls, specs, source_url, created_at, updated_at
+  `)) as unknown as Array<{
+    id: number;
+    competitor_id: number;
+    name: string;
+    product_code: string | null;
+    product_category: string | null;
+    description: string | null;
+    image_urls: string[];
+    specs: Record<string, string | string[]>;
+    source_url: string | null;
+    created_at: Date | string;
+    updated_at: Date | string;
+  }>;
+  const row = rows[0];
+  if (!row) throw new Error("competitor_products INSERT returned no row");
+  return {
+    id: row.id,
+    competitorId: row.competitor_id,
+    name: row.name,
+    productCode: row.product_code,
+    productCategory: row.product_category,
+    description: row.description,
+    imageUrls: row.image_urls,
+    specs: row.specs,
+    sourceUrl: row.source_url,
+    specsAnalysisHash: null,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+/**
+ * Insert into competitor_products with auto-fallback when migration 0018
+ * hasn't been applied. Always prefer this over a raw
+ * `db.insert(competitorProducts).values(…).returning()`.
+ */
+export async function insertCompetitorProductCompat(
+  values: ProductInsertValues,
+): Promise<ProductRow> {
+  if (_hashColumnPresent === false) {
+    return rawInsertWithoutHash(values);
+  }
+  try {
+    const [row] = await db
+      .insert(competitorProducts)
+      .values(values)
+      .returning();
+    _hashColumnPresent = true;
+    return row;
+  } catch (e) {
+    if (!isHashMissingError(e)) throw e;
+    _hashColumnPresent = false;
+    console.warn(
+      "[competitors] specs_analysis_hash column missing on INSERT — falling back to legacy column set. Run `npm run db:apply` (or restart the server so the auto-ensure can retry).",
+    );
+    return rawInsertWithoutHash(values);
+  }
+}
+
+/**
+ * Update competitor_products with auto-fallback for `specsAnalysisHash`.
+ * When migration 0018 isn't applied, the field is stripped from the UPDATE
+ * (the row keeps the legacy schema; the hash-skip optimisation is just
+ * temporarily disabled).
+ */
+export async function updateCompetitorProductCompat(
+  id: number,
+  values: Partial<ProductInsertValues>,
+): Promise<void> {
+  const stripHash = () => {
+    const v: Partial<ProductInsertValues> = { ...values };
+    delete (v as Record<string, unknown>).specsAnalysisHash;
+    return v;
+  };
+  if (_hashColumnPresent === false && "specsAnalysisHash" in values) {
+    const rest = stripHash();
+    if (Object.keys(rest).length > 0) {
+      await db
+        .update(competitorProducts)
+        .set(rest)
+        .where(eq(competitorProducts.id, id));
+    }
+    return;
+  }
+  try {
+    await db
+      .update(competitorProducts)
+      .set(values)
+      .where(eq(competitorProducts.id, id));
+    if ("specsAnalysisHash" in values) _hashColumnPresent = true;
+  } catch (e) {
+    if (!isHashMissingError(e)) throw e;
+    _hashColumnPresent = false;
+    console.warn(
+      "[competitors] specs_analysis_hash column missing on UPDATE — stripping it. Run `npm run db:apply`.",
+    );
+    const rest = stripHash();
+    if (Object.keys(rest).length > 0) {
+      await db
+        .update(competitorProducts)
+        .set(rest)
+        .where(eq(competitorProducts.id, id));
+    }
+  }
+}
 
 const MAX_BYTES = 25 * 1024 * 1024;
 
@@ -136,7 +389,7 @@ export function classifyDocument(input: {
 
   // ── PDF — disambiguate by label/path keywords ──
   if (ct.includes("pdf") || path.endsWith(".pdf")) {
-    if (/\b(install|installation|mount|hanging)\b/i.test(haystack))
+    if (/\b(install|installation|mount|hanging|instruction\s?sheets?|instructions?)\b/i.test(haystack))
       return { kind: "installation", mime: "application/pdf", ext: "pdf" };
     if (/\b(warranty|warrant)\b/i.test(haystack))
       return { kind: "warranty", mime: "application/pdf", ext: "pdf" };
@@ -303,6 +556,152 @@ async function persistAttachment(
     blobPathname: blob.pathname,
   });
   return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRODUCT IMAGE → BLOB
+//
+// Per the AI Project Master Guide §5.4 — escalate, don't skip. Source-CDN
+// URLs are fragile (rate limits, geo blocks, link rot), so once we have an
+// image URL from the AI / page scrape / Perplexity, we fetch the bytes
+// ourselves and put them in Vercel Blob. The product row stores the blob
+// URL, not the source URL. Returns null if the fetch fails so the caller
+// can surface "couldn't grab this image" rather than dropping it silently.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const IMAGE_MAX_BYTES = 12 * 1024 * 1024; // 12 MB per image — most product photos are <2 MB
+const IMAGE_MIME_RX =
+  /^image\/(jpeg|jpg|png|webp|gif|tiff|avif|svg\+xml)\s*(;|$)/i;
+const IMAGE_EXT_RX = /\.(jpe?g|png|webp|gif|tiff?|avif|svg)(\?|#|$)/i;
+
+function pickImageExt(url: string, mime: string): string {
+  const mm = mime.toLowerCase();
+  if (mm.includes("png")) return "png";
+  if (mm.includes("webp")) return "webp";
+  if (mm.includes("gif")) return "gif";
+  if (mm.includes("avif")) return "avif";
+  if (mm.includes("svg")) return "svg";
+  if (mm.includes("tiff")) return "tif";
+  if (mm.includes("jpeg") || mm.includes("jpg")) return "jpg";
+  const m = url.toLowerCase().match(IMAGE_EXT_RX);
+  return (m?.[1] === "jpeg" ? "jpg" : m?.[1]) ?? "jpg";
+}
+
+export type DownloadedImage = {
+  blobUrl: string;
+  blobPathname: string;
+  size: number;
+  mime: string;
+  sourceUrl: string;
+};
+
+/**
+ * Fetch a product image from its source URL and persist it to Vercel Blob.
+ *
+ * Uses the same browser-UA / Referer trick as attachProductDocument so CDN
+ * WAFs (Cloudflare, Akamai) don't 403 the request. Returns null on:
+ *   - non-2xx HTTP
+ *   - non-image content type
+ *   - empty body
+ *   - body > IMAGE_MAX_BYTES
+ *   - network/timeout failure
+ *
+ * Caller is expected to call this for every source URL it has and report
+ * the count of failures in the completeness summary.
+ */
+export async function downloadProductImageToBlob(input: {
+  /**
+   * Directory prefix for the blob path. Typically a per-request UUID
+   * (`competitors/product-images/<uuid>/`). Caller manages the prefix so
+   * pre-save and post-save flows can both work.
+   */
+  pathPrefix: string;
+  sourceUrl: string;
+}): Promise<DownloadedImage | null> {
+  const u = input.sourceUrl.trim();
+  if (!/^https?:\/\//i.test(u)) return null;
+
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      u,
+      {
+        redirect: "follow",
+        headers: {
+          "User-Agent": BROWSER_UA,
+          Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          Referer: (() => {
+            try {
+              return new URL(u).origin + "/";
+            } catch {
+              return "https://www.google.com/";
+            }
+          })(),
+        },
+      },
+      15_000,
+    );
+  } catch (err) {
+    console.warn(`[downloadProductImageToBlob] network error: ${u}`, err);
+    return null;
+  }
+
+  if (!res.ok) {
+    console.warn(`[downloadProductImageToBlob] HTTP ${res.status} for ${u}`);
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (
+    !IMAGE_MIME_RX.test(contentType) &&
+    !IMAGE_EXT_RX.test(u)
+  ) {
+    // Server lied about content-type AND URL doesn't end in an image
+    // extension — almost certainly an HTML page that intercepted the
+    // request (login wall, CDN block). Don't write garbage to blob.
+    console.warn(
+      `[downloadProductImageToBlob] non-image content-type ${contentType} for ${u}`,
+    );
+    return null;
+  }
+
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (buf.length === 0) {
+    console.warn(`[downloadProductImageToBlob] empty body for ${u}`);
+    return null;
+  }
+  if (buf.length > IMAGE_MAX_BYTES) {
+    console.warn(
+      `[downloadProductImageToBlob] body too large (${buf.length}) for ${u}`,
+    );
+    return null;
+  }
+
+  const ext = pickImageExt(u, contentType);
+  const mime =
+    contentType && IMAGE_MIME_RX.test(contentType)
+      ? contentType.split(";")[0].trim()
+      : `image/${ext === "jpg" ? "jpeg" : ext}`;
+  const prefix = input.pathPrefix.replace(/\/+$/, "");
+  const pathname = `${prefix}/${crypto.randomUUID()}.${ext}`;
+
+  try {
+    const blob = await put(pathname, Buffer.from(buf), {
+      access: "public",
+      contentType: mime,
+    });
+    return {
+      blobUrl: blob.url,
+      blobPathname: blob.pathname,
+      size: buf.length,
+      mime,
+      sourceUrl: u,
+    };
+  } catch (err) {
+    console.warn(`[downloadProductImageToBlob] blob put failed for ${u}`, err);
+    return null;
+  }
 }
 
 /**

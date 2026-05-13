@@ -721,6 +721,8 @@ function ModuleLauncher({
   engineering: boolean;
   admin: boolean;
 }) {
+  // Tile order mirrors the sidebar: Design & Engineering group
+  // (Competitors / Process / Engineering) → ERP System → Admin.
   const tiles: Array<{
     show: boolean;
     href: string;
@@ -728,14 +730,6 @@ function ModuleLauncher({
     title: string;
     body: string;
   }> = [
-    {
-      show: sup,
-      href: "/suppliers",
-      icon: "▢",
-      title: "Inventory & Manufacturing",
-      body:
-        "Suppliers, projects, POs, BOMs, quality, maintenance, and barcodes — all in one tab.",
-    },
     {
       show: comp,
       href: "/competitors",
@@ -759,6 +753,14 @@ function ModuleLauncher({
       title: "Engineering Handbook",
       body:
         "Mechanical, electrical, optical reference — housing, mounting, drivers, optics, thermal.",
+    },
+    {
+      show: sup,
+      href: "/suppliers",
+      icon: "▢",
+      title: "ERP System",
+      body:
+        "Suppliers, inventory, purchase orders, manufacturing, BOMs, quality, maintenance, and barcodes — all in one tab.",
     },
     {
       show: admin,

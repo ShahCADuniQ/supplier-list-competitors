@@ -23,8 +23,16 @@ import {
   extractImageUrls,
   extractProductPageLinks,
   crawlSitemapUrls,
+  extractJsonLdDocuments,
+  extractInlineScriptDocumentUrls,
+  alternateTabUrls,
+  extractDownloadButtonLinks,
 } from "@/lib/ai/parsers";
 import { renderPageHtml } from "@/lib/ai/render";
+import {
+  discoverDocumentsWithClaude,
+  type DocDiscoveryCandidate,
+} from "@/lib/ai/doc-discovery";
 import { categoryLabelToKind } from "./_kinds";
 import { AI_MODEL, openaiClient } from "@/lib/ai/openai";
 import {
@@ -35,6 +43,7 @@ import { requireCompetitorEditor } from "@/lib/permissions";
 import {
   attachProductDocument,
   attachBrandDocument,
+  insertCompetitorProductCompat,
 } from "./_attachments";
 import { refreshProductSpecsFromFiles } from "./add-actions";
 
@@ -318,15 +327,17 @@ export async function aiFindProductImages(input: {
   if (!coll) throw new Error("Collection not found");
 
   // Pull the most populous category as a default search term if none given.
+  // Explicit-column select so the post-0018 specs_analysis_hash column doesn't
+  // matter — productCategory is all we need here.
   const products = await db
-    .select()
+    .select({ productCategory: competitorProducts.productCategory })
     .from(competitorProducts)
     .innerJoin(competitors, eq(competitors.id, competitorProducts.competitorId))
     .where(eq(competitors.collectionId, input.collectionId))
     .limit(60);
   const cats = new Map<string, number>();
   for (const r of products) {
-    const c = r.competitor_products?.productCategory ?? "";
+    const c = r.productCategory ?? "";
     if (c) cats.set(c, (cats.get(c) ?? 0) + 1);
   }
   const topCat = [...cats.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
@@ -2170,22 +2181,19 @@ Return JSON: { "matchingUrls": string[] } — only URLs you're confident match.`
       }
     }
 
-    // Persist product row.
+    // Persist product row. Compat wrapper handles the migration-0018 race.
     let productId: number;
     try {
-      const [row] = await db
-        .insert(competitorProducts)
-        .values({
-          competitorId: brandRow.id,
-          name,
-          productCode: p?.productCode || null,
-          productCategory: p?.productCategory || null,
-          description: p?.description || null,
-          imageUrls: htmlImages,
-          sourceUrl: p?.sourceUrl || pick.url,
-          specs: (p?.specs ?? {}) as unknown as Record<string, string | string[]>,
-        })
-        .returning({ id: competitorProducts.id });
+      const row = await insertCompetitorProductCompat({
+        competitorId: brandRow.id,
+        name,
+        productCode: p?.productCode || null,
+        productCategory: p?.productCategory || null,
+        description: p?.description || null,
+        imageUrls: htmlImages,
+        sourceUrl: p?.sourceUrl || pick.url,
+        specs: (p?.specs ?? {}) as unknown as Record<string, string | string[]>,
+      });
       productId = row.id;
       productsInserted++;
     } catch (e) {
@@ -2520,9 +2528,62 @@ export async function aiExtractProductFiles(input: {
   }
 }
 
-async function aiExtractProductFilesImpl(input: {
-  productId: number;
-}): Promise<ProductFilesResultOk> {
+/** Per-step progress event for the document-extract pipeline. Same shape
+ *  as add-actions' AddProductProgress so the shared SSE consumer works
+ *  for both endpoints. */
+export type ExtractProductFilesProgress = {
+  step: string;
+  detail?: string;
+  /** 0–100, tied to real work units (master guide §5.1). */
+  percent: number;
+};
+
+/**
+ * Streaming entry-point used by the `/api/competitors/extract-product-files`
+ * Route Handler. Same pipeline as the server-action, but emits per-stage
+ * progress events so the drawer can render the §5 progress UX (% bar,
+ * elapsed/ETA, current-step label, heartbeat, cancel).
+ */
+export async function aiExtractProductFilesStreaming(
+  input: { productId: number },
+  options?: {
+    onProgress?: (e: ExtractProductFilesProgress) => void;
+    signal?: AbortSignal;
+  },
+): Promise<ProductFilesResult> {
+  try {
+    return await aiExtractProductFilesImpl(
+      input,
+      options?.onProgress,
+      options?.signal,
+    );
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "Error";
+    const message = e instanceof Error ? e.message : String(e);
+    const stack = e instanceof Error ? e.stack : undefined;
+    console.error(
+      "[aiExtractProductFiles] streaming failed:",
+      `${name}: ${message}\n${stack ?? "(no stack)"}`,
+    );
+    return { ok: false, error: `${name}: ${message}`, stack };
+  }
+}
+
+async function aiExtractProductFilesImpl(
+  input: { productId: number },
+  onProgress?: (e: ExtractProductFilesProgress) => void,
+  signal?: AbortSignal,
+): Promise<ProductFilesResultOk> {
+  const checkAborted = () => {
+    if (signal?.aborted) throw new Error("AbortError: cancelled by user");
+  };
+  const emit = (step: string, percent: number, detail?: string) => {
+    onProgress?.({ step, detail, percent });
+    console.log(
+      `[aiExtractProductFiles] (${percent.toFixed(0)}%) ${step}${detail ? ` — ${detail}` : ""}`,
+    );
+  };
+  emit("starting", 1, "Authorising & loading product…");
   await requireCompetitorEditor();
 
   // Defensive load — same pattern used by refreshProductSpecsFromFiles.
@@ -2566,21 +2627,126 @@ async function aiExtractProductFilesImpl(input: {
     throw new Error("Product has no source URL — can't extract files");
   }
 
+  // Strip the URL fragment unconditionally — `#overview` etc. only affects
+  // anchor scroll, not content, but some servers 404 a fragment URL or
+  // redirect to the homepage. Plain canonical URL → max resilience.
+  const sourceUrl = (() => {
+    try {
+      const u = new URL(row.sourceUrl);
+      u.hash = "";
+      return u.toString();
+    } catch {
+      return row.sourceUrl;
+    }
+  })();
+
   let pdfsAttached = 0;
   let otherDocsAttached = 0;
   let fetchErrors = 0;
   const docUrls = new Map<string, { label: string; kind: string }>();
+
+  // Track every URL we ever see on a rendered/static fetch of this product
+  // so the AI last-resort rung can classify them if all else fails.
+  const aiCandidates = new Map<string, string>(); // url → anchor/script context
+
+  // Helper: feed every extractor into our running map. Called from each
+  // pipeline rung; safe to call repeatedly (Set + dedupe guards).
+  function ingestFromHtml(html: string, baseUrlForLinks: string) {
+    // 1. Anchor-based docs — the original deterministic path. Anchors whose
+    //    href has a known extension OR whose anchor text says "spec sheet",
+    //    "datasheet", "IES file", etc.
+    for (const d of extractDocumentLinks(html, baseUrlForLinks)) {
+      if (!docUrls.has(d.href)) {
+        docUrls.set(d.href, { label: d.text || d.href, kind: d.kind });
+      }
+      aiCandidates.set(d.href, d.text || "");
+    }
+    // 2. "Download button" rows — anchors whose text is just "DOWNLOAD" but
+    //    whose surrounding HTML carries the real label. iGuzzini pattern.
+    //    Reuses the section heading so e.g. an "IES" link under a
+    //    "PHOTOMETRIC DATA" heading gets a label like
+    //    "PHOTOMETRIC DATA — IES" that downstream classifiers parse correctly.
+    for (const d of extractDownloadButtonLinks(html, baseUrlForLinks)) {
+      const existing = docUrls.get(d.href);
+      if (!existing || !existing.label || existing.label === d.href) {
+        // Either no prior entry, or prior entry has only a URL-as-label —
+        // overwrite with the richer label we recovered from the row.
+        docUrls.set(d.href, { label: d.text || d.href, kind: d.kind });
+      }
+      // Always update the AI candidate pool with the better text — Claude
+      // benefits from the richer context too.
+      aiCandidates.set(d.href, d.text || aiCandidates.get(d.href) || "");
+    }
+    // 3. JSON-LD structured data — new resilience rung.
+    for (const d of extractJsonLdDocuments(html)) {
+      if (!docUrls.has(d.url)) {
+        docUrls.set(d.url, { label: d.label || d.url, kind: "" });
+      }
+      aiCandidates.set(d.url, d.label || "");
+    }
+    // 4. Inline-script PDF/CAD/IES URLs — bare URLs with no anchor text.
+    for (const u of extractInlineScriptDocumentUrls(html)) {
+      if (!docUrls.has(u)) {
+        docUrls.set(u, { label: u, kind: "" });
+      }
+      if (!aiCandidates.has(u)) aiCandidates.set(u, "");
+    }
+    // 5. AI candidate pool: every other anchor on the page, with anchor
+    //    text. Claude can spot JS-routed download URLs deterministic rungs
+    //    miss. We enrich entries that came in via #2 above so their AI
+    //    context is the rich label, not the plain "DOWNLOAD".
+    const aRe =
+      /<a\b[^>]*?href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+    let am: RegExpExecArray | null;
+    let base: URL | null = null;
+    try {
+      base = new URL(baseUrlForLinks);
+    } catch {
+      base = null;
+    }
+    while ((am = aRe.exec(html)) !== null) {
+      const rawHref = (am[1] ?? am[2] ?? am[3] ?? "").trim();
+      if (!rawHref) continue;
+      if (
+        rawHref.startsWith("#") ||
+        rawHref.startsWith("javascript:") ||
+        rawHref.startsWith("mailto:") ||
+        rawHref.startsWith("tel:")
+      ) continue;
+      let abs: string;
+      try {
+        abs = base ? new URL(rawHref, base).toString() : rawHref;
+      } catch {
+        continue;
+      }
+      // Skip if we already have richer text for this URL.
+      if (aiCandidates.has(abs) && aiCandidates.get(abs)) continue;
+      const text = am[4]
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120);
+      aiCandidates.set(abs, text);
+    }
+  }
 
   // ── PRIMARY: parse the embedded JSON blob in the product page HTML ──
   // Most modern brand sites (Lumenpulse confirmed) inject the product's
   // document categories + files as an HTML-encoded JSON structure into the
   // page. Parsing that gives us EVERY document — categorized exactly as the
   // brand presents it — without needing a headless browser or Perplexity.
+  emit("fetching", 5, `Fetching ${sourceUrl}…`);
+  checkAborted();
   let pageHtml = "";
   try {
-    const r = await fetchUrlFully(row.sourceUrl);
+    const r = await fetchUrlFully(sourceUrl);
     pageHtml = r.html;
     const embedded = extractEmbeddedDocuments(pageHtml);
+    emit(
+      "embedded-docs",
+      12,
+      `Embedded JSON found ${embedded.length} document(s)`,
+    );
     console.log(
       `[aiExtractProductFiles] embedded JSON found ${embedded.length} documents`,
     );
@@ -2596,15 +2762,27 @@ async function aiExtractProductFilesImpl(input: {
         kind: categoryLabelToKind(d.category) ?? "",
       });
     }
+    // Also run JSON-LD + inline-script extractors on the static HTML.
+    // Many sites that don't use the embedded-JSON pattern do expose docs
+    // via these other shapes. Cheap, additive.
+    ingestFromHtml(pageHtml, sourceUrl);
+    if (docUrls.size > embedded.length) {
+      emit(
+        "static-resilience",
+        15,
+        `Static-pass resilience extractors found ${docUrls.size - embedded.length} more candidate(s).`,
+      );
+    }
   } catch (e) {
-    console.warn("[aiExtractProductFiles] page fetch failed:", row.sourceUrl, e);
+    console.warn("[aiExtractProductFiles] page fetch failed:", sourceUrl, e);
     fetchErrors++;
   }
 
   // ── SECONDARY: Perplexity (only if embedded extraction returned nothing) ──
   if (docUrls.size === 0 && hasPerplexityKey()) {
+    emit("perplexity", 22, "Asking Perplexity for downloadable documents…");
+    checkAborted();
     try {
-      const sourceUrl = row.sourceUrl;
       const host = new URL(sourceUrl).host.replace(/^www\./, "");
       const userPrompt = `On the product page at ${sourceUrl}, list every downloadable document file the brand publishes for this product.
 
@@ -2656,18 +2834,18 @@ Return JSON: { "documents": [{ url, label, kind }] }`;
   // ── FALLBACK 1: anchor-based scrape on the same fetched HTML for sites
   //    that don't embed JSON. Cheap because we already have the HTML in memory.
   if (docUrls.size === 0 && pageHtml) {
-    for (const d of extractDocumentLinks(pageHtml, row.sourceUrl)) {
-      docUrls.set(d.href, { label: d.text, kind: d.kind });
-    }
-    const subPages = extractDownloadSubpageLinks(pageHtml, row.sourceUrl);
+    emit(
+      "anchor-scrape",
+      32,
+      "Scraping document links from page HTML (and 1–3 sub-pages)…",
+    );
+    checkAborted();
+    ingestFromHtml(pageHtml, sourceUrl);
+    const subPages = extractDownloadSubpageLinks(pageHtml, sourceUrl);
     for (const subUrl of subPages.slice(0, 3)) {
       try {
         const sub = await fetchUrlFully(subUrl);
-        for (const d of extractDocumentLinks(sub.html, subUrl)) {
-          if (!docUrls.has(d.href)) {
-            docUrls.set(d.href, { label: d.text, kind: d.kind });
-          }
-        }
+        ingestFromHtml(sub.html, subUrl);
       } catch (e) {
         console.warn("[aiExtractProductFiles] sub-page fetch failed:", subUrl, e);
       }
@@ -2676,19 +2854,27 @@ Return JSON: { "documents": [{ url, label, kind }] }`;
 
   // ── FALLBACK 2: HEADLESS RENDERING — for sites whose product page docs
   //    are only injected after JavaScript runs (true SPAs). We launch
-  //    Chromium, render the page, and re-run the document parsers on the
-  //    post-JS DOM.
+  //    Chromium, render the page, click cookie banners + "Downloads" /
+  //    "Technical Data" tabs, scroll for lazy-loaded grids, and re-run the
+  //    document parsers on the post-JS DOM. iGuzzini / ERCO / XAL pattern.
+  let renderedHtml = "";
   if (docUrls.size === 0) {
+    emit("rendering", 42, "Headless Chromium render + tab clicks…");
+    checkAborted();
     try {
       console.log(
         `[aiExtractProductFiles] no docs from static HTML, rendering with Chromium…`,
       );
-      const r = await renderPageHtml(row.sourceUrl, {
+      const r = await renderPageHtml(sourceUrl, {
         waitUntil: "networkidle",
-        timeoutMs: 25_000,
+        timeoutMs: 30_000,
         blockResources: true,
+        clickToReveal: true,
+        clickDownloadTabs: true,
+        scrollPasses: 3,
       });
       if (r.html && r.html.length > 0) {
+        renderedHtml = r.html;
         console.log(
           `[aiExtractProductFiles] rendered ${r.html.length} bytes in ${r.timings.totalMs}ms`,
         );
@@ -2696,7 +2882,7 @@ Return JSON: { "documents": [{ url, label, kind }] }`;
         // upgrades old rows whose stored imageUrls are stale (e.g. brand
         // logos picked up before the SPA-render fix landed).
         try {
-          const renderedImages = extractImageUrls(r.html, row.sourceUrl);
+          const renderedImages = extractImageUrls(r.html, sourceUrl);
           if (renderedImages.length > 0) {
             await db
               .update(competitorProducts)
@@ -2710,33 +2896,25 @@ Return JSON: { "documents": [{ url, label, kind }] }`;
           console.warn("[aiExtractProductFiles] image refresh failed:", e);
         }
         // Re-run BOTH the embedded-JSON parser (some SPAs inject data after
-        // hydration) AND the anchor parser (JS-injected anchors).
+        // hydration) AND the new resilience extractors on the rendered DOM.
         for (const d of extractEmbeddedDocuments(r.html)) {
           docUrls.set(d.url, {
             label: `${d.category}: ${d.title || "(untitled)"}`.slice(0, 250),
             kind: categoryLabelToKind(d.category) ?? "",
           });
         }
-        for (const d of extractDocumentLinks(r.html, row.sourceUrl)) {
-          if (!docUrls.has(d.href)) {
-            docUrls.set(d.href, { label: d.text, kind: d.kind });
-          }
-        }
-        const subPages = extractDownloadSubpageLinks(r.html, row.sourceUrl);
+        ingestFromHtml(r.html, sourceUrl);
+        const subPages = extractDownloadSubpageLinks(r.html, sourceUrl);
         for (const subUrl of subPages.slice(0, 2)) {
           try {
             const subR = await renderPageHtml(subUrl, {
               waitUntil: "networkidle",
               timeoutMs: 20_000,
               blockResources: true,
+              clickToReveal: true,
+              clickDownloadTabs: true,
             });
-            if (subR.html) {
-              for (const d of extractDocumentLinks(subR.html, subUrl)) {
-                if (!docUrls.has(d.href)) {
-                  docUrls.set(d.href, { label: d.text, kind: d.kind });
-                }
-              }
-            }
+            if (subR.html) ingestFromHtml(subR.html, subUrl);
           } catch {
             // ignore sub-page failures
           }
@@ -2750,27 +2928,123 @@ Return JSON: { "documents": [{ url, label, kind }] }`;
     }
   }
 
+  // ── FALLBACK 3: alternative tab URL variants. When the default URL
+  //    didn't surface docs, try common tab fragments (`#downloads`,
+  //    `?tab=downloads`) — different page-state, sometimes a different
+  //    rendered DOM. Cap at 3 attempts to bound runtime.
+  if (docUrls.size === 0) {
+    const tabUrls = alternateTabUrls(sourceUrl).slice(0, 3);
+    if (tabUrls.length > 0) {
+      emit(
+        "tab-variants",
+        50,
+        `Trying ${tabUrls.length} alternate tab URL(s)…`,
+      );
+    }
+    for (const tabUrl of tabUrls) {
+      checkAborted();
+      try {
+        const r = await renderPageHtml(tabUrl, {
+          waitUntil: "networkidle",
+          timeoutMs: 22_000,
+          blockResources: true,
+          clickToReveal: true,
+          clickDownloadTabs: true,
+        });
+        if (r.html && r.html.length > 0) {
+          ingestFromHtml(r.html, tabUrl);
+          if (docUrls.size > 0) break;
+        }
+      } catch (e) {
+        console.warn(
+          "[aiExtractProductFiles] tab-variant render failed:",
+          tabUrl,
+          e,
+        );
+      }
+    }
+  }
+
+  // ── FALLBACK 4: AI-powered classifier. Every deterministic rung above
+  //    returned nothing. Hand the full URL set we observed to Claude and
+  //    ask which are real product documents. Per master guide §5.4 this
+  //    is the "use whatever tool is necessary" rung — never give up
+  //    silently when the user can see docs on the page.
+  if (docUrls.size === 0 && aiCandidates.size > 0) {
+    emit(
+      "ai-classify",
+      55,
+      `Handing ${aiCandidates.size} URL candidate(s) to Claude for classification…`,
+    );
+    checkAborted();
+    try {
+      const candidates: DocDiscoveryCandidate[] = Array.from(
+        aiCandidates.entries(),
+      ).map(([url, text]) => ({ url, text }));
+      const ai = await discoverDocumentsWithClaude({
+        productName: row.name,
+        brandName: "",
+        productUrl: sourceUrl,
+        candidates,
+      });
+      for (const d of ai.documents) {
+        if (!docUrls.has(d.url)) {
+          docUrls.set(d.url, {
+            label: (d.label ?? "").slice(0, 200) || d.url,
+            kind: d.kind || "other",
+          });
+        }
+      }
+      emit(
+        "ai-classified",
+        58,
+        `Claude identified ${ai.documents.length} document(s) from candidate set.`,
+      );
+    } catch (e) {
+      console.warn("[aiExtractProductFiles] AI classifier failed:", e);
+    }
+  }
+  // Silence unused warning when renderedHtml ends up empty (no fallback hit it).
+  void renderedHtml;
+
   // ── Download all in parallel pool of 4. The classifier in
   //    `attachProductDocument` will use the label hint when classifying. ──
   const list = [...docUrls.entries()].slice(0, 50);
+  const total = list.length;
+  emit(
+    "downloading-docs",
+    60,
+    `Downloading ${total} document(s) to blob storage…`,
+  );
   const queue = [...list];
+  let completed = 0;
   async function worker() {
     while (queue.length) {
+      checkAborted();
       const entry = queue.shift();
       if (!entry) return;
       const [url, meta] = entry;
       const ok = await attachProductDocument(input.productId, url, meta.label);
+      completed++;
       if (!ok) {
         fetchErrors++;
-        continue;
-      }
-      if (
+      } else if (
         /\.pdf(\?|$)/i.test(url) ||
         /spec|cut[- ]?sheet|datasheet|brochure|catalog/i.test(url)
       ) {
         pdfsAttached++;
       } else {
         otherDocsAttached++;
+      }
+      if (total > 0) {
+        const fraction = completed / total;
+        // Download phase covers 60 → 82 (22% range, per-doc granularity).
+        const percent = 60 + Math.round(fraction * 22);
+        emit(
+          "downloading-docs",
+          percent,
+          `Downloaded ${completed}/${total} (${pdfsAttached} PDFs, ${otherDocsAttached} other, ${fetchErrors} failed)`,
+        );
       }
     }
   }
@@ -2786,10 +3060,27 @@ Return JSON: { "documents": [{ url, label, kind }] }`;
   // files) we still want to re-analyze with Claude — the user may have set
   // ANTHROPIC_API_KEY between runs, or we may have a smarter prompt now.
   // refreshProductSpecsFromFiles decides whether there's anything to read.
+  //
+  // We pass an onProgress shim that maps the spec-refresh's internal 0–100
+  // into the 82 → 99 band of THIS pipeline, so the bar keeps moving
+  // smoothly while Claude reads the PDFs.
+  emit("reading-specs", 82, "Reading PDFs with Claude to fill spec fields…");
+  checkAborted();
   let specFieldsUpdated = 0;
   let specFilesRead = 0;
   try {
-    const r = await refreshProductSpecsFromFiles({ productId: input.productId });
+    const r = await refreshProductSpecsFromFiles(
+      { productId: input.productId },
+      {
+        onProgress: (e) => {
+          const innerPct = Math.max(0, Math.min(100, e.percent ?? 0));
+          // Spec refresh covers our 82 → 99 band (17% range).
+          const percent = 82 + Math.round((innerPct / 100) * 17);
+          emit(e.step, percent, e.detail);
+        },
+        signal,
+      },
+    );
     specFieldsUpdated = r.fieldsUpdated;
     specFilesRead = r.filesRead;
     console.log(
@@ -2801,6 +3092,12 @@ Return JSON: { "documents": [{ url, label, kind }] }`;
       e,
     );
   }
+
+  emit(
+    "done",
+    100,
+    `Attached ${pdfsAttached} PDFs · ${otherDocsAttached} other docs · updated ${specFieldsUpdated} spec field(s)`,
+  );
 
   return {
     ok: true,

@@ -5,11 +5,21 @@ import { usePathname } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
 import { CLIENT_CONFIG, CADUNIQ_INDUSTRY_SUFFIX } from "@/lib/client-config";
 
+// Top-bar title reflects the sidebar GROUP, not the active sub-tab. The
+// sub-nav pills underneath already tell the user which child route is
+// active, so showing the same name twice would be redundant. Keep this
+// table aligned with the sidebar groups in src/components/Sidebar.tsx.
+//
+// /competitors, /handbook, /engineering are kept at the top level for URL
+// stability but classified in the navigation under the Tools group — they
+// all render with the "TOOLS" title and appear as tabs in the unified
+// Tools sub-nav (see SubNav.tsx).
 const TITLE_BY_PREFIX: { prefix: string; title: string }[] = [
-  { prefix: "/suppliers", title: "INVENTORY" },
-  { prefix: "/competitors", title: "COMPETITORS & MARKET RESEARCH" },
-  { prefix: "/handbook", title: "PROCESS" },
-  { prefix: "/engineering", title: "ENGINEERING" },
+  { prefix: "/suppliers", title: "ERP SYSTEM" },
+  { prefix: "/design-engineering", title: "DESIGN & ENGINEERING" },
+  { prefix: "/competitors", title: "TOOLS" },
+  { prefix: "/handbook", title: "TOOLS" },
+  { prefix: "/engineering", title: "TOOLS" },
   { prefix: "/tools", title: "TOOLS" },
   { prefix: "/admin", title: "ADMIN" },
   { prefix: "/sign-in", title: "SIGN IN" },

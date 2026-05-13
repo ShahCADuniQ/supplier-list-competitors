@@ -47,7 +47,7 @@ export default function InventoryAndManufacturing({
     <div className="flex flex-col min-h-full" style={{ background: "var(--lb-bg)" }}>
       <nav
         role="tablist"
-        aria-label="Inventory & Manufacturing modules"
+        aria-label="ERP System modules"
         className="flex items-center gap-2 px-6 py-3 shrink-0 overflow-x-auto"
         style={{
           background: "var(--lb-bg)",

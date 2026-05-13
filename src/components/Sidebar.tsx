@@ -36,40 +36,66 @@ export default function Sidebar({
 }: Props) {
   const pathname = usePathname() ?? "/";
 
-  // First available child of the Design & Engineering group, used as the
-  // single tap-target on the rail. The full breakdown (Competitors / Process
-  // / Engineering) lives in the page-level sub-tabs once a child route loads.
-  const designFirstHref = canViewCompetitors
-    ? "/competitors"
-    : canViewHandbook
-      ? "/handbook"
-      : canViewEngineering
-        ? "/engineering"
-        : null;
+  // Sidebar order: Design & Engineering → ERP System → Tools → Admin.
+  // Every item's visibility is gated by an admin-controlled permission so
+  // the admin lock system covers everything on the rail. When you add a
+  // new top-level surface here, also add a corresponding canView* flag in
+  // src/db/schema.ts + src/lib/permissions.ts and surface a column in the
+  // Admin panel — that's the contract.
+  //
+  // Routing classification: /competitors, /handbook, /engineering are
+  // RESERVED URLs (kept stable for bookmarks / DB FKs) but classified
+  // under the Tools group in the navigation. The Tools rail icon
+  // highlights on these routes; Design & Engineering is a separate empty
+  // placeholder for future modules.
+  const hasDesignEngAccess =
+    isAdmin || canViewCompetitors || canViewHandbook || canViewEngineering;
 
   const items: RailItem[] = [
     {
+      href: "/design-engineering",
+      label: "Design & Engineering",
+      icon: "⊞",
+      show: hasDesignEngAccess,
+      matchPrefixes: ["/design-engineering"],
+    },
+    {
+      // The /suppliers route hosts the ERP system (inventory, manufacturing,
+      // suppliers, project-entry tracking). Path stays /suppliers for URL
+      // / DB stability; only the visible label is "ERP System".
       href: "/suppliers",
-      label: "Inventory & Manufacturing",
+      label: "ERP System",
       icon: "▢",
       show: canViewSuppliers,
       matchPrefixes: ["/suppliers"],
     },
     {
-      href: designFirstHref ?? "/",
-      label: "Design & Engineering",
-      icon: "⊞",
-      show: Boolean(designFirstHref),
-      matchPrefixes: ["/competitors", "/handbook", "/engineering"],
-    },
-    {
       // Tools section — Municipal Contacts is the first tool. The rail item
-      // links straight to the most-used child for now.
-      href: "/tools/municipal-contacts",
+      // links to the first tab the user can access. matchPrefixes includes
+      // /competitors, /handbook, /engineering because those routes are now
+      // classified as Tools tabs (see SubNav.tsx) — the Tools icon must
+      // highlight when the user is on any of them.
+      href: canViewCompetitors
+        ? "/competitors"
+        : canViewHandbook
+          ? "/handbook"
+          : canViewEngineering
+            ? "/engineering"
+            : "/tools/municipal-contacts",
       label: "Tools",
       icon: "🛠",
-      show: canViewSuppliers || canViewCompetitors || canViewEngineering || isAdmin,
-      matchPrefixes: ["/tools"],
+      show:
+        canViewSuppliers ||
+        canViewCompetitors ||
+        canViewHandbook ||
+        canViewEngineering ||
+        isAdmin,
+      matchPrefixes: [
+        "/tools",
+        "/competitors",
+        "/handbook",
+        "/engineering",
+      ],
     },
     {
       href: "/admin",

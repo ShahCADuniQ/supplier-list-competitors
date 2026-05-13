@@ -36,7 +36,13 @@ import { renderPageHtml } from "@/lib/ai/render";
 import { extractImageUrls } from "@/lib/ai/parsers";
 import { hasPerplexityKey, perplexityChat } from "@/lib/ai/perplexity";
 import { requireCompetitorEditor } from "@/lib/permissions";
-import { classifyDocument } from "./_attachments";
+import {
+  classifyDocument,
+  downloadProductImageToBlob,
+  type DownloadedImage,
+  insertCompetitorProductCompat,
+  updateCompetitorProductCompat,
+} from "./_attachments";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AI EXTRACTION SCHEMA (brand + product from arbitrary source)
@@ -201,6 +207,17 @@ export type AddProductInput = {
   niche?: string | null;
 };
 
+export type AddProductCompleteness = {
+  /** How many image URLs the discovery rungs surfaced. */
+  imagesDiscovered: number;
+  /** How many of those we successfully fetched and put into our blob storage. */
+  imagesStored: number;
+  /** Source URLs that failed to download — surfaced to the user per §5.4. */
+  imagesFailed: string[];
+  /** Which rung of the escalation ladder supplied the URL set. */
+  imageSource: "ai" | "html" | "perplexity" | "user-blobs" | "none";
+};
+
 export type AddProductResult =
   | {
       ok: true;
@@ -212,8 +229,10 @@ export type AddProductResult =
       attachedFileCount: number;
       /** Source of the product text we ingested. Useful for diagnostics. */
       sourceMode: "static" | "render" | "perplexity" | "files-only";
-      /** Image URLs we attached. Surfaced for the toast / debug. */
+      /** Blob URLs of the images we successfully stored (preferred over source URLs). */
       imageUrls: string[];
+      /** Completeness summary surfaced in the §5.3 Layer 3 review UI. */
+      completeness: AddProductCompleteness;
     }
   | {
       ok: false;
@@ -343,10 +362,17 @@ Return ONLY valid JSON matching the schema. URLs MUST be absolute https://. Do n
   }
 }
 
-/** Per-step progress event emitted by the URL-paste pipeline. */
+/**
+ * Per-step progress event. `percent` is a 0–100 best-estimate of how far
+ * through the full pipeline we are, tied to real work units (per the AI
+ * Project Master Guide §5.1 — never fake the bar). The client side computes
+ * elapsed/ETA from this; we don't push ETA from the server because it can
+ * be computed deterministically from elapsed * (100-percent) / percent.
+ */
 export type AddProductProgress = {
   step: string;
   detail?: string;
+  percent: number;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -373,13 +399,40 @@ export async function aiAddProductFromInput(
   }
 }
 
+/**
+ * Streaming entry-point used by the `/api/competitors/add-product` Route
+ * Handler. Same pipeline as the server-action `aiAddProductFromInput`, but
+ * progress events are surfaced as they happen so the UI can render a real
+ * percentage bar, current-step label, and ETA per the AI Project Master
+ * Guide §5. Pass `signal` to support the §5.1 cancel button.
+ *
+ * Throws on failure (caller wraps in a streaming-error envelope).
+ */
+export async function aiAddProductFromInputStreaming(
+  input: AddProductInput,
+  options?: {
+    onProgress?: (e: AddProductProgress) => void;
+    signal?: AbortSignal;
+  },
+): Promise<AddProductResult> {
+  return aiAddProductFromInputImpl(input, options?.onProgress, options?.signal);
+}
+
 async function aiAddProductFromInputImpl(
   input: AddProductInput,
   onProgress?: (e: AddProductProgress) => void,
+  signal?: AbortSignal,
 ): Promise<AddProductResult> {
-  const emit = (step: string, detail?: string) => {
-    onProgress?.({ step, detail });
-    console.log(`[aiAddProduct] ${step}${detail ? ` — ${detail}` : ""}`);
+  const checkAborted = () => {
+    if (signal?.aborted) {
+      throw new Error("AbortError: cancelled by user");
+    }
+  };
+  const emit = (step: string, percent: number, detail?: string) => {
+    onProgress?.({ step, detail, percent });
+    console.log(
+      `[aiAddProduct] (${percent.toFixed(0)}%) ${step}${detail ? ` — ${detail}` : ""}`,
+    );
   };
   await requireCompetitorEditor();
 
@@ -405,7 +458,8 @@ async function aiAddProductFromInputImpl(
   let perplexityDocumentUrls: Array<{ url: string; label: string }> = [];
 
   if (url) {
-    emit("fetching", `Fetching ${url} (static)…`);
+    emit("fetching", 3, `Fetching ${url} (static)…`);
+    checkAborted();
     let html = "";
     let text = "";
     try {
@@ -418,10 +472,12 @@ async function aiAddProductFromInputImpl(
     } catch (e) {
       console.warn("[aiAddProduct] static fetch failed, will try render", url, e);
     }
+    checkAborted();
     // For SPA brand sites the static HTML is empty — fall back to a render.
     if (!text || text.length < 200) {
       emit(
         "rendering",
+        8,
         "Static fetch returned no readable text — running headless render…",
       );
       try {
@@ -462,8 +518,10 @@ async function aiAddProductFromInputImpl(
     if (!text || text.length < 600) {
       emit(
         "perplexity",
+        16,
         `Page text was sparse (${text.length} chars) — asking Perplexity to read ${url}…`,
       );
+      checkAborted();
       const ctx = await perplexityProductContext(url, input.hint ?? null);
       if (ctx && ctx.text.length > 200) {
         sources.push({
@@ -475,11 +533,13 @@ async function aiAddProductFromInputImpl(
         if (sourceMode === "files-only") sourceMode = "perplexity";
         emit(
           "perplexity-ok",
+          24,
           `Perplexity returned ${ctx.text.length} chars · ${ctx.imageUrls.length} images · ${ctx.documentUrls.length} docs`,
         );
       } else {
         emit(
           "perplexity-empty",
+          24,
           ctx
             ? "Perplexity returned no usable text"
             : "Perplexity unavailable (PPLX_API_KEY missing or call failed)",
@@ -494,8 +554,13 @@ async function aiAddProductFromInputImpl(
   }
 
   if (attachments.length > 0) {
-    emit("reading-files", `Reading ${attachments.length} attached file(s)…`);
+    emit(
+      "reading-files",
+      28,
+      `Reading ${attachments.length} attached file(s)…`,
+    );
   }
+  checkAborted();
   // Fetch + parse each user-uploaded file from the blob URL.
   for (const att of attachments) {
     try {
@@ -603,7 +668,12 @@ For the product:
 
 ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but DO NOT exclude the product because of it.` : ""}`;
 
-  emit("ai-extract", `Extracting structured product data with ${AI_MODEL}…`);
+  emit(
+    "ai-extract",
+    32,
+    `Extracting structured product data with ${AI_MODEL}…`,
+  );
+  checkAborted();
   const client = openaiClient();
   const res = await client.chat.completions.create({
     model: AI_MODEL,
@@ -621,9 +691,15 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
       },
     },
   });
+  checkAborted();
   const raw = res.choices[0]?.message?.content;
   if (!raw) throw new Error("AI returned no content");
   const parsed = JSON.parse(raw) as AddProductExtraction;
+  emit(
+    "ai-extracted",
+    60,
+    `AI returned ${parsed.brand.name?.trim() || "(no brand)"} / ${parsed.product.name?.trim() || "(no product)"}`,
+  );
 
   // ── 4. Look up or create the brand in this collection ──
   const brandName = parsed.brand.name?.trim();
@@ -678,45 +754,161 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
     }
   }
 
-  // ── 5. Build the imageUrls list — prefer AI-extracted URLs that resolve;
-  //      fall back to the page's HTML-extracted gallery if AI gave nothing,
-  //      then to Perplexity-discovered URLs, then to user-uploaded blobs.
-  //      Order matters: AI > scraped HTML > Perplexity > user blobs.
-  let imageUrls: string[] = (parsed.product.imageUrls ?? [])
+  // ── 5. Build the SOURCE image-url list with the §5.4 escalation ladder:
+  //      AI-extracted > scraped HTML gallery > Perplexity > user-uploaded
+  //      image blobs. Each rung is only tried when the previous one came
+  //      back empty.
+  const aiImageUrls = (parsed.product.imageUrls ?? [])
     .map((u) => (typeof u === "string" ? u.trim() : ""))
     .filter((u) => /^https?:\/\//i.test(u));
-  if (imageUrls.length === 0 && pageHtml && url) {
-    imageUrls = extractImageUrls(pageHtml, url);
+  let sourceImageUrls: string[] = aiImageUrls;
+  let imageSource: "ai" | "html" | "perplexity" | "user-blobs" | "none" = "none";
+  if (sourceImageUrls.length > 0) imageSource = "ai";
+
+  if (sourceImageUrls.length === 0 && pageHtml && url) {
+    const fromHtml = extractImageUrls(pageHtml, url);
+    if (fromHtml.length > 0) {
+      sourceImageUrls = fromHtml;
+      imageSource = "html";
+    }
   }
-  if (imageUrls.length === 0 && perplexityImageUrls.length > 0) {
-    imageUrls = perplexityImageUrls.slice(0, 12);
-    emit("images-perplexity", `Using ${imageUrls.length} Perplexity image URLs`);
+  if (sourceImageUrls.length === 0 && perplexityImageUrls.length > 0) {
+    sourceImageUrls = perplexityImageUrls.slice(0, 12);
+    imageSource = "perplexity";
   }
-  // If the user uploaded images themselves, use those blob URLs as fallbacks.
-  if (imageUrls.length === 0) {
-    imageUrls = attachments
+  if (sourceImageUrls.length === 0) {
+    const userImages = attachments
       .filter((a) => (a.mime ?? "").startsWith("image/"))
       .map((a) => a.url);
+    if (userImages.length > 0) {
+      sourceImageUrls = userImages;
+      imageSource = "user-blobs";
+    }
   }
 
-  // ── 6. Persist the product row ──
-  emit("saving", `Saving "${parsed.product.name?.trim() || "product"}"…`);
-  const [productRow] = await db
-    .insert(competitorProducts)
-    .values({
-      competitorId: brandRow.id,
-      name: parsed.product.name?.trim() || "Untitled product",
-      productCode: parsed.product.productCode || null,
-      productCategory: parsed.product.productCategory || null,
-      description: parsed.product.description || null,
-      sourceUrl: parsed.product.sourceUrl || url || null,
-      imageUrls,
-      specs: parsed.product.specs as unknown as Record<string, string | string[]>,
-    })
-    .returning();
+  // De-dupe while preserving order, and cap at 24 so a runaway gallery
+  // doesn't waste minutes downloading every image on the site.
+  sourceImageUrls = Array.from(new Set(sourceImageUrls)).slice(0, 24);
 
-  // ── 7. Attach every user-uploaded file (PDFs, images) to the product ──
+  emit(
+    "images-discovered",
+    65,
+    `Discovered ${sourceImageUrls.length} image URL(s) via ${imageSource}`,
+  );
+
+  // ── 6. Download every source image to our own Vercel Blob bucket.
+  //      Per the AI Project Master Guide §5.4: never skip silently. Failed
+  //      fetches are surfaced in the completeness summary at the end. Per-
+  //      image progress drives the bar from 65% → 88%.
+  const imagesPathPrefix = `competitors/product-images/${crypto.randomUUID()}`;
+  const storedImages: DownloadedImage[] = [];
+  let failedImages: Array<{ sourceUrl: string }> = [];
+  if (sourceImageUrls.length > 0) {
+    const total = sourceImageUrls.length;
+    const CONCURRENCY = 4;
+    let completed = 0;
+    const queue = [...sourceImageUrls];
+    async function worker() {
+      while (queue.length > 0) {
+        checkAborted();
+        const u = queue.shift();
+        if (!u) return;
+        const result = await downloadProductImageToBlob({
+          pathPrefix: imagesPathPrefix,
+          sourceUrl: u,
+        });
+        completed++;
+        if (result) {
+          storedImages.push(result);
+        } else {
+          failedImages.push({ sourceUrl: u });
+        }
+        const fraction = completed / total;
+        const percent = 65 + Math.round(fraction * 23); // 65 → 88
+        emit(
+          "downloading-images",
+          percent,
+          `Downloaded image ${completed}/${total} (${storedImages.length} ok, ${failedImages.length} failed)`,
+        );
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()),
+    );
+
+    // The user's hard rule: all images uploaded from the link. If at least
+    // one source URL came back but ALL of them failed download, escalate
+    // by re-trying the failed set once with looser timing — fragile CDNs
+    // sometimes recover on a second hit. This satisfies §5.4 rung 1
+    // (re-read source) before we surface failures. Bar stays at 88% during
+    // retry — step label updates so the UI still looks alive without
+    // animating the percentage backwards.
+    if (storedImages.length === 0 && failedImages.length > 0) {
+      const retryQueue = failedImages.map((f) => f.sourceUrl);
+      failedImages = [];
+      emit(
+        "downloading-images-retry",
+        88,
+        `Retrying ${retryQueue.length} failed image(s)…`,
+      );
+      let retryDone = 0;
+      for (const u of retryQueue) {
+        checkAborted();
+        const result = await downloadProductImageToBlob({
+          pathPrefix: imagesPathPrefix,
+          sourceUrl: u,
+        });
+        retryDone++;
+        if (result) storedImages.push(result);
+        else failedImages.push({ sourceUrl: u });
+        emit(
+          "downloading-images-retry",
+          88,
+          `Retry ${retryDone}/${retryQueue.length} (${storedImages.length} ok, ${failedImages.length} failed)`,
+        );
+      }
+    }
+  }
+  emit(
+    "images-stored",
+    88,
+    `Stored ${storedImages.length}/${sourceImageUrls.length} image(s) to blob`,
+  );
+
+  // ── 7. Persist the product row — `imageUrls` now stores OUR blob URLs.
+  //      sourceUrl on the product still points at the brand site so the
+  //      user can revisit it. Source URLs that failed download are kept in
+  //      the completeness summary, not on the row.
+  const blobImageUrls = storedImages.map((i) => i.blobUrl);
+  emit(
+    "saving",
+    90,
+    `Saving "${parsed.product.name?.trim() || "product"}"…`,
+  );
+  // Uses the compat wrapper: if migration 0018 hasn't been applied to this
+  // database, falls back to a raw INSERT that omits specs_analysis_hash so
+  // the row still saves. Once the migration lands the optimistic Drizzle
+  // path takes over with no code change.
+  const productRow = await insertCompetitorProductCompat({
+    competitorId: brandRow.id,
+    name: parsed.product.name?.trim() || "Untitled product",
+    productCode: parsed.product.productCode || null,
+    productCategory: parsed.product.productCategory || null,
+    description: parsed.product.description || null,
+    sourceUrl: parsed.product.sourceUrl || url || null,
+    imageUrls: blobImageUrls,
+    specs: parsed.product.specs as unknown as Record<string, string | string[]>,
+  });
+
+  // ── 8. Attach every user-uploaded file (PDFs, images) to the product ──
   let attachedFileCount = 0;
+  if (attachments.length > 0) {
+    emit(
+      "attaching-files",
+      92,
+      `Attaching ${attachments.length} uploaded file(s)…`,
+    );
+  }
   for (const att of attachments) {
     try {
       const classified = classifyDocument({
@@ -739,7 +931,7 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
     }
   }
 
-  // ── 8. Auto-attach Perplexity-discovered documents (spec sheets, IES,
+  // ── 9. Auto-attach Perplexity-discovered documents (spec sheets, IES,
   //      drawings, brochures). When the page scrape failed but Perplexity
   //      surfaced direct download URLs, we fetch them and attach them right
   //      now so the user can immediately re-analyze with Claude. We classify
@@ -748,6 +940,7 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
   if (perplexityDocumentUrls.length > 0) {
     emit(
       "attaching-docs",
+      95,
       `Fetching ${Math.min(perplexityDocumentUrls.length, 25)} Perplexity-discovered document(s)…`,
     );
     const docList = perplexityDocumentUrls.slice(0, 25);
@@ -792,12 +985,17 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
         }
       }),
     );
-    emit("docs-attached", `Attached ${pdocsAttached} Perplexity document(s)`);
+    emit(
+      "docs-attached",
+      98,
+      `Attached ${pdocsAttached} Perplexity document(s)`,
+    );
   }
 
   emit(
     "done",
-    `Added ${parsed.product.name?.trim() || "product"} · ${imageUrls.length} image(s) · ${attachedFileCount} file(s) · source=${sourceMode}`,
+    100,
+    `Added ${parsed.product.name?.trim() || "product"} · ${storedImages.length}/${sourceImageUrls.length} image(s) · ${attachedFileCount} file(s) · source=${sourceMode}`,
   );
 
   revalidatePath("/competitors");
@@ -810,7 +1008,13 @@ ${niche ? `Niche hint: "${niche}". Use this to interpret ambiguous text — but 
     productName: productRow.name,
     attachedFileCount,
     sourceMode,
-    imageUrls,
+    imageUrls: blobImageUrls,
+    completeness: {
+      imagesDiscovered: sourceImageUrls.length,
+      imagesStored: storedImages.length,
+      imagesFailed: failedImages.map((f) => f.sourceUrl),
+      imageSource,
+    },
   };
 }
 
@@ -942,17 +1146,45 @@ CUSTOMISATION:
   5. Rewrite the product description (1-2 sentences) if the PDFs give a better summary than the current one.
   6. Use the record_product_specs tool to return your findings — that's the only way to respond.`;
 
-export async function refreshProductSpecsFromFiles(input: {
-  productId: number;
-  /**
-   * Bypass the input-hash cache. The bulk "Re-analyze all" button and the
-   * post-extract auto-chain leave this off so unchanged products skip the
-   * expensive Claude call. The single-product "🔄 Refresh from files"
-   * button passes `true` so a manual click always re-runs.
-   */
-  force?: boolean;
-}): Promise<RefreshSpecsResult> {
+/**
+ * Per-step progress event for the spec-refresh pipeline. Same shape as
+ * AddProductProgress / ExtractProductFilesProgress so the shared SSE
+ * consumer + ProgressPanel work for all three flows.
+ */
+export type RefreshSpecsProgress = {
+  step: string;
+  detail?: string;
+  /** 0–100, tied to real work units (master guide §5.1). */
+  percent: number;
+};
+
+export async function refreshProductSpecsFromFiles(
+  input: {
+    productId: number;
+    /**
+     * Bypass the input-hash cache. The bulk "Re-analyze all" button and the
+     * post-extract auto-chain leave this off so unchanged products skip the
+     * expensive Claude call. The single-product "🔄 Refresh from files"
+     * button passes `true` so a manual click always re-runs.
+     */
+    force?: boolean;
+  },
+  options?: {
+    onProgress?: (e: RefreshSpecsProgress) => void;
+    signal?: AbortSignal;
+  },
+): Promise<RefreshSpecsResult> {
+  const checkAborted = () => {
+    if (options?.signal?.aborted) {
+      throw new Error("AbortError: cancelled by user");
+    }
+  };
+  const emit = (step: string, percent: number, detail?: string) => {
+    options?.onProgress?.({ step, detail, percent });
+  };
+  emit("loading", 3, "Loading product + attachments…");
   await requireCompetitorEditor();
+  checkAborted();
 
   if (!hasClaudeKey()) {
     console.warn(
@@ -1032,6 +1264,11 @@ export async function refreshProductSpecsFromFiles(input: {
     console.log(
       `[refreshSpecs] product ${input.productId}: input hash unchanged — skipping Claude analysis (hash=${currentHash.slice(0, 12)}…)`,
     );
+    emit(
+      "skipped-cache",
+      100,
+      "Inputs unchanged since last run — used cached result (hash-skip optimisation).",
+    );
     return {
       productId: input.productId,
       productName: row.name,
@@ -1040,6 +1277,11 @@ export async function refreshProductSpecsFromFiles(input: {
       skippedFromCache: true,
     };
   }
+  emit(
+    "hash-check",
+    10,
+    `Hash check: re-running Claude analysis (force=${input.force ?? false}).`,
+  );
 
   // PDFs: fetched as base64 to send to Claude as document content blocks.
   const pdfDocuments: Array<{ name: string; base64: string; bytes: number }> = [];
@@ -1084,6 +1326,12 @@ export async function refreshProductSpecsFromFiles(input: {
   // Parallelize PDF blob fetches — sequential awaits add up fast when there
   // are many attachments. Promise.allSettled so a single bad URL doesn't
   // tank the whole batch.
+  emit(
+    "fetching-pdfs",
+    18,
+    `Fetching ${pdfCandidates.length} PDF(s) from blob storage…`,
+  );
+  checkAborted();
   let textFallbackCount = 0;
   const fetchResults = await Promise.allSettled(
     pdfCandidates.map(async (att) => {
@@ -1202,6 +1450,12 @@ export async function refreshProductSpecsFromFiles(input: {
       console.log(
         `[refreshSpecs] product ${input.productId}: invoking Claude (${CLAUDE_MODEL}) with ${pdfDocuments.length} PDF(s) (${(totalBytes / 1024 / 1024).toFixed(1)} MB) + ${otherSources.length} text source(s) + page-text=${sourcePageText.length}B`,
       );
+      emit(
+        "analyzing",
+        30,
+        `Sending ${pdfDocuments.length} PDF(s) to Claude (${(totalBytes / 1024 / 1024).toFixed(1)} MB)…`,
+      );
+      checkAborted();
       parsed = await analyzeProductWithClaude({
         productName: row.name,
         productCode: row.productCode,
@@ -1210,6 +1464,7 @@ export async function refreshProductSpecsFromFiles(input: {
         pdfDocuments,
         otherSources,
       });
+      emit("analyzed", 88, "Claude returned extracted specs.");
       console.log(
         `[refreshSpecs] Claude returned: description=${parsed.description?.length ?? 0} chars, specs keys=${Object.keys(parsed.specs ?? {}).length}`,
       );
@@ -1217,6 +1472,8 @@ export async function refreshProductSpecsFromFiles(input: {
       console.log(
         `[refreshSpecs] product ${input.productId}: ANTHROPIC_API_KEY not set, falling back to OpenAI text-only (${pdfDocuments.length} PDFs unread, ${otherSources.length} text sources)`,
       );
+      emit("analyzing", 30, "Sending text sources to OpenAI…");
+      checkAborted();
       parsed = await analyzeProductWithOpenAI({
         productName: row.name,
         productCode: row.productCode,
@@ -1224,6 +1481,7 @@ export async function refreshProductSpecsFromFiles(input: {
         pdfDocuments,
         otherSources,
       });
+      emit("analyzed", 88, "OpenAI returned extracted specs.");
     }
   } catch (e) {
     // Anthropic / OpenAI SDK errors carry the API status + body. Surface that
@@ -1280,6 +1538,7 @@ export async function refreshProductSpecsFromFiles(input: {
       ? parsed.description.trim()
       : row.description ?? null;
 
+  emit("merging", 95, "Merging into existing specs & writing to DB…");
   // Try to write the hash too. If migration 0018 hasn't been applied, fall
   // back to updating just the existing columns so the spec refresh still
   // succeeds — the optimization just doesn't activate yet.
@@ -1307,6 +1566,11 @@ export async function refreshProductSpecsFromFiles(input: {
   }
 
   revalidatePath("/competitors");
+  emit(
+    "done",
+    100,
+    `Read ${filesRead} file(s), updated ${fieldsUpdated} spec field(s).`,
+  );
   return {
     productId: input.productId,
     productName: row.name,

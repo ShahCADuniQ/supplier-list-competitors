@@ -6,27 +6,59 @@ import { usePathname } from "next/navigation";
 type Tab = { href: string; label: string };
 
 type Props = {
+  canViewSuppliers: boolean;
   canViewCompetitors: boolean;
   canViewHandbook: boolean;
   canViewEngineering: boolean;
+  isAdmin: boolean;
 };
 
-const DESIGN_PREFIXES = ["/competitors", "/handbook", "/engineering"];
+// Routes the unified Tools sub-nav renders under. /competitors, /handbook,
+// /engineering are kept at the top level for URL stability but classified
+// in the navigation as Tools tabs.
+const TOOLS_PREFIXES = [
+  "/tools",
+  "/competitors",
+  "/handbook",
+  "/engineering",
+];
 
 export default function SubNav({
+  canViewSuppliers,
   canViewCompetitors,
   canViewHandbook,
   canViewEngineering,
+  isAdmin,
 }: Props) {
   const pathname = usePathname() ?? "/";
 
-  const inDesign = DESIGN_PREFIXES.some(
+  const inTools = TOOLS_PREFIXES.some(
     (p) => pathname === p || pathname.startsWith(p + "/"),
   );
-  if (!inDesign) return null;
+  if (!inTools) return null;
+
+  // Tools subpages (Municipal Contacts, Municipal Contact List) reuse the
+  // same "any content access" gate as the page-level guard — see
+  // src/app/tools/municipal-contacts/page.tsx.
+  const hasToolsBaseAccess =
+    canViewSuppliers ||
+    canViewCompetitors ||
+    canViewEngineering ||
+    isAdmin;
 
   const tabs: Tab[] = [
-    canViewCompetitors && { href: "/competitors", label: "Competitors & Market Research" },
+    hasToolsBaseAccess && {
+      href: "/tools/municipal-contacts",
+      label: "Municipal Contacts",
+    },
+    hasToolsBaseAccess && {
+      href: "/tools/municipal-contact-list",
+      label: "Municipal Contact List",
+    },
+    canViewCompetitors && {
+      href: "/competitors",
+      label: "Competitors & Market Research",
+    },
     canViewHandbook && { href: "/handbook", label: "Process" },
     canViewEngineering && { href: "/engineering", label: "Engineering" },
   ].filter((t): t is Tab => Boolean(t));
@@ -35,7 +67,7 @@ export default function SubNav({
 
   return (
     <nav
-      aria-label="Design & Engineering sections"
+      aria-label="Tools sections"
       className="flex items-center gap-2 px-6 py-3 shrink-0 overflow-x-auto"
       style={{
         background: "var(--lb-bg)",
@@ -43,7 +75,8 @@ export default function SubNav({
       }}
     >
       {tabs.map((t) => {
-        const active = pathname === t.href || pathname.startsWith(t.href + "/");
+        const active =
+          pathname === t.href || pathname.startsWith(t.href + "/");
         return (
           <Link
             key={t.href}
@@ -60,9 +93,12 @@ export default function SubNav({
               letterSpacing: "-0.005em",
               color: active ? "var(--lb-accent-fg)" : "var(--lb-text-2)",
               background: active ? "var(--lb-accent)" : "var(--lb-bg-elev)",
-              border: active ? "1px solid var(--lb-accent)" : "1px solid var(--lb-border)",
+              border: active
+                ? "1px solid var(--lb-accent)"
+                : "1px solid var(--lb-border)",
               whiteSpace: "nowrap",
-              transition: "background 160ms ease, color 160ms ease, border-color 160ms ease",
+              transition:
+                "background 160ms ease, color 160ms ease, border-color 160ms ease",
             }}
           >
             {t.label}

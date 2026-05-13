@@ -10,6 +10,10 @@ import {
 } from "@/db/schema";
 import { AI_MODEL, openaiClient } from "@/lib/ai/openai";
 import { requireCompetitorEditor } from "@/lib/permissions";
+import {
+  withProductHashFallback,
+  LEGACY_PRODUCT_COLS,
+} from "./_attachments";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AI IDEATION — given a collection's existing reference images plus optional
@@ -133,10 +137,18 @@ export async function aiGenerateIdeas(input: {
     .orderBy(asc(competitors.name));
 
   const products = brands.length
-    ? await db
-        .select()
-        .from(competitorProducts)
-        .orderBy(asc(competitorProducts.name))
+    ? await withProductHashFallback(
+        () =>
+          db
+            .select()
+            .from(competitorProducts)
+            .orderBy(asc(competitorProducts.name)),
+        () =>
+          db
+            .select(LEGACY_PRODUCT_COLS)
+            .from(competitorProducts)
+            .orderBy(asc(competitorProducts.name)),
+      )
     : [];
 
   const items = await db
@@ -334,7 +346,10 @@ export async function aiBenchmarkCollection(input: {
     .where(eq(competitors.collectionId, input.collectionId));
 
   const products = brands.length
-    ? await db.select().from(competitorProducts)
+    ? await withProductHashFallback(
+        () => db.select().from(competitorProducts),
+        () => db.select(LEGACY_PRODUCT_COLS).from(competitorProducts),
+      )
     : [];
   const filtered = products.filter((p) =>
     brands.find((b) => b.id === p.competitorId),
@@ -424,7 +439,10 @@ export async function listCollectionSpecsheets(
     .where(eq(competitors.collectionId, collectionId));
   if (!brands.length) return [];
 
-  const products = await db.select().from(competitorProducts);
+  const products = await withProductHashFallback(
+    () => db.select().from(competitorProducts),
+    () => db.select(LEGACY_PRODUCT_COLS).from(competitorProducts),
+  );
   const productsInColl = products.filter((p) =>
     brands.find((b) => b.id === p.competitorId),
   );
