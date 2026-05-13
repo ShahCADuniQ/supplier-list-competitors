@@ -11,6 +11,9 @@ type Props = {
   canViewCompetitors: boolean;
   canViewHandbook: boolean;
   canViewEngineering: boolean;
+  canViewDesignEngineering: boolean;
+  canViewCrm: boolean;
+  canViewOee: boolean;
   isAdmin: boolean;
   children: React.ReactNode;
 };
@@ -22,6 +25,9 @@ export default function AppShell({
   canViewCompetitors,
   canViewHandbook,
   canViewEngineering,
+  canViewDesignEngineering,
+  canViewCrm,
+  canViewOee,
   isAdmin,
   children,
 }: Props) {
@@ -37,6 +43,9 @@ export default function AppShell({
         canViewCompetitors={canViewCompetitors}
         canViewHandbook={canViewHandbook}
         canViewEngineering={canViewEngineering}
+        canViewDesignEngineering={canViewDesignEngineering}
+        canViewCrm={canViewCrm}
+        canViewOee={canViewOee}
         isAdmin={isAdmin}
       />
       <div className="flex-1 flex flex-col min-w-0">

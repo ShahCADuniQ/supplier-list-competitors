@@ -6,10 +6,14 @@ import {
   canViewEngineering,
   isAdmin,
 } from "@/lib/permissions";
-import ToolsTabs from "./ToolsTabs";
 
 export const dynamic = "force-dynamic";
 
+// The /tools tree previously hosted Municipal Contacts (lead generator +
+// list); both moved under /crm as of the CRM-integration refactor. The
+// remaining /tools routes are now just redirect stubs for backwards
+// compatibility — they don't need an in-page pill nav, since the top-of-page
+// SubNav already shows Tools tabs (Competitors / Process / Engineering).
 export default async function ToolsLayout({
   children,
 }: {
@@ -24,19 +28,5 @@ export default async function ToolsLayout({
     isAdmin(profile);
   if (!allowed) redirect("/");
 
-  return (
-    <>
-      <div
-        style={{
-          padding: "20px 28px 0",
-          maxWidth: 1280,
-          margin: "0 auto",
-          width: "100%",
-        }}
-      >
-        <ToolsTabs />
-      </div>
-      {children}
-    </>
-  );
+  return <>{children}</>;
 }

@@ -11,6 +11,9 @@ type Props = {
   canViewCompetitors: boolean;
   canViewHandbook: boolean;
   canViewEngineering: boolean;
+  canViewDesignEngineering: boolean;
+  canViewCrm: boolean;
+  canViewOee: boolean;
   isAdmin: boolean;
 };
 
@@ -32,31 +35,31 @@ export default function Sidebar({
   canViewCompetitors,
   canViewHandbook,
   canViewEngineering,
+  canViewDesignEngineering,
+  canViewCrm,
+  canViewOee,
   isAdmin,
 }: Props) {
   const pathname = usePathname() ?? "/";
 
-  // Sidebar order: Design & Engineering → ERP System → Tools → Admin.
-  // Every item's visibility is gated by an admin-controlled permission so
-  // the admin lock system covers everything on the rail. When you add a
-  // new top-level surface here, also add a corresponding canView* flag in
-  // src/db/schema.ts + src/lib/permissions.ts and surface a column in the
-  // Admin panel — that's the contract.
+  // Sidebar order: Design & Engineering → ERP System → CRM → OEE → Tools → Admin.
+  // Every item's visibility is gated by a dedicated admin-controlled
+  // permission so the Admin matrix covers everything on the rail. When you
+  // add a new top-level surface here, also add a corresponding canView* flag
+  // in src/db/schema.ts + src/lib/permissions.ts and surface a column in
+  // the Admin panel — that's the contract.
   //
   // Routing classification: /competitors, /handbook, /engineering are
   // RESERVED URLs (kept stable for bookmarks / DB FKs) but classified
   // under the Tools group in the navigation. The Tools rail icon
-  // highlights on these routes; Design & Engineering is a separate empty
-  // placeholder for future modules.
-  const hasDesignEngAccess =
-    isAdmin || canViewCompetitors || canViewHandbook || canViewEngineering;
+  // highlights on these routes.
 
   const items: RailItem[] = [
     {
       href: "/design-engineering",
       label: "Design & Engineering",
       icon: "⊞",
-      show: hasDesignEngAccess,
+      show: canViewDesignEngineering,
       matchPrefixes: ["/design-engineering"],
     },
     {
@@ -70,44 +73,34 @@ export default function Sidebar({
       matchPrefixes: ["/suppliers"],
     },
     {
-      // CRM — Stage 4 from the CADuniQ visual map. Coming-soon placeholder
-      // for now. Sits right after ERP System on the rail per user direction.
       href: "/crm",
       label: "CRM",
       icon: "◉",
-      show: canViewSuppliers || isAdmin,
+      show: canViewCrm,
       matchPrefixes: ["/crm"],
     },
     {
-      // OEE & Floor Ops — Stage 6 from the CADuniQ visual map (real-time
-      // OEE, facility digital twin, field service). Coming-soon placeholder.
       href: "/oee",
       label: "OEE & Floor Ops",
       icon: "⚡",
-      show: canViewSuppliers || isAdmin,
+      show: canViewOee,
       matchPrefixes: ["/oee"],
     },
     {
-      // Tools section — Municipal Contacts is the first tool. The rail item
-      // links to the first tab the user can access. matchPrefixes includes
-      // /competitors, /handbook, /engineering because those routes are now
-      // classified as Tools tabs (see SubNav.tsx) — the Tools icon must
-      // highlight when the user is on any of them.
+      // Tools section — Municipal Contacts moved under /crm, so the remaining
+      // Tools tabs are Competitors / Process (handbook) / Engineering. The
+      // rail item links to the first one the user can access. matchPrefixes
+      // still includes /tools so legacy bookmarks under that path keep the
+      // icon highlighted while redirecting.
       href: canViewCompetitors
         ? "/competitors"
         : canViewHandbook
           ? "/handbook"
-          : canViewEngineering
-            ? "/engineering"
-            : "/tools/municipal-contacts",
+          : "/engineering",
       label: "Tools",
       icon: "🛠",
       show:
-        canViewSuppliers ||
-        canViewCompetitors ||
-        canViewHandbook ||
-        canViewEngineering ||
-        isAdmin,
+        canViewCompetitors || canViewHandbook || canViewEngineering || isAdmin,
       matchPrefixes: [
         "/tools",
         "/competitors",

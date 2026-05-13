@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { userProfiles } from "@/db/schema";
-import { isSeededAdminEmail, requireAdmin } from "@/lib/permissions";
+import {
+  ensureUserProfileColumns,
+  isSeededAdminEmail,
+  requireAdmin,
+} from "@/lib/permissions";
 
 export type AccessUpdate = {
   clerkUserId: string;
@@ -13,11 +17,15 @@ export type AccessUpdate = {
   canViewCompetitors?: boolean;
   canViewHandbook?: boolean;
   canViewEngineering?: boolean;
+  canViewDesignEngineering?: boolean;
+  canViewCrm?: boolean;
+  canViewOee?: boolean;
   canEdit?: boolean;
 };
 
 export async function updateUserAccess(update: AccessUpdate) {
   const admin = await requireAdmin();
+  await ensureUserProfileColumns();
 
   const [target] = await db
     .select()
@@ -46,6 +54,10 @@ export async function updateUserAccess(update: AccessUpdate) {
     updates.canViewHandbook = update.canViewHandbook;
   if (update.canViewEngineering !== undefined)
     updates.canViewEngineering = update.canViewEngineering;
+  if (update.canViewDesignEngineering !== undefined)
+    updates.canViewDesignEngineering = update.canViewDesignEngineering;
+  if (update.canViewCrm !== undefined) updates.canViewCrm = update.canViewCrm;
+  if (update.canViewOee !== undefined) updates.canViewOee = update.canViewOee;
   if (update.canEdit !== undefined) updates.canEdit = update.canEdit;
 
   if (wasPending && becomingActive && !target.approvedAt) {
@@ -59,6 +71,9 @@ export async function updateUserAccess(update: AccessUpdate) {
     updates.canViewCompetitors = true;
     updates.canViewHandbook = true;
     updates.canViewEngineering = true;
+    updates.canViewDesignEngineering = true;
+    updates.canViewCrm = true;
+    updates.canViewOee = true;
     updates.canEdit = true;
   }
 
@@ -78,6 +93,9 @@ export async function approveUser(
     canViewCompetitors: boolean;
     canViewHandbook?: boolean;
     canViewEngineering?: boolean;
+    canViewDesignEngineering?: boolean;
+    canViewCrm?: boolean;
+    canViewOee?: boolean;
     canEdit: boolean;
   },
 ) {
@@ -85,6 +103,22 @@ export async function approveUser(
     clerkUserId,
     role: "member",
     ...access,
+  });
+}
+
+// Approve with EVERY sidebar surface enabled (read-only). Useful as the
+// default for new internal members on a client deployment where the admin
+// just wants them to "see everything" without thinking.
+export async function approveUserFullView(clerkUserId: string) {
+  await approveUser(clerkUserId, {
+    canViewSuppliers: true,
+    canViewCompetitors: true,
+    canViewHandbook: true,
+    canViewEngineering: true,
+    canViewDesignEngineering: true,
+    canViewCrm: true,
+    canViewOee: true,
+    canEdit: false,
   });
 }
 
@@ -96,6 +130,9 @@ export async function revokeUser(clerkUserId: string) {
     canViewCompetitors: false,
     canViewHandbook: false,
     canViewEngineering: false,
+    canViewDesignEngineering: false,
+    canViewCrm: false,
+    canViewOee: false,
     canEdit: false,
   });
 }

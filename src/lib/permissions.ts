@@ -1,7 +1,51 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { userProfiles, type UserProfile } from "@/db/schema";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SELF-HEALING SCHEMA — migration 0022 added three module gates
+// (can_view_design_engineering / can_view_crm / can_view_oee). Production
+// deployments may not have run `npm run db:apply` yet, so every code path
+// that reads these columns triggers ensureUserProfileColumns() first. The
+// pattern matches feedback_migration_forward_compat.md from memory.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _profileSchemaEnsured: Promise<void> | null = null;
+
+export function ensureUserProfileColumns(): Promise<void> {
+  if (_profileSchemaEnsured) return _profileSchemaEnsured;
+  _profileSchemaEnsured = (async () => {
+    try {
+      await db.execute(
+        sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "can_view_design_engineering" boolean NOT NULL DEFAULT false`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "can_view_crm" boolean NOT NULL DEFAULT false`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "can_view_oee" boolean NOT NULL DEFAULT false`,
+      );
+      // Backfill admins so the new gates inherit role-level access.
+      await db.execute(sql`
+        UPDATE "user_profiles"
+          SET "can_view_design_engineering" = true,
+              "can_view_crm" = true,
+              "can_view_oee" = true
+          WHERE "role" = 'admin'
+            AND ("can_view_design_engineering" = false
+              OR "can_view_crm" = false
+              OR "can_view_oee" = false)
+      `);
+    } catch (e) {
+      console.warn(
+        "[permissions] ensureUserProfileColumns failed — run `npm run db:apply` to apply migration 0022.",
+        e,
+      );
+    }
+  })();
+  return _profileSchemaEnsured;
+}
 
 // CADuniQ is the operator/vendor — every @caduniq.com mailbox is automatically
 // a full admin across every client dashboard hosted on this codebase. The
@@ -43,6 +87,8 @@ export function isSeededAdminEmail(email: string | null | undefined): boolean {
 export async function getOrCreateProfile(): Promise<UserProfile | null> {
   const { userId } = await auth();
   if (!userId) return null;
+
+  await ensureUserProfileColumns();
 
   const existing = await db
     .select()
@@ -88,6 +134,9 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
         updates.canViewCompetitors = true;
         updates.canViewHandbook = true;
         updates.canViewEngineering = true;
+        updates.canViewDesignEngineering = true;
+        updates.canViewCrm = true;
+        updates.canViewOee = true;
         updates.canEdit = true;
         if (!existingByEmail.approvedAt) updates.approvedAt = new Date();
         if (!existingByEmail.approvedBy) updates.approvedBy = "system:bootstrap";
@@ -113,6 +162,9 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
       canViewCompetitors: isAdmin,
       canViewHandbook: isAdmin,
       canViewEngineering: isAdmin,
+      canViewDesignEngineering: isAdmin,
+      canViewCrm: isAdmin,
+      canViewOee: isAdmin,
       canEdit: isAdmin,
       approvedAt: isAdmin ? new Date() : null,
       approvedBy: isAdmin ? "system:bootstrap" : null,
@@ -159,6 +211,27 @@ export function canViewEngineering(
 ): boolean {
   if (!profile) return false;
   return profile.role === "admin" || profile.canViewEngineering;
+}
+
+export function canViewDesignEngineering(
+  profile: UserProfile | null | undefined,
+): boolean {
+  if (!profile) return false;
+  return profile.role === "admin" || profile.canViewDesignEngineering;
+}
+
+export function canViewCrm(
+  profile: UserProfile | null | undefined,
+): boolean {
+  if (!profile) return false;
+  return profile.role === "admin" || profile.canViewCrm;
+}
+
+export function canViewOee(
+  profile: UserProfile | null | undefined,
+): boolean {
+  if (!profile) return false;
+  return profile.role === "admin" || profile.canViewOee;
 }
 
 export function canEdit(profile: UserProfile | null | undefined): boolean {

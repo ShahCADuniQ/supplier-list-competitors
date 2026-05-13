@@ -28,6 +28,7 @@ import {
   deleteContactsByCategory,
   exportToHubspot,
 } from "./actions";
+import { importMunicipalContactToCrm } from "../actions";
 
 type Props = {
   searches: MunicipalitySearch[];
@@ -277,6 +278,27 @@ export default function MunicipalContactsView({
       router.refresh();
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Delete failed", true);
+    }
+  }
+
+  // CRM integration — turns this municipal contact into a real
+  // crm_accounts + crm_contacts row pair. Idempotent: re-clicking on a row
+  // already in the CRM updates fields instead of creating duplicates.
+  const [pushingCrmId, setPushingCrmId] = useState<number | null>(null);
+  async function handlePushToCrm(id: number) {
+    if (pushingCrmId !== null) return;
+    setPushingCrmId(id);
+    try {
+      const res = await importMunicipalContactToCrm(id);
+      showToast(
+        res.accountCreated
+          ? `Created CRM account & contact ↗ /crm/accounts/${res.accountId}`
+          : `Added contact to existing CRM account ↗ /crm/accounts/${res.accountId}`,
+      );
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Push to CRM failed", true);
+    } finally {
+      setPushingCrmId(null);
     }
   }
 
@@ -865,6 +887,15 @@ export default function MunicipalContactsView({
                           {c.role && (
                             <span className="mc-contact-role">{c.role}</span>
                           )}
+                          <button
+                            type="button"
+                            className="mc-contact-crm"
+                            onClick={() => handlePushToCrm(c.id)}
+                            disabled={pushingCrmId === c.id}
+                            title="Create or update a CRM account + contact from this row"
+                          >
+                            {pushingCrmId === c.id ? "Pushing…" : "→ CRM"}
+                          </button>
                           {canEdit && (
                             <button
                               type="button"
@@ -1495,6 +1526,23 @@ function MunicipalContactsCss() {
         padding: 2px 4px;
       }
       .mc-contact-del:hover { color: #ef4444; }
+      .mc-contact-crm {
+        margin-left: auto;
+        background: rgba(234, 88, 12, 0.12);
+        color: rgb(234, 88, 12);
+        border: 1px solid rgba(234, 88, 12, 0.4);
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        cursor: pointer;
+        line-height: 1.4;
+      }
+      .mc-contact-crm:hover:not(:disabled) {
+        background: rgba(234, 88, 12, 0.22);
+      }
+      .mc-contact-crm:disabled { cursor: wait; opacity: 0.65; }
       .mc-contact-dept {
         font-size: 11.5px;
         color: var(--lb-text-2);

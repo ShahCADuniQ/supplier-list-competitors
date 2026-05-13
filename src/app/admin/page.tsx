@@ -8,6 +8,7 @@ import {
   ADMIN_EMAILS,
   ADMIN_EMAIL_DOMAINS,
 } from "@/lib/permissions";
+import { CLIENT_CONFIG, CADUNIQ_PRODUCT_LABEL } from "@/lib/client-config";
 import AdminPanel from "./AdminPanel";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,9 @@ export default async function AdminPage() {
       adminEmails={[...ADMIN_EMAILS]}
       adminDomains={[...ADMIN_EMAIL_DOMAINS]}
       currentClerkId={profile.clerkUserId}
+      clientName={CLIENT_CONFIG.name}
+      clientIndustry={CLIENT_CONFIG.industry}
+      caduniqProductLabel={CADUNIQ_PRODUCT_LABEL}
     />
   );
 }

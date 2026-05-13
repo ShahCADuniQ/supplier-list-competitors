@@ -701,7 +701,7 @@ async function main() {
   console.log(`\nCanonical row #${searchId} now has ${finalCount[0].c} total contact(s).`);
   console.log(`By sector:`);
   for (const r of bySector) console.log(`  ${r.category ?? "(null)"}: ${r.n}`);
-  console.log(`\nView at: /tools/municipal-contacts (search #${searchId})`);
+  console.log(`\nView at: /crm/municipal-contacts (search #${searchId})`);
 }
 
 main().catch((e) => {

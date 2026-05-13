@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getOrCreateProfile } from "@/lib/permissions";
+import { canViewDesignEngineering, getOrCreateProfile } from "@/lib/permissions";
 import { CLIENT_CONFIG } from "@/lib/client-config";
 import { listVaultFiles } from "../actions";
 import VaultBrowser from "./VaultBrowser";
@@ -18,6 +18,7 @@ export const metadata = {
 export default async function EnterprisePdmPage() {
   const profile = await getOrCreateProfile();
   if (!profile) redirect("/sign-in");
+  if (!canViewDesignEngineering(profile)) redirect("/");
   const files = await listVaultFiles();
   return <VaultBrowser files={files} />;
 }

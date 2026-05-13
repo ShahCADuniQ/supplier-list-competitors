@@ -13,17 +13,26 @@ type Props = {
   isAdmin: boolean;
 };
 
-// Sub-nav strips appear on routes that have multiple sub-pages. Today only
-// two groups need one:
-//   1. Design & Engineering (Stage 1 Software · Stage 5 Full CAD · Stage 5i PDM)
-//   2. Tools (Municipal Contacts · Municipal Contact List · Competitors · Process · Engineering)
+// Sub-nav strips appear on routes that have multiple sub-pages. Today four
+// groups need one:
+//   1. Design & Engineering (Projects · Software · Full CAD + PDM · Enterprise PDM)
+//   2. CRM (Overview · Accounts · Pipeline · Tickets · Analytics · Municipal Lead Gen · Municipal List)
+//   3. OEE & Floor Ops (Overview · Machines · Alerts · Analytics)
+//   4. Tools (Competitors · Process · Engineering)
 //
-// CRM (/crm) and OEE (/oee) are their own top-level sidebar destinations now
-// and don't need a strip until they grow sub-pages of their own. The same
-// goes for /suppliers — its sub-tabs live INSIDE the page (the
+// Municipal Contacts (lead generator + list) live under CRM since they are
+// lead-generation sources that feed into accounts/contacts. The old
+// /tools/municipal-contact* URLs redirect to their new /crm/municipal-contact*
+// homes so existing bookmarks don't 404.
+//
+// /suppliers (ERP System) has its sub-tabs INSIDE the page (the
 // InventoryAndManufacturing pill bar), not in this top-of-page strip.
 
 const DESIGN_PREFIXES = ["/design-engineering"];
+
+const CRM_PREFIXES = ["/crm"];
+
+const OEE_PREFIXES = ["/oee"];
 
 const TOOLS_PREFIXES = [
   "/tools",
@@ -44,11 +53,17 @@ export default function SubNav({
   const inDesign = DESIGN_PREFIXES.some(
     (p) => pathname === p || pathname.startsWith(p + "/"),
   );
+  const inCrm = CRM_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(p + "/"),
+  );
+  const inOee = OEE_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(p + "/"),
+  );
   const inTools = TOOLS_PREFIXES.some(
     (p) => pathname === p || pathname.startsWith(p + "/"),
   );
 
-  if (!inDesign && !inTools) return null;
+  if (!inDesign && !inCrm && !inOee && !inTools) return null;
 
   let label = "";
   let tabs: Tab[] = [];
@@ -73,24 +88,43 @@ export default function SubNav({
         comingSoon: true,
       },
     ];
-  } else {
-    // inTools
-    label = "Tools sections";
-    const hasToolsBaseAccess =
+  } else if (inCrm) {
+    label = "CRM sections";
+    const hasMunicipalAccess =
       canViewSuppliers ||
       canViewCompetitors ||
       canViewEngineering ||
       isAdmin;
     tabs = (
       [
-        hasToolsBaseAccess && {
-          href: "/tools/municipal-contacts",
-          label: "Municipal Contacts",
+        { href: "/crm", label: "Overview" },
+        { href: "/crm/accounts", label: "Accounts" },
+        { href: "/crm/pipeline", label: "Pipeline" },
+        { href: "/crm/tickets", label: "Tickets" },
+        { href: "/crm/analytics", label: "Analytics" },
+        hasMunicipalAccess && {
+          href: "/crm/municipal-contacts",
+          label: "Municipal Lead Gen",
         },
-        hasToolsBaseAccess && {
-          href: "/tools/municipal-contact-list",
-          label: "Municipal Contact List",
+        hasMunicipalAccess && {
+          href: "/crm/municipal-contact-list",
+          label: "Municipal List",
         },
+      ] as Array<Tab | false>
+    ).filter((t): t is Tab => Boolean(t));
+  } else if (inOee) {
+    label = "OEE & Floor Ops sections";
+    tabs = [
+      { href: "/oee", label: "Overview" },
+      { href: "/oee/machines", label: "Machines" },
+      { href: "/oee/alerts", label: "Alerts" },
+      { href: "/oee/analytics", label: "Analytics" },
+    ];
+  } else {
+    // inTools
+    label = "Tools sections";
+    tabs = (
+      [
         canViewCompetitors && {
           href: "/competitors",
           label: "Competitors & Market Research",
@@ -113,8 +147,19 @@ export default function SubNav({
       }}
     >
       {tabs.map((t) => {
-        const active =
+        // A tab is the "best match" for the current pathname if its href is
+        // a prefix AND no other tab in this strip has a longer matching
+        // prefix. Without this rule, /crm/accounts would highlight both
+        // "Overview" (/crm) and "Accounts" (/crm/accounts).
+        const isPrefix =
           pathname === t.href || pathname.startsWith(t.href + "/");
+        const hasLongerMatch = tabs.some(
+          (o) =>
+            o.href !== t.href &&
+            o.href.length > t.href.length &&
+            (pathname === o.href || pathname.startsWith(o.href + "/")),
+        );
+        const active = isPrefix && !hasLongerMatch;
         return (
           <Link
             key={t.href}

@@ -33,6 +33,14 @@ export const userProfiles = pgTable(
     canViewCompetitors: boolean("can_view_competitors").notNull().default(false),
     canViewHandbook: boolean("can_view_handbook").notNull().default(false),
     canViewEngineering: boolean("can_view_engineering").notNull().default(false),
+    // Per-module gates added in 0022 to back the expanded Admin matrix.
+    // Each one maps 1:1 to a sidebar surface. Defaults to false so new
+    // sign-ups stay locked out until an admin opts them in.
+    canViewDesignEngineering: boolean("can_view_design_engineering")
+      .notNull()
+      .default(false),
+    canViewCrm: boolean("can_view_crm").notNull().default(false),
+    canViewOee: boolean("can_view_oee").notNull().default(false),
     canEdit: boolean("can_edit").notNull().default(false),
     notes: text("notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -984,3 +992,409 @@ export const designProjects = pgTable(
 );
 
 export type DesignProject = typeof designProjects.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CRM — Stage 4 (Customer Lifecycle)
+//
+// Five tables that together form the customer system of record:
+//   crm_accounts        — companies / organisations
+//   crm_contacts        — people, FK to account
+//   crm_opportunities   — pipeline deals, FK to account
+//   crm_activities      — timeline events (calls, emails, meetings, notes)
+//   crm_tickets         — support requests, FK to account
+//
+// All five live behind a row-level "ownerUserId" check so non-admin users
+// see only what they own; admins see every record. Same pattern as
+// design_projects.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const crmAccountTier = pgEnum("crm_account_tier", [
+  "lead",
+  "prospect",
+  "customer",
+  "partner",
+  "churned",
+]);
+
+// 8-stage pipeline. Concept guide §1 calls for 10; we collapse the rarely-
+// used "Active" / "Renewal" into a single "Customer" terminal state since
+// those are post-sale customer-success motions handled in the account
+// record itself (tier=customer).
+export const crmOpportunityStage = pgEnum("crm_opportunity_stage", [
+  "lead",
+  "qualified",
+  "demo",
+  "proposal",
+  "negotiation",
+  "won",
+  "lost",
+  "on-hold",
+]);
+
+export const crmActivityType = pgEnum("crm_activity_type", [
+  "call",
+  "email",
+  "meeting",
+  "note",
+  "task",
+]);
+
+export const crmTicketStatus = pgEnum("crm_ticket_status", [
+  "open",
+  "in-progress",
+  "resolved",
+  "closed",
+]);
+
+export const crmTicketPriority = pgEnum("crm_ticket_priority", [
+  "low",
+  "medium",
+  "high",
+  "urgent",
+]);
+
+export const crmAccounts = pgTable(
+  "crm_accounts",
+  {
+    id: serial("id").primaryKey(),
+    ownerUserId: text("owner_user_id").notNull(),
+    name: text("name").notNull(),
+    website: text("website"),
+    industry: text("industry"),
+    tier: crmAccountTier("tier").notNull().default("lead"),
+    country: text("country"),
+    employeeCount: integer("employee_count"),
+    annualRevenueUsd: numeric("annual_revenue_usd", { precision: 14, scale: 2 }),
+    notes: text("notes"),
+    // 0-100 score derived from activity + opportunity + ticket signals.
+    // The Stage 4e full 11-input model lands later; this is the seed.
+    healthScore: integer("health_score").notNull().default(50),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    ownerIdx: index("crm_accounts_owner_idx").on(t.ownerUserId),
+    tierIdx: index("crm_accounts_tier_idx").on(t.tier),
+    nameIdx: index("crm_accounts_name_idx").on(t.name),
+  }),
+);
+
+export type CrmAccount = typeof crmAccounts.$inferSelect;
+
+export const crmContacts = pgTable(
+  "crm_contacts",
+  {
+    id: serial("id").primaryKey(),
+    accountId: integer("account_id")
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: "cascade" }),
+    firstName: text("first_name").notNull(),
+    lastName: text("last_name").notNull().default(""),
+    email: text("email"),
+    phone: text("phone"),
+    role: text("role"),
+    isPrimary: boolean("is_primary").notNull().default(false),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("crm_contacts_account_idx").on(t.accountId),
+    emailIdx: index("crm_contacts_email_idx").on(t.email),
+  }),
+);
+
+export type CrmContact = typeof crmContacts.$inferSelect;
+
+export const crmOpportunities = pgTable(
+  "crm_opportunities",
+  {
+    id: serial("id").primaryKey(),
+    accountId: integer("account_id")
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    stage: crmOpportunityStage("stage").notNull().default("lead"),
+    amountUsd: numeric("amount_usd", { precision: 14, scale: 2 })
+      .notNull()
+      .default("0"),
+    // 0-100 win probability. The product-led variant (4i) replaces this
+    // with an ML model trained on platform usage signals; for now the user
+    // sets it.
+    probability: integer("probability").notNull().default(20),
+    expectedCloseDate: date("expected_close_date"),
+    closedAt: timestamp("closed_at"),
+    closedReason: text("closed_reason"),
+    nextStep: text("next_step"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("crm_opportunities_account_idx").on(t.accountId),
+    stageIdx: index("crm_opportunities_stage_idx").on(t.stage),
+  }),
+);
+
+export type CrmOpportunity = typeof crmOpportunities.$inferSelect;
+
+export const crmActivities = pgTable(
+  "crm_activities",
+  {
+    id: serial("id").primaryKey(),
+    accountId: integer("account_id")
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").references(() => crmContacts.id, {
+      onDelete: "set null",
+    }),
+    opportunityId: integer("opportunity_id").references(
+      () => crmOpportunities.id,
+      { onDelete: "set null" },
+    ),
+    type: crmActivityType("type").notNull().default("note"),
+    subject: text("subject").notNull(),
+    body: text("body"),
+    occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("crm_activities_account_idx").on(t.accountId),
+    occurredIdx: index("crm_activities_occurred_idx").on(t.occurredAt),
+  }),
+);
+
+export type CrmActivity = typeof crmActivities.$inferSelect;
+
+export const crmTickets = pgTable(
+  "crm_tickets",
+  {
+    id: serial("id").primaryKey(),
+    accountId: integer("account_id")
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").references(() => crmContacts.id, {
+      onDelete: "set null",
+    }),
+    subject: text("subject").notNull(),
+    body: text("body").notNull().default(""),
+    status: crmTicketStatus("status").notNull().default("open"),
+    priority: crmTicketPriority("priority").notNull().default("medium"),
+    resolvedAt: timestamp("resolved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    accountIdx: index("crm_tickets_account_idx").on(t.accountId),
+    statusIdx: index("crm_tickets_status_idx").on(t.status),
+  }),
+);
+
+export type CrmTicket = typeof crmTickets.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STAGE 6 · OEE & FLOOR OPS
+//
+// Real-time OEE / TRS monitoring. A "machine" is one physical asset; a
+// "production run" is one scheduled batch on that machine; "downtime events"
+// pause runs (planned changeovers or unplanned breakdowns); "quality events"
+// record scrap or rework against a run. OEE is recalculated on demand from
+// these tables — Availability = run_time / planned_time, Performance =
+// (ideal_cycle * good_count) / run_time, Quality = good / total.
+// "Alerts" fire when a machine has been down too long or its OEE has dropped
+// below a threshold; an alert can be escalated to a CRM ticket so the
+// account team picks it up. Schema is intentionally hand-maintained (not
+// IoT-fed) for v1 — operators record runs / downtime / quality through the
+// UI, so the app is functional from day one without sensor plumbing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const oeeMachineStatus = pgEnum("oee_machine_status", [
+  "running",
+  "idle",
+  "down",
+  "maintenance",
+  "offline",
+]);
+
+export const oeeDowntimeReason = pgEnum("oee_downtime_reason", [
+  "breakdown",
+  "setup",
+  "material",
+  "changeover",
+  "maintenance",
+  "no-operator",
+  "quality-hold",
+  "other",
+]);
+
+export const oeeDowntimeCategory = pgEnum("oee_downtime_category", [
+  "planned",
+  "unplanned",
+]);
+
+export const oeeQualityType = pgEnum("oee_quality_type", [
+  "scrap",
+  "rework",
+  "defect",
+]);
+
+export const oeeAlertSeverity = pgEnum("oee_alert_severity", [
+  "info",
+  "warning",
+  "critical",
+]);
+
+export const oeeAlertStatus = pgEnum("oee_alert_status", [
+  "open",
+  "acknowledged",
+  "resolved",
+  "escalated",
+]);
+
+export const oeeMachines = pgTable(
+  "oee_machines",
+  {
+    id: serial("id").primaryKey(),
+    ownerUserId: text("owner_user_id").notNull(),
+    name: text("name").notNull(),
+    code: text("code"),
+    line: text("line"),
+    location: text("location"),
+    // Ideal cycle time in seconds-per-unit. The "performance" leg of OEE
+    // is `ideal_cycle * good_count / run_time` — without this number the
+    // calculation can't run.
+    idealCycleSeconds: numeric("ideal_cycle_seconds", {
+      precision: 8,
+      scale: 3,
+    }).notNull().default("60"),
+    status: oeeMachineStatus("status").notNull().default("idle"),
+    statusSince: timestamp("status_since").defaultNow().notNull(),
+    // Free-form notes (asset tag, serial, manufacturer).
+    notes: text("notes"),
+    // Optional CRM account this machine belongs to — if set, alerts can
+    // auto-escalate to a CRM ticket on this account.
+    crmAccountId: integer("crm_account_id").references(() => crmAccounts.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    ownerIdx: index("oee_machines_owner_idx").on(t.ownerUserId),
+    statusIdx: index("oee_machines_status_idx").on(t.status),
+    lineIdx: index("oee_machines_line_idx").on(t.line),
+  }),
+);
+
+export type OeeMachine = typeof oeeMachines.$inferSelect;
+
+export const oeeRuns = pgTable(
+  "oee_runs",
+  {
+    id: serial("id").primaryKey(),
+    machineId: integer("machine_id")
+      .notNull()
+      .references(() => oeeMachines.id, { onDelete: "cascade" }),
+    partNumber: text("part_number").notNull(),
+    partName: text("part_name"),
+    plannedStart: timestamp("planned_start").notNull(),
+    plannedEnd: timestamp("planned_end").notNull(),
+    actualStart: timestamp("actual_start"),
+    actualEnd: timestamp("actual_end"),
+    targetCount: integer("target_count").notNull().default(0),
+    goodCount: integer("good_count").notNull().default(0),
+    scrapCount: integer("scrap_count").notNull().default(0),
+    reworkCount: integer("rework_count").notNull().default(0),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    machineIdx: index("oee_runs_machine_idx").on(t.machineId),
+    startIdx: index("oee_runs_planned_start_idx").on(t.plannedStart),
+  }),
+);
+
+export type OeeRun = typeof oeeRuns.$inferSelect;
+
+export const oeeDowntimeEvents = pgTable(
+  "oee_downtime_events",
+  {
+    id: serial("id").primaryKey(),
+    machineId: integer("machine_id")
+      .notNull()
+      .references(() => oeeMachines.id, { onDelete: "cascade" }),
+    runId: integer("run_id").references(() => oeeRuns.id, {
+      onDelete: "set null",
+    }),
+    reason: oeeDowntimeReason("reason").notNull(),
+    category: oeeDowntimeCategory("category").notNull(),
+    startAt: timestamp("start_at").notNull(),
+    endAt: timestamp("end_at"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    machineIdx: index("oee_downtime_machine_idx").on(t.machineId),
+    startIdx: index("oee_downtime_start_idx").on(t.startAt),
+    reasonIdx: index("oee_downtime_reason_idx").on(t.reason),
+  }),
+);
+
+export type OeeDowntimeEvent = typeof oeeDowntimeEvents.$inferSelect;
+
+export const oeeQualityEvents = pgTable(
+  "oee_quality_events",
+  {
+    id: serial("id").primaryKey(),
+    machineId: integer("machine_id")
+      .notNull()
+      .references(() => oeeMachines.id, { onDelete: "cascade" }),
+    runId: integer("run_id").references(() => oeeRuns.id, {
+      onDelete: "set null",
+    }),
+    type: oeeQualityType("type").notNull(),
+    quantity: integer("quantity").notNull().default(1),
+    defectCode: text("defect_code"),
+    notes: text("notes"),
+    occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    machineIdx: index("oee_quality_machine_idx").on(t.machineId),
+    occurredIdx: index("oee_quality_occurred_idx").on(t.occurredAt),
+  }),
+);
+
+export type OeeQualityEvent = typeof oeeQualityEvents.$inferSelect;
+
+export const oeeAlerts = pgTable(
+  "oee_alerts",
+  {
+    id: serial("id").primaryKey(),
+    machineId: integer("machine_id")
+      .notNull()
+      .references(() => oeeMachines.id, { onDelete: "cascade" }),
+    severity: oeeAlertSeverity("severity").notNull().default("warning"),
+    status: oeeAlertStatus("status").notNull().default("open"),
+    code: text("code").notNull(),
+    title: text("title").notNull(),
+    body: text("body"),
+    // Set when escalated to CRM — points at the crm_tickets.id created from
+    // this alert so we don't accidentally duplicate-escalate.
+    crmTicketId: integer("crm_ticket_id").references(() => crmTickets.id, {
+      onDelete: "set null",
+    }),
+    raisedAt: timestamp("raised_at").defaultNow().notNull(),
+    acknowledgedAt: timestamp("acknowledged_at"),
+    resolvedAt: timestamp("resolved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    machineIdx: index("oee_alerts_machine_idx").on(t.machineId),
+    statusIdx: index("oee_alerts_status_idx").on(t.status),
+    raisedIdx: index("oee_alerts_raised_idx").on(t.raisedAt),
+  }),
+);
+
+export type OeeAlert = typeof oeeAlerts.$inferSelect;

@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getOrCreateProfile, isAdmin } from "@/lib/permissions";
+import {
+  canViewDesignEngineering,
+  getOrCreateProfile,
+  isAdmin,
+} from "@/lib/permissions";
 import { CLIENT_CONFIG } from "@/lib/client-config";
 import { listMyDesignProjects } from "./actions";
 import NewProjectButton from "./NewProjectButton";
@@ -75,6 +79,7 @@ function progress(p: {
 export default async function DesignEngineeringPage() {
   const profile = await getOrCreateProfile();
   if (!profile) redirect("/sign-in");
+  if (!canViewDesignEngineering(profile)) redirect("/");
   const projects = await listMyDesignProjects();
   const showingAll = isAdmin(profile);
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getOrCreateProfile } from "@/lib/permissions";
+import { canViewDesignEngineering, getOrCreateProfile } from "@/lib/permissions";
 import { CLIENT_CONFIG } from "@/lib/client-config";
 
 export const dynamic = "force-dynamic";
@@ -150,6 +150,7 @@ function StatusPill({ status }: { status?: "partial" | "coming-soon" }) {
 export default async function FullCadModulePage() {
   const profile = await getOrCreateProfile();
   if (!profile) redirect("/sign-in");
+  if (!canViewDesignEngineering(profile)) redirect("/");
 
   return (
     <div

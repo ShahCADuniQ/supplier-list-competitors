@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getOrCreateProfile } from "@/lib/permissions";
+import { canViewDesignEngineering, getOrCreateProfile } from "@/lib/permissions";
 import { CLIENT_CONFIG } from "@/lib/client-config";
 import {
   getDesignProjectStats,
@@ -141,6 +141,7 @@ function fmtBytes(b: number) {
 export default async function SoftwareModulePage() {
   const profile = await getOrCreateProfile();
   if (!profile) redirect("/sign-in");
+  if (!canViewDesignEngineering(profile)) redirect("/");
 
   const [stats, projects] = await Promise.all([
     getDesignProjectStats(),

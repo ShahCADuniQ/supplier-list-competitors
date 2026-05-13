@@ -101,7 +101,7 @@ export async function createEntry(
         createdByClerkId: auth.profile.clerkUserId,
       })
       .returning();
-    revalidatePath("/tools/municipal-contact-list");
+    revalidatePath("/crm/municipal-contact-list");
     return { ok: true, data: row };
   } catch (e) {
     return {
@@ -136,7 +136,7 @@ export async function updateEntry(
       .returning();
 
     if (!row) return { ok: false, error: "Entry not found" };
-    revalidatePath("/tools/municipal-contact-list");
+    revalidatePath("/crm/municipal-contact-list");
     return { ok: true, data: row };
   } catch (e) {
     return {
@@ -155,7 +155,7 @@ export async function deleteEntry(id: number): Promise<ActionResult> {
     await db
       .delete(municipalityListEntries)
       .where(eq(municipalityListEntries.id, id));
-    revalidatePath("/tools/municipal-contact-list");
+    revalidatePath("/crm/municipal-contact-list");
     return { ok: true, data: undefined };
   } catch (e) {
     return {
@@ -282,7 +282,7 @@ export async function exportListToHubspot(
   // implicitly (line count - 1 header).
   const rowCount = csv ? csv.split("\r\n").filter(Boolean).length - 1 : 0;
 
-  revalidatePath("/tools/municipal-contact-list");
+  revalidatePath("/crm/municipal-contact-list");
 
   return {
     ok: true,

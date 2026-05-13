@@ -10,6 +10,7 @@ import {
   exportListToHubspot,
   type EntryInput,
 } from "./actions";
+import { importMunicipalListEntryToCrm } from "../actions";
 
 // ── Page-level constants ──────────────────────────────────────────────
 const PAGE_SIZE = 60;
@@ -429,6 +430,37 @@ export default function MunicipalContactListView({
     });
   }
 
+  // CRM integration — turns this list entry into a CRM account and pushes
+  // every named admin role into it as a contact (mayor is marked primary).
+  // Idempotent: re-clicking on a row already in the CRM only adds missing
+  // contacts instead of duplicating.
+  const [pushingCrm, setPushingCrm] = useState(false);
+  function handlePushToCrm(id: number) {
+    if (pushingCrm) return;
+    setPushingCrm(true);
+    startTransition(async () => {
+      try {
+        const res = await importMunicipalListEntryToCrm(id);
+        setToast({
+          msg: res.accountCreated
+            ? `CRM account created · ${res.contactsCreated} contact${
+                res.contactsCreated === 1 ? "" : "s"
+              } added.`
+            : `Existing CRM account updated · ${res.contactsCreated} new contact${
+                res.contactsCreated === 1 ? "" : "s"
+              }.`,
+        });
+      } catch (e) {
+        setToast({
+          msg: e instanceof Error ? e.message : "Push to CRM failed",
+          err: true,
+        });
+      } finally {
+        setPushingCrm(false);
+      }
+    });
+  }
+
   // ── Empty state (table missing or never imported) ────────────────
   if (entries.length === 0) {
     return (
@@ -675,6 +707,8 @@ export default function MunicipalContactListView({
             })
           }
           onDelete={handleDelete}
+          onPushToCrm={() => handlePushToCrm(activeEntry.id)}
+          pushingCrm={pushingCrm}
           onClose={() => setDrawer({ kind: "closed" })}
         />
       )}
@@ -785,12 +819,16 @@ function DetailDrawer({
   canEdit,
   onEdit,
   onDelete,
+  onPushToCrm,
+  pushingCrm,
   onClose,
 }: {
   entry: MunicipalityListEntry;
   canEdit: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onPushToCrm: () => void;
+  pushingCrm: boolean;
   onClose: () => void;
 }) {
   const councillors = (entry.councillors as string[] | null) ?? [];
@@ -832,6 +870,14 @@ function DetailDrawer({
             )}
           </div>
           <div className="mcl-drawer-actions">
+            <button
+              className="mcl-btn mcl-btn-crm"
+              onClick={onPushToCrm}
+              disabled={pushingCrm}
+              title="Create a CRM account from this municipality and add every named admin role as a contact"
+            >
+              {pushingCrm ? "Pushing…" : "→ Add to CRM"}
+            </button>
             {canEdit && (
               <>
                 <button className="mcl-btn" onClick={onEdit}>
@@ -1611,6 +1657,17 @@ function Styles() {
         background: rgba(255, 107, 107, 0.1);
         border-color: #ff6b6b;
       }
+      .mcl-btn-crm {
+        background: rgba(234, 88, 12, 0.14);
+        color: rgb(234, 88, 12);
+        border-color: rgba(234, 88, 12, 0.45);
+        font-weight: 700;
+      }
+      .mcl-btn-crm:hover:not(:disabled) {
+        background: rgba(234, 88, 12, 0.24);
+        border-color: rgb(234, 88, 12);
+      }
+      .mcl-btn-crm:disabled { cursor: wait; opacity: 0.65; }
       .mcl-btn-close {
         width: 32px;
         height: 32px;

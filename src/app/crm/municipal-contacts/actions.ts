@@ -635,7 +635,7 @@ export async function verifyAndInsertOneContact(input: {
       })
       .where(eq(municipalitySearches.id, input.searchId));
 
-    revalidatePath("/tools/municipal-contacts");
+    revalidatePath("/crm/municipal-contacts");
     return { ok: true, inserted: true, contact: inserted, total };
   } catch (e) {
     const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
@@ -1020,7 +1020,7 @@ async function generateMunicipalContactsImpl(
     })
     .where(eq(municipalitySearches.id, searchRow.id));
 
-  revalidatePath("/tools/municipal-contacts");
+  revalidatePath("/crm/municipal-contacts");
   return {
     ok: true,
     searchId: searchRow.id,
@@ -1368,7 +1368,7 @@ export async function exportToHubspot(
   const stamp = exportedAt.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const fileName = `hubspot-municipal-contacts-search-${input.searchId}-${input.mode}-${stamp}.csv`;
 
-  revalidatePath("/tools/municipal-contacts");
+  revalidatePath("/crm/municipal-contacts");
 
   // Recompute remaining-new for THIS user after the operation.
   let newRemaining = 0;
@@ -1582,7 +1582,7 @@ export async function deleteMunicipalitySearch(searchId: number): Promise<void> 
   await db
     .delete(municipalitySearches)
     .where(eq(municipalitySearches.id, searchId));
-  revalidatePath("/tools/municipal-contacts");
+  revalidatePath("/crm/municipal-contacts");
 }
 
 export async function deleteMunicipalityContact(
@@ -1594,7 +1594,7 @@ export async function deleteMunicipalityContact(
   await db
     .delete(municipalityContacts)
     .where(eq(municipalityContacts.id, contactId));
-  revalidatePath("/tools/municipal-contacts");
+  revalidatePath("/crm/municipal-contacts");
 }
 
 /**
@@ -1647,7 +1647,7 @@ export async function deleteContactsByCategory(input: {
     }
   }
 
-  revalidatePath("/tools/municipal-contacts");
+  revalidatePath("/crm/municipal-contacts");
   return { deleted: deleted.length };
 }
 

@@ -1,7 +1,7 @@
 // End-to-end test for the Municipal Contacts tool. Bypasses Clerk auth and
 // runs two real Perplexity + Claude generations, prints what each model
 // returned, and inserts the results into the live DB so they show up at
-// /tools/municipal-contacts.
+// /crm/municipal-contacts.
 //
 // Usage:
 //   npx tsx --env-file=.env scripts/test-municipal-contacts.ts
@@ -17,7 +17,7 @@ import {
   claudeClient,
   hasClaudeKey,
 } from "../src/lib/ai/claude";
-import { SECTOR_OPTIONS, ALL_SECTOR_CODES } from "../src/app/tools/municipal-contacts/constants";
+import { SECTOR_OPTIONS, ALL_SECTOR_CODES } from "../src/app/crm/municipal-contacts/constants";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -390,7 +390,7 @@ async function main() {
   console.log(`\n=== SUMMARY ===`);
   console.log(`  Search 1 (Quebec):  #${a.searchId}  ${a.contactCount} contacts`);
   console.log(`  Search 2 (Ontario): #${b.searchId}  ${b.contactCount} contacts`);
-  console.log(`\nView at: /tools/municipal-contacts`);
+  console.log(`\nView at: /crm/municipal-contacts`);
 }
 
 main().catch((e) => {

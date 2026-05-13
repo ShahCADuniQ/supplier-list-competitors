@@ -10,6 +10,9 @@ import {
   canViewCompetitors,
   canViewHandbook,
   canViewEngineering,
+  canViewDesignEngineering,
+  canViewCrm,
+  canViewOee,
 } from "@/lib/permissions";
 import { CLIENT_CONFIG, CADUNIQ_PRODUCT_LABEL } from "@/lib/client-config";
 import "./globals.css";
@@ -59,6 +62,9 @@ export default async function RootLayout({
               canViewCompetitors={canViewCompetitors(profile)}
               canViewHandbook={canViewHandbook(profile)}
               canViewEngineering={canViewEngineering(profile)}
+              canViewDesignEngineering={canViewDesignEngineering(profile)}
+              canViewCrm={canViewCrm(profile)}
+              canViewOee={canViewOee(profile)}
               isAdmin={isAdmin(profile)}
             >
               {children}
