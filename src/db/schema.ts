@@ -890,3 +890,97 @@ export const municipalityListExports = pgTable(
 
 export type MunicipalityListExport =
   typeof municipalityListExports.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DESIGN & ENGINEERING — Stage 1 workflow projects
+//
+// A "design project" is one CADuniQ workflow run: the engineer uploads a CAD,
+// builds a BOM, gets AI material/process recommendations, optionally attaches
+// FEA/installation-manual placeholders, and finally approves the package.
+// Modeled after the seven-step Stage 1 flow in CADuniQ_Concept_Guide.html.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const designProjectStatus = pgEnum("design_project_status", [
+  "draft",
+  "in-review",
+  "approved",
+]);
+
+export type DesignCadFile = {
+  url: string;
+  name: string;
+  size: number;
+  mime: string | null;
+  blobPathname: string;
+};
+
+export type DesignBomItem = {
+  /** Stable client-side ID so re-orders / edits don't conflict. */
+  id: string;
+  itemNumber: string;
+  partName: string;
+  productCode: string;
+  description: string;
+  quantity: number;
+  material: string;
+  process: string;
+  notes: string;
+  /** Set by aiRecommendMaterialProcess when the user runs the recommender. */
+  aiRecommendation?: {
+    material: string;
+    process: string;
+    rationale: string;
+    estimatedCostUsd: number | null;
+    model: string;
+    at: string;
+  } | null;
+};
+
+export type DesignDrawingSettings = {
+  standard: "ANSI Y14.5" | "ISO 128" | "JIS B 0001" | "DIN" | "";
+  units: "mm" | "in" | "";
+  sheetSize: "A4" | "A3" | "A2" | "A1" | "A0" | "Letter" | "Tabloid" | "";
+  scale: string;
+};
+
+export const designProjects = pgTable(
+  "design_projects",
+  {
+    id: serial("id").primaryKey(),
+    clerkUserId: text("clerk_user_id").notNull(),
+    name: text("name").notNull(),
+    niche: text("niche"),
+    description: text("description"),
+    status: designProjectStatus("status").notNull().default("draft"),
+    cadFiles: jsonb("cad_files")
+      .$type<DesignCadFile[]>()
+      .notNull()
+      .default([]),
+    drawingSettings: jsonb("drawing_settings")
+      .$type<DesignDrawingSettings>()
+      .notNull()
+      .default({
+        standard: "ANSI Y14.5",
+        units: "mm",
+        sheetSize: "A3",
+        scale: "1:1",
+      }),
+    bomItems: jsonb("bom_items")
+      .$type<DesignBomItem[]>()
+      .notNull()
+      .default([]),
+    feaNotes: text("fea_notes").notNull().default(""),
+    manualNotes: text("manual_notes").notNull().default(""),
+    approvalNotes: text("approval_notes").notNull().default(""),
+    approvedAt: timestamp("approved_at"),
+    approvedBy: text("approved_by"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    userIdx: index("design_projects_user_idx").on(t.clerkUserId),
+    statusIdx: index("design_projects_status_idx").on(t.status),
+  }),
+);
+
+export type DesignProject = typeof designProjects.$inferSelect;

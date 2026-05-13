@@ -70,6 +70,24 @@ export default function Sidebar({
       matchPrefixes: ["/suppliers"],
     },
     {
+      // CRM — Stage 4 from the CADuniQ visual map. Coming-soon placeholder
+      // for now. Sits right after ERP System on the rail per user direction.
+      href: "/crm",
+      label: "CRM",
+      icon: "◉",
+      show: canViewSuppliers || isAdmin,
+      matchPrefixes: ["/crm"],
+    },
+    {
+      // OEE & Floor Ops — Stage 6 from the CADuniQ visual map (real-time
+      // OEE, facility digital twin, field service). Coming-soon placeholder.
+      href: "/oee",
+      label: "OEE & Floor Ops",
+      icon: "⚡",
+      show: canViewSuppliers || isAdmin,
+      matchPrefixes: ["/oee"],
+    },
+    {
       // Tools section — Municipal Contacts is the first tool. The rail item
       // links to the first tab the user can access. matchPrefixes includes
       // /competitors, /handbook, /engineering because those routes are now

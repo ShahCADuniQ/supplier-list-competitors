@@ -7,7 +7,16 @@ import { usePathname } from "next/navigation";
 const ROUTE_LABELS: Record<string, string> = {
   "": "Home",
   suppliers: "ERP System",
+  // CRM and OEE are sub-pages of the ERP System group (Stage 4 + Stage 6
+  // in the CADuniQ visual map). Coming-soon placeholders for now.
+  crm: "CRM",
+  oee: "OEE & Floor Ops",
   "design-engineering": "Design & Engineering",
+  // Design & Engineering sub-modules.
+  software: "Software",
+  "full-cad": "Full CAD + PDM",
+  "enterprise-pdm": "Enterprise PDM",
+  projects: "Projects",
   // /competitors, /handbook, /engineering now live under the Tools group
   // in the navigation, but their breadcrumb label is still the resource
   // name — that's what the segment URL means.

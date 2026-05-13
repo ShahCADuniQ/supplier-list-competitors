@@ -16,6 +16,8 @@ import { CLIENT_CONFIG, CADUNIQ_INDUSTRY_SUFFIX } from "@/lib/client-config";
 // Tools sub-nav (see SubNav.tsx).
 const TITLE_BY_PREFIX: { prefix: string; title: string }[] = [
   { prefix: "/suppliers", title: "ERP SYSTEM" },
+  { prefix: "/crm", title: "CRM" },
+  { prefix: "/oee", title: "OEE & FLOOR OPS" },
   { prefix: "/design-engineering", title: "DESIGN & ENGINEERING" },
   { prefix: "/competitors", title: "TOOLS" },
   { prefix: "/handbook", title: "TOOLS" },
