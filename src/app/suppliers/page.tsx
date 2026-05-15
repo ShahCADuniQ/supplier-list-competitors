@@ -13,6 +13,7 @@ import {
   canEdit,
 } from "@/lib/permissions";
 import InventoryAndManufacturing from "./InventoryAndManufacturing";
+import { ensureSupplierColumns } from "./_ensure-schema";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,11 @@ export default async function SuppliersPage() {
   const profile = await getOrCreateProfile();
   if (!profile) redirect("/sign-in");
   if (!canViewSuppliers(profile)) redirect("/");
+
+  // Self-heal migration 0023 (suppliers.is_starred) before the SELECT goes
+  // out — Drizzle generates a column-by-column SELECT from the schema, so
+  // a missing column on the live DB blows up the whole page otherwise.
+  await ensureSupplierColumns();
 
   const [supRows, peRows, comRows, attRows] = await Promise.all([
     db.select().from(suppliers).orderBy(asc(suppliers.name)),

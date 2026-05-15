@@ -99,6 +99,12 @@ export const suppliers = pgTable(
     // mirror; user can re-add it as a regular supplier afterwards if
     // they still want to keep the contact.
     competitorId: integer("competitor_id"),
+    // Starred suppliers surface in the "Current suppliers" panel at the top
+    // of /suppliers — a curated short-list of who the company actively buys
+    // from right now (vs the long tail of historical / one-off / vetted-but-
+    // unused suppliers). Toggle per row from the star button on the table or
+    // the supplier detail header. Migration 0023; self-healed in actions.ts.
+    isStarred: boolean("is_starred").notNull().default(false),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -107,6 +113,7 @@ export const suppliers = pgTable(
     categoryIdx: index("suppliers_category_idx").on(t.category),
     originIdx: index("suppliers_origin_idx").on(t.origin),
     competitorIdx: uniqueIndex("suppliers_competitor_idx").on(t.competitorId),
+    starredIdx: index("suppliers_starred_idx").on(t.isStarred),
   }),
 );
 

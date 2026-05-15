@@ -430,3 +430,121 @@ export async function deleteAllProductAttachments(productId: number) {
   revalidatePath("/competitors");
   return { deleted: rows.length };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Product images — stored as a string[] on the product row, not as
+// attachment rows. The first URL in the array is the primary thumbnail
+// rendered on the benchmark card; the rest show up in the detail drawer
+// gallery. These actions mutate the array in place + best-effort delete the
+// blob when removing one we own (Vercel blob URLs only).
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function loadProductForImageMutation(productId: number) {
+  const [p] = await db
+    .select()
+    .from(competitorProducts)
+    .where(eq(competitorProducts.id, productId))
+    .limit(1);
+  if (!p) throw new Error("Product not found");
+  return p;
+}
+
+function isVercelBlobUrl(url: string): boolean {
+  return /\.public\.blob\.vercel-storage\.com\//i.test(url);
+}
+
+export async function addProductImage(input: {
+  productId: number;
+  url: string;
+  makePrimary?: boolean;
+}): Promise<{ imageUrls: string[] }> {
+  await requireCompetitorEditor();
+  const url = (input.url ?? "").trim();
+  if (!url) throw new Error("Image URL is required");
+  const p = await loadProductForImageMutation(input.productId);
+  const current = (p.imageUrls ?? []).filter((u) => u && u !== url);
+  const next = input.makePrimary ? [url, ...current] : [...current, url];
+  await db
+    .update(competitorProducts)
+    .set({ imageUrls: next, updatedAt: new Date() })
+    .where(eq(competitorProducts.id, input.productId));
+  revalidatePath("/competitors");
+  return { imageUrls: next };
+}
+
+export async function removeProductImage(input: {
+  productId: number;
+  url: string;
+}): Promise<{ imageUrls: string[] }> {
+  await requireCompetitorEditor();
+  const url = (input.url ?? "").trim();
+  if (!url) throw new Error("Image URL is required");
+  const p = await loadProductForImageMutation(input.productId);
+  const next = (p.imageUrls ?? []).filter((u) => u && u !== url);
+  await db
+    .update(competitorProducts)
+    .set({ imageUrls: next, updatedAt: new Date() })
+    .where(eq(competitorProducts.id, input.productId));
+  // Best-effort blob cleanup — only delete blobs we host (external image
+  // sources, e.g. CDNs on a manufacturer's own site, must not be touched).
+  if (isVercelBlobUrl(url)) {
+    try {
+      await del(url);
+    } catch (e) {
+      console.error("Blob del failed", url, e);
+    }
+  }
+  revalidatePath("/competitors");
+  return { imageUrls: next };
+}
+
+export async function replaceProductImage(input: {
+  productId: number;
+  oldUrl: string;
+  newUrl: string;
+}): Promise<{ imageUrls: string[] }> {
+  await requireCompetitorEditor();
+  const oldUrl = (input.oldUrl ?? "").trim();
+  const newUrl = (input.newUrl ?? "").trim();
+  if (!oldUrl || !newUrl) throw new Error("oldUrl and newUrl are required");
+  const p = await loadProductForImageMutation(input.productId);
+  const current = p.imageUrls ?? [];
+  const idx = current.indexOf(oldUrl);
+  const next =
+    idx === -1
+      ? [newUrl, ...current.filter((u) => u !== newUrl)]
+      : current.map((u, i) =>
+          i === idx ? newUrl : u === newUrl ? oldUrl : u,
+        );
+  await db
+    .update(competitorProducts)
+    .set({ imageUrls: next, updatedAt: new Date() })
+    .where(eq(competitorProducts.id, input.productId));
+  if (isVercelBlobUrl(oldUrl) && oldUrl !== newUrl) {
+    try {
+      await del(oldUrl);
+    } catch (e) {
+      console.error("Blob del failed", oldUrl, e);
+    }
+  }
+  revalidatePath("/competitors");
+  return { imageUrls: next };
+}
+
+export async function setPrimaryProductImage(input: {
+  productId: number;
+  url: string;
+}): Promise<{ imageUrls: string[] }> {
+  await requireCompetitorEditor();
+  const url = (input.url ?? "").trim();
+  if (!url) throw new Error("Image URL is required");
+  const p = await loadProductForImageMutation(input.productId);
+  const rest = (p.imageUrls ?? []).filter((u) => u && u !== url);
+  const next = [url, ...rest];
+  await db
+    .update(competitorProducts)
+    .set({ imageUrls: next, updatedAt: new Date() })
+    .where(eq(competitorProducts.id, input.productId));
+  revalidatePath("/competitors");
+  return { imageUrls: next };
+}

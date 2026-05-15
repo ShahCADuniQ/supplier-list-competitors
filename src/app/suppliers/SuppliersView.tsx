@@ -13,6 +13,7 @@ import {
   deleteSupplierComment,
   addSupplierAttachment,
   deleteSupplierAttachment,
+  setSupplierStarred,
   type ProjectEntryInput,
 } from "./actions";
 import {
@@ -291,6 +292,7 @@ export default function SuppliersView({
 
   const [activeId, setActiveId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"details" | "kpis" | "projects" | "comments" | "attachments">("details");
+  const [currentDrawerOpen, setCurrentDrawerOpen] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showProjModal, setShowProjModal] = useState(false);
@@ -976,6 +978,15 @@ export default function SuppliersView({
           <div className="kpi"><div className="kpi-label">Total Spend</div><div className="kpi-val">{aggregates.totalSpend > 0 ? `$${(aggregates.totalSpend / 1000).toFixed(0)}K` : "—"}</div><div className="kpi-sub">closed POs</div></div>
         </div>
 
+        {/* Current suppliers — compact button that opens a right-hand drawer
+            with the starred subset grouped by category, so it doesn't eat
+            page real estate. Clicking a supplier inside the drawer closes
+            it and opens the existing supplier detail panel. */}
+        <CurrentSuppliersButton
+          suppliers={data}
+          onOpen={() => setCurrentDrawerOpen(true)}
+        />
+
         {/* Charts */}
         <div className="chart-row">
           <div className="chart-card">
@@ -1010,6 +1021,7 @@ export default function SuppliersView({
             <table>
               <thead>
                 <tr>
+                  <th title="Current supplier — toggle to add to the Current panel" style={{ width: 32 }}>★</th>
                   {[
                     ["_grade", "Grade"], ["name", "Supplier"], ["category", "Category"],
                     ["origin", "Origin"], ["_score", "Score"], ["_quality", "Quality"],
@@ -1030,6 +1042,9 @@ export default function SuppliersView({
                     v == null ? "var(--t3)" : v >= 85 ? "var(--green)" : v >= 65 ? "var(--amber)" : "var(--red)";
                   return (
                     <tr key={s.id} onClick={() => openPanel(s.id)}>
+                      <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "center" }}>
+                        <StarButton supplierId={s.id} starred={Boolean(s.isStarred)} canEdit={canEdit} onToast={toast} />
+                      </td>
                       <td><span className={`grade grade-${k.grade.cls}`}>{k.grade.letter}</span></td>
                       <td><strong>{s.name}</strong></td>
                       <td>{s.category}</td>
@@ -1058,6 +1073,20 @@ export default function SuppliersView({
         </div>
       </div>
 
+      {/* Current Suppliers drawer — opens from the compact ★ button at the
+          top of the page. Closes on overlay click; clicking a supplier
+          chip closes it AND opens the existing supplier detail panel. */}
+      {currentDrawerOpen && (
+        <CurrentSuppliersDrawer
+          suppliers={data}
+          onClose={() => setCurrentDrawerOpen(false)}
+          onOpenSupplier={(id) => {
+            setCurrentDrawerOpen(false);
+            openPanel(id);
+          }}
+        />
+      )}
+
       {/* Side Panel */}
       {active && (
         <>
@@ -1065,6 +1094,7 @@ export default function SuppliersView({
           <div className="panel show">
             <div className="panel-head">
               <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1 }}>
+                <StarButton supplierId={active.id} starred={Boolean(active.isStarred)} canEdit={canEdit} onToast={toast} size="lg" />
                 <h2>{active.name}</h2>
               </div>
               <div className="head-grade">
@@ -1835,6 +1865,453 @@ function ProjectEntryFields({ form, setForm, live }: { form: ProjectEntryInput; 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// StarButton — one-click toggle. Click stops propagation so the parent row
+// click (which opens the side panel) doesn't fire. Disabled in read-only
+// mode but still shows the current state so non-editors can see who's
+// starred. Optimistic UI: flips locally first, then awaits the server.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function StarButton({
+  supplierId,
+  starred,
+  canEdit,
+  onToast,
+  size = "sm",
+}: {
+  supplierId: number;
+  starred: boolean;
+  canEdit: boolean;
+  onToast: (msg: string, err?: boolean) => void;
+  size?: "sm" | "lg";
+}) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+  const [optimistic, setOptimistic] = useState<boolean | null>(null);
+  const isStarred = optimistic ?? starred;
+  function flip() {
+    if (!canEdit) return;
+    const next = !isStarred;
+    setOptimistic(next);
+    startTransition(async () => {
+      try {
+        await setSupplierStarred({ id: supplierId, starred: next });
+        router.refresh();
+        onToast(next ? "Starred · added to Current suppliers" : "Removed from Current suppliers");
+      } catch (e) {
+        setOptimistic(null);
+        onToast(e instanceof Error ? e.message : "Star failed", true);
+      }
+    });
+  }
+  const px = size === "lg" ? 22 : 16;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        flip();
+      }}
+      disabled={!canEdit}
+      aria-label={isStarred ? "Unstar this supplier" : "Star as a current supplier"}
+      title={
+        canEdit
+          ? isStarred
+            ? "Currently in Current Suppliers — click to unstar"
+            : "Add to Current Suppliers"
+          : isStarred
+            ? "Marked as a current supplier"
+            : "Not in current suppliers"
+      }
+      style={{
+        background: "transparent",
+        border: 0,
+        cursor: canEdit ? "pointer" : "default",
+        fontSize: px,
+        lineHeight: 1,
+        padding: 2,
+        color: isStarred ? "#facc15" : "var(--lb-text-3)",
+        opacity: canEdit || isStarred ? 1 : 0.6,
+        filter: isStarred
+          ? "drop-shadow(0 0 4px rgba(250,204,21,0.55))"
+          : "none",
+      }}
+    >
+      {isStarred ? "★" : "☆"}
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CurrentSuppliersButton — compact one-line trigger that just shows the
+// starred count + category count. Stays out of the way; the actual list
+// lives in a side drawer (CurrentSuppliersDrawer) that opens on click.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CurrentSuppliersButton({
+  suppliers: rows,
+  onOpen,
+}: {
+  suppliers: FullSupplier[];
+  onOpen: () => void;
+}) {
+  const { count, categories } = useMemo(() => {
+    const starred = rows.filter((s) => s.isStarred);
+    const cats = new Set<string>();
+    for (const s of starred) {
+      cats.add((s.category ?? "").trim() || "Uncategorized");
+    }
+    return { count: starred.length, categories: cats.size };
+  }, [rows]);
+
+  if (count === 0) {
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        style={{
+          padding: "8px 14px",
+          borderRadius: 999,
+          background: "var(--lb-bg-elev)",
+          border: "1px dashed var(--lb-border)",
+          color: "var(--lb-text-2)",
+          fontSize: 12.5,
+          fontWeight: 500,
+          cursor: "pointer",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 8,
+          alignSelf: "flex-start",
+        }}
+        title="Star a supplier in the table to pin it here"
+      >
+        <span style={{ color: "#facc15", fontSize: 14 }}>☆</span>
+        Current Suppliers — none starred yet
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      style={{
+        padding: "8px 16px",
+        borderRadius: 999,
+        background: "rgba(250, 204, 21, 0.10)",
+        border: "1px solid rgba(250, 204, 21, 0.5)",
+        color: "var(--lb-text)",
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        alignSelf: "flex-start",
+        transition: "background 140ms ease, border-color 140ms ease",
+      }}
+      title="Open the Current Suppliers list (grouped by category)"
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "rgba(250,204,21,0.20)";
+        e.currentTarget.style.borderColor = "#facc15";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "rgba(250, 204, 21, 0.10)";
+        e.currentTarget.style.borderColor = "rgba(250, 204, 21, 0.5)";
+      }}
+    >
+      <span style={{ color: "#facc15", fontSize: 14 }}>★</span>
+      <span>Current Suppliers</span>
+      <span
+        style={{
+          fontSize: 11,
+          color: "var(--lb-text-3)",
+          fontWeight: 500,
+        }}
+      >
+        {count} pinned · {categories} categor{categories === 1 ? "y" : "ies"}
+      </span>
+      <span
+        style={{
+          fontSize: 11,
+          color: "var(--lb-text-3)",
+          fontWeight: 500,
+          marginLeft: 4,
+        }}
+      >
+        →
+      </span>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CurrentSuppliersDrawer — slide-in right-hand panel that lists every
+// starred supplier grouped by category. Reuses the existing `.panel-overlay`
+// + `.panel` classes so it matches the supplier detail drawer's geometry
+// and dark-mode styling. Clicking a chip calls onOpenSupplier(id), which
+// the parent uses to close this drawer and open the existing supplier
+// detail panel.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CurrentSuppliersDrawer({
+  suppliers: rows,
+  onClose,
+  onOpenSupplier,
+}: {
+  suppliers: FullSupplier[];
+  onClose: () => void;
+  onOpenSupplier: (id: number) => void;
+}) {
+  const starred = useMemo(
+    () =>
+      rows
+        .filter((s) => s.isStarred)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [rows],
+  );
+
+  const grouped = useMemo(() => {
+    const m = new Map<string, FullSupplier[]>();
+    for (const s of starred) {
+      const key = (s.category ?? "").trim() || "Uncategorized";
+      const list = m.get(key) ?? [];
+      list.push(s);
+      m.set(key, list);
+    }
+    return Array.from(m.entries()).sort(([a], [b]) => {
+      if (a === "Uncategorized") return 1;
+      if (b === "Uncategorized") return -1;
+      return a.localeCompare(b);
+    });
+  }, [starred]);
+
+  // Dismiss on Escape so the drawer matches the supplier-detail panel's UX.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const totalAttachments = starred.reduce(
+    (n, s) => n + s.attachments.length,
+    0,
+  );
+
+  return (
+    <>
+      <div className="panel-overlay show" onClick={onClose} />
+      <div
+        className="panel show"
+        style={{ width: 560, maxWidth: "97vw" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="panel-head">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+            <span style={{ color: "#facc15", fontSize: 20 }}>★</span>
+            <div>
+              <h2>Current Suppliers</h2>
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: "var(--lb-text-3)",
+                  marginTop: 2,
+                }}
+              >
+                {starred.length} pinned · {grouped.length} categor
+                {grouped.length === 1 ? "y" : "ies"} · {totalAttachments} attached file
+                {totalAttachments === 1 ? "" : "s"}
+              </div>
+            </div>
+          </div>
+          <button
+            className="btn btn-ghost"
+            onClick={onClose}
+            style={{ fontSize: 22 }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div
+          className="panel-body"
+          style={{
+            padding: "16px 22px 28px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 18,
+          }}
+        >
+          {starred.length === 0 ? (
+            <div
+              style={{
+                padding: "20px 16px",
+                borderRadius: 10,
+                border: "1px dashed var(--lb-border)",
+                textAlign: "center",
+                color: "var(--lb-text-2)",
+                fontSize: 13,
+              }}
+            >
+              No starred suppliers yet. Close this drawer, then click ☆ on
+              any row in the directory to pin it here.
+            </div>
+          ) : (
+            grouped.map(([cat, list]) => (
+              <div
+                key={cat}
+                style={{ display: "flex", flexDirection: "column", gap: 8 }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 11,
+                    fontWeight: 800,
+                    letterSpacing: 0.8,
+                    textTransform: "uppercase",
+                    color:
+                      cat === "Uncategorized"
+                        ? "var(--lb-text-3)"
+                        : "var(--lb-text-2)",
+                    paddingBottom: 4,
+                    borderBottom: "1px solid var(--lb-border)",
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      display: "inline-block",
+                      width: 7,
+                      height: 7,
+                      borderRadius: 999,
+                      background:
+                        cat === "Uncategorized"
+                          ? "var(--lb-text-3)"
+                          : "#facc15",
+                    }}
+                  />
+                  <span style={{ flex: 1 }}>{cat}</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--lb-text-3)",
+                      fontWeight: 600,
+                      letterSpacing: 0,
+                      textTransform: "none",
+                    }}
+                  >
+                    {list.length}
+                  </span>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  {list.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => onOpenSupplier(s.id)}
+                      title="Open supplier details"
+                      style={{
+                        width: "100%",
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        background: "var(--lb-bg)",
+                        border: "1px solid var(--lb-border)",
+                        color: "var(--lb-text)",
+                        textAlign: "left",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        fontSize: 13,
+                        transition: "background 140ms ease, border-color 140ms ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "rgba(250,204,21,0.06)";
+                        e.currentTarget.style.borderColor =
+                          "rgba(250, 204, 21, 0.55)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "var(--lb-bg)";
+                        e.currentTarget.style.borderColor = "var(--lb-border)";
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: "#facc15",
+                          fontSize: 13,
+                          flexShrink: 0,
+                        }}
+                      >
+                        ★
+                      </span>
+                      <div
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 2,
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {s.name}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "var(--lb-text-3)",
+                            display: "flex",
+                            gap: 8,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          {s.origin && <span>{s.origin}</span>}
+                          {s.attachments.length > 0 && (
+                            <span>📎 {s.attachments.length} files</span>
+                          )}
+                          {s.projectEntries.length > 0 && (
+                            <span>📋 {s.projectEntries.length} POs</span>
+                          )}
+                        </div>
+                      </div>
+                      <span
+                        style={{
+                          color: "var(--lb-text-3)",
+                          fontSize: 14,
+                          flexShrink: 0,
+                        }}
+                      >
+                        →
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // Component CSS — all colors flow from --lb-* tokens in globals.css so dark
 // mode and the SaaS palette apply automatically. Class names match the
 // original lift so JSX is unchanged.

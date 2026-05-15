@@ -11,6 +11,7 @@ import {
   supplierAttachments,
 } from "@/db/schema";
 import { requireSupplierEditor } from "@/lib/permissions";
+import { ensureSupplierColumns } from "./_ensure-schema";
 
 const SUPPLIER_KPI_KEYS = [
   "leadTime",
@@ -354,5 +355,24 @@ export async function deleteSupplierAttachment(id: number) {
     }
   }
   await db.delete(supplierAttachments).where(eq(supplierAttachments.id, id));
+  revalidatePath("/suppliers");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Star / unstar — toggles whether a supplier appears in the "Current
+// suppliers" panel at the top of /suppliers. Pure write; no other side
+// effects. Editors can flip; admins inherit edit access.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setSupplierStarred(input: {
+  id: number;
+  starred: boolean;
+}): Promise<void> {
+  await requireSupplierEditor();
+  await ensureSupplierColumns();
+  await db
+    .update(suppliers)
+    .set({ isStarred: input.starred, updatedAt: new Date() })
+    .where(eq(suppliers.id, input.id));
   revalidatePath("/suppliers");
 }

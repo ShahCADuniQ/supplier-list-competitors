@@ -24,6 +24,9 @@ import {
 import {
   upsertCompetitor,
   addCompetitorAttachment,
+  addProductImage,
+  removeProductImage,
+  replaceProductImage,
 } from "./actions";
 import AddProductForm from "./AddProductForm";
 import ProductDetailDrawer from "./ProductDetailDrawer";
@@ -633,21 +636,13 @@ function BenchmarkProductCard({
           }
         }}
       >
-        <div className="bm-product-thumb">
-          {firstImage ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={firstImage}
-              alt={product.name}
-              loading="lazy"
-              onError={(e) => {
-                (e.currentTarget.style.display = "none");
-              }}
-            />
-          ) : (
-            <div className="bm-product-thumb-empty">📷</div>
-          )}
-        </div>
+        <ProductThumb
+          productId={product.id}
+          productName={product.name}
+          firstImage={firstImage}
+          canEdit={canEdit}
+          onToast={onToast}
+        />
         <div className="bm-product-info">
           <div className="bm-product-name">{product.name}</div>
           {product.productCode && (
@@ -694,6 +689,238 @@ function BenchmarkProductCard({
           onToast={onToast}
           onClose={() => setDrawerOpen(false)}
         />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ProductThumb — the editable image tile inside each BenchmarkProductCard.
+// When canEdit, hover surfaces three actions:
+//   • Replace — upload a new file, swap it in as primary
+//   • Add another — upload, append (and make primary on the next click)
+//   • Remove — drop the current image (best-effort blob cleanup)
+// All actions stopPropagation so the parent card doesn't open the drawer.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProductThumb({
+  productId,
+  productName,
+  firstImage,
+  canEdit,
+  onToast,
+}: {
+  productId: number;
+  productName: string;
+  firstImage: string | undefined;
+  canEdit: boolean;
+  onToast: (msg: string, err?: boolean) => void;
+}) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+  const [busy, setBusy] = useState<"replace" | "add" | "remove" | null>(null);
+  // We give the replace + add file inputs a unique id per card so clicking
+  // a button activates only that card's picker.
+  const replaceInputId = `bm-replace-${productId}`;
+  const addInputId = `bm-add-${productId}`;
+
+  async function uploadToBlob(file: File): Promise<string> {
+    const pathname = `product-images/${productId}/${crypto.randomUUID()}/${safeFileName(file.name)}`;
+    const blob = await upload(pathname, file, {
+      access: "public",
+      handleUploadUrl: "/api/blob/upload",
+      contentType: file.type || undefined,
+    });
+    return blob.url;
+  }
+
+  function pickedReplace(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !firstImage) return;
+    setBusy("replace");
+    startTransition(async () => {
+      try {
+        const newUrl = await uploadToBlob(file);
+        await replaceProductImage({
+          productId,
+          oldUrl: firstImage,
+          newUrl,
+        });
+        router.refresh();
+        onToast(`Replaced photo for ${productName}`);
+      } catch (err) {
+        onToast(err instanceof Error ? err.message : "Replace failed", true);
+      } finally {
+        setBusy(null);
+      }
+    });
+  }
+
+  function pickedAdd(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    e.target.value = "";
+    if (files.length === 0) return;
+    setBusy("add");
+    startTransition(async () => {
+      try {
+        let added = 0;
+        for (const f of files) {
+          const newUrl = await uploadToBlob(f);
+          await addProductImage({
+            productId,
+            url: newUrl,
+            // If the product had no image, the first upload becomes primary.
+            makePrimary: !firstImage && added === 0,
+          });
+          added += 1;
+        }
+        router.refresh();
+        onToast(
+          `Added ${added} photo${added === 1 ? "" : "s"} to ${productName}`,
+        );
+      } catch (err) {
+        onToast(err instanceof Error ? err.message : "Add photo failed", true);
+      } finally {
+        setBusy(null);
+      }
+    });
+  }
+
+  function clickRemove() {
+    if (!firstImage) return;
+    if (!confirm(`Remove this photo from "${productName}"?`)) return;
+    setBusy("remove");
+    startTransition(async () => {
+      try {
+        await removeProductImage({ productId, url: firstImage });
+        router.refresh();
+        onToast(`Removed photo from ${productName}`);
+      } catch (err) {
+        onToast(err instanceof Error ? err.message : "Remove failed", true);
+      } finally {
+        setBusy(null);
+      }
+    });
+  }
+
+  const overlayBtnStyle: React.CSSProperties = {
+    padding: "4px 8px",
+    borderRadius: 6,
+    background: "rgba(15,23,42,0.92)",
+    color: "#fff",
+    border: "1px solid rgba(255,255,255,0.18)",
+    fontSize: 10.5,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    cursor: busy ? "wait" : "pointer",
+    textTransform: "uppercase",
+  };
+
+  return (
+    <div
+      className="bm-product-thumb"
+      style={{ position: "relative" }}
+      onClick={canEdit ? (e) => e.stopPropagation() : undefined}
+    >
+      {firstImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={firstImage}
+          alt={productName}
+          loading="lazy"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+          }}
+        />
+      ) : (
+        <div className="bm-product-thumb-empty">📷</div>
+      )}
+      {canEdit && (
+        <>
+          {/* Hidden file pickers — labels below trigger them. */}
+          <input
+            id={replaceInputId}
+            type="file"
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={pickedReplace}
+            disabled={busy !== null}
+          />
+          <input
+            id={addInputId}
+            type="file"
+            accept="image/*"
+            multiple
+            style={{ display: "none" }}
+            onChange={pickedAdd}
+            disabled={busy !== null}
+          />
+          <div
+            className="bm-thumb-overlay"
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "flex-end",
+              justifyContent: "center",
+              gap: 6,
+              padding: 6,
+              background:
+                "linear-gradient(to top, rgba(0,0,0,0.55), rgba(0,0,0,0) 55%)",
+              opacity: busy ? 1 : 0,
+              transition: "opacity 140ms ease",
+              pointerEvents: busy ? "auto" : "auto",
+            }}
+            onMouseEnter={(e) => {
+              if (!busy) e.currentTarget.style.opacity = "1";
+            }}
+            onMouseLeave={(e) => {
+              if (!busy) e.currentTarget.style.opacity = "0";
+            }}
+          >
+            {firstImage && (
+              <label
+                htmlFor={replaceInputId}
+                style={overlayBtnStyle}
+                title="Replace this photo with a new upload"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {busy === "replace" ? "…" : "↻ Replace"}
+              </label>
+            )}
+            <label
+              htmlFor={addInputId}
+              style={overlayBtnStyle}
+              title={
+                firstImage
+                  ? "Add another photo (gallery)"
+                  : "Add the first photo"
+              }
+              onClick={(e) => e.stopPropagation()}
+            >
+              {busy === "add" ? "…" : firstImage ? "+ Add" : "+ Upload"}
+            </label>
+            {firstImage && (
+              <button
+                type="button"
+                style={{
+                  ...overlayBtnStyle,
+                  background: "rgba(220,38,38,0.92)",
+                  border: "1px solid rgba(255,255,255,0.18)",
+                }}
+                title="Remove this photo"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  clickRemove();
+                }}
+                disabled={busy !== null}
+              >
+                {busy === "remove" ? "…" : "✕ Remove"}
+              </button>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
