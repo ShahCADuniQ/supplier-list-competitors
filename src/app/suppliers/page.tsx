@@ -3,6 +3,7 @@ import { desc, asc } from "drizzle-orm";
 import { db } from "@/db";
 import {
   suppliers,
+  supplierContacts,
   supplierProjectEntries,
   supplierComments,
   supplierAttachments,
@@ -27,11 +28,12 @@ export default async function SuppliersPage() {
   // a missing column on the live DB blows up the whole page otherwise.
   await ensureSupplierColumns();
 
-  const [supRows, peRows, comRows, attRows] = await Promise.all([
+  const [supRows, peRows, comRows, attRows, contactRows] = await Promise.all([
     db.select().from(suppliers).orderBy(asc(suppliers.name)),
     db.select().from(supplierProjectEntries),
     db.select().from(supplierComments).orderBy(desc(supplierComments.createdAt)),
     db.select().from(supplierAttachments).orderBy(desc(supplierAttachments.createdAt)),
+    db.select().from(supplierContacts).orderBy(desc(supplierContacts.isPrimary), asc(supplierContacts.createdAt)),
   ]);
 
   // Hydrate suppliers with their child collections so the client can render
@@ -54,12 +56,19 @@ export default async function SuppliersPage() {
     list.push(a);
     attBySupplier.set(a.supplierId, list);
   });
+  const contactsBySupplier = new Map<number, typeof contactRows>();
+  contactRows.forEach((c) => {
+    const list = contactsBySupplier.get(c.supplierId) ?? [];
+    list.push(c);
+    contactsBySupplier.set(c.supplierId, list);
+  });
 
   const initialData = supRows.map((s) => ({
     ...s,
     projectEntries: peBySupplier.get(s.id) ?? [],
     comments: comBySupplier.get(s.id) ?? [],
     attachments: attBySupplier.get(s.id) ?? [],
+    contacts: contactsBySupplier.get(s.id) ?? [],
   }));
 
   return <InventoryAndManufacturing initialData={initialData} canEdit={canEdit(profile)} />;

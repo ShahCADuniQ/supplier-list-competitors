@@ -6,6 +6,7 @@ import { NO_FOUC_SCRIPT } from "@/lib/theme";
 import {
   getOrCreateProfile,
   isAdmin,
+  isSupplierUser,
   canViewSuppliers,
   canViewCompetitors,
   canViewHandbook,
@@ -58,6 +59,7 @@ export default async function RootLayout({
             <AppShell
               email={profile.email}
               role={profile.role}
+              isSupplier={isSupplierUser(profile)}
               canViewSuppliers={canViewSuppliers(profile)}
               canViewCompetitors={canViewCompetitors(profile)}
               canViewHandbook={canViewHandbook(profile)}

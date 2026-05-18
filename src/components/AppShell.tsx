@@ -7,6 +7,7 @@ import SubNav from "./SubNav";
 type Props = {
   email: string | null;
   role: string | null;
+  isSupplier: boolean;
   canViewSuppliers: boolean;
   canViewCompetitors: boolean;
   canViewHandbook: boolean;
@@ -21,6 +22,7 @@ type Props = {
 export default function AppShell({
   email,
   role,
+  isSupplier,
   canViewSuppliers,
   canViewCompetitors,
   canViewHandbook,
@@ -39,6 +41,7 @@ export default function AppShell({
       <Sidebar
         email={email}
         role={role}
+        isSupplier={isSupplier}
         canViewSuppliers={canViewSuppliers}
         canViewCompetitors={canViewCompetitors}
         canViewHandbook={canViewHandbook}

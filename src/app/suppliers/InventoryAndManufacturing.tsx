@@ -9,23 +9,27 @@ import { useState } from "react";
 import SuppliersView from "./SuppliersView";
 import BarcodeGenerator from "./BarcodeGenerator";
 import StubTab from "./StubTab";
+import OrdersTab from "./OrdersTab";
+import InventoryTab from "./InventoryTab";
 import type {
   Supplier,
-  SupplierProjectEntry,
-  SupplierComment,
   SupplierAttachment,
+  SupplierComment,
+  SupplierContact,
+  SupplierProjectEntry,
 } from "@/db/schema";
 
 type FullSupplier = Supplier & {
   projectEntries: SupplierProjectEntry[];
   comments: SupplierComment[];
   attachments: SupplierAttachment[];
+  contacts: SupplierContact[];
 };
 
 const SUB_TABS = [
   { key: "suppliers", label: "Suppliers" },
+  { key: "orders", label: "Orders (RFQ & PO)" },
   { key: "inventory", label: "Inventory" },
-  { key: "purchase-orders", label: "Purchase Orders" },
   { key: "manufacturing", label: "Manufacturing" },
   { key: "boms", label: "BOMs" },
   { key: "quality", label: "Quality" },
@@ -94,35 +98,9 @@ export default function InventoryAndManufacturing({
           <SuppliersView initialData={initialData} canEdit={canEdit} />
         )}
         {tab === "barcodes" && <BarcodeGenerator canEdit={canEdit} />}
-        {tab === "inventory" && (
-          <StubTab
-            title="Inventory"
-            description="Track stock levels, locations, transfers, and lot/serial numbers."
-            features={[
-              "Stock items with SKU + barcode + variant model",
-              "Multi-warehouse / multi-location tracking",
-              "Stock moves (transfers, receipts, deliveries)",
-              "Lot / serial number traceability",
-              "Adjustments + scrap + cycle counts",
-              "Reorder rules (min/max stock per location)",
-              "Mobile-friendly receive / pick / pack flow with barcode scanning",
-            ]}
-          />
-        )}
-        {tab === "purchase-orders" && (
-          <StubTab
-            title="Purchase Orders"
-            description="Multi-PO per project, tracking, and shipping documents."
-            features={[
-              "Multiple POs per project (request another order anytime)",
-              "Tracking number + carrier + person in charge",
-              "Document attachments: Proforma Invoice, Bill of Lading, Packing List, Commercial Invoice",
-              "PO state machine: draft → confirmed → in-transit → received → closed",
-              "Three-way match (PO ↔ receipt ↔ vendor invoice)",
-              "Tenders / RFQs with vendor comparison",
-              "Blanket orders + price agreements",
-            ]}
-          />
+        {tab === "inventory" && <InventoryTab canEdit={canEdit} />}
+        {tab === "orders" && (
+          <OrdersTab suppliers={initialData} canEdit={canEdit} />
         )}
         {tab === "manufacturing" && (
           <StubTab

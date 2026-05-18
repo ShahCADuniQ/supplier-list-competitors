@@ -3,6 +3,7 @@
 import { Show, UserButton, SignInButton, SignUpButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
+import NotificationsBell from "./NotificationsBell";
 import { CLIENT_CONFIG, CADUNIQ_INDUSTRY_SUFFIX } from "@/lib/client-config";
 
 // Top-bar title reflects the sidebar GROUP, not the active sub-tab. The
@@ -90,6 +91,10 @@ export default function TopBar() {
           />
         </div>
       </div>
+
+      <Show when="signed-in">
+        <NotificationsBell />
+      </Show>
 
       <ThemeToggle />
 

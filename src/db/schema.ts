@@ -29,6 +29,19 @@ export const userProfiles = pgTable(
     email: text("email").notNull(),
     displayName: text("display_name"),
     role: userRole("role").notNull().default("pending"),
+    // Set on first sign-in when the email matches a `suppliers.email` row.
+    // Supplier users get the simplified vendor portal and are blocked from
+    // every internal section (ERP / CRM / OEE / Tools / Admin). Migration
+    // 0026; self-healed in src/lib/permissions.ts.
+    isSupplier: boolean("is_supplier").notNull().default(false),
+    // Job role within their company (CEO, COO, Operations, Procurement, …).
+    // See JOB_ROLES in src/lib/job-roles.ts. Migration 0027.
+    jobRole: text("job_role"),
+    // Tenant scope — which client this user works for. NULL means CADuniQ
+    // staff (cross-client). Defaults to the deployment's default client on
+    // first run via the backfill in ensure-orders-schema's sibling helper.
+    // Migration 0027.
+    clientId: integer("client_id"),
     canViewSuppliers: boolean("can_view_suppliers").notNull().default(false),
     canViewCompetitors: boolean("can_view_competitors").notNull().default(false),
     canViewHandbook: boolean("can_view_handbook").notNull().default(false),
@@ -57,6 +70,39 @@ export const userProfiles = pgTable(
 // ─────────────────────────────────────────────────────────────────────────────
 // SUPPLIERS
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENTS — multi-tenant scope. Each row represents one of CADuniQ's
+// client companies (Lightbase, Acme, …). user_profiles.client_id and
+// suppliers.client_id reference this; null means cross-tenant (CADuniQ
+// staff or shared supplier). Migration 0027.
+//
+// A bootstrap row matching CLIENT_CONFIG.name is auto-created in the
+// self-heal helper so existing single-tenant deployments keep working.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const clients = pgTable(
+  "clients",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    industry: text("industry"), // "manufacturing" / "construction"
+    isActive: boolean("is_active").notNull().default(true),
+    notes: text("notes"),
+    // Brand mark used as letterhead on every generated RFQ / Quote / PO PDF.
+    // Uploaded by an admin from the client config screen. Migration 0030.
+    logoUrl: text("logo_url"),
+    logoName: text("logo_name"),
+    logoPathname: text("logo_pathname"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    nameIdx: uniqueIndex("clients_name_idx").on(t.name),
+  }),
+);
+
+export type Client = typeof clients.$inferSelect;
 
 export const supplierStatus = pgEnum("supplier_status", ["Active", "Historical"]);
 
@@ -105,6 +151,23 @@ export const suppliers = pgTable(
     // unused suppliers). Toggle per row from the star button on the table or
     // the supplier detail header. Migration 0023; self-healed in actions.ts.
     isStarred: boolean("is_starred").notNull().default(false),
+    // Long-lived magic-link token that grants the supplier access to their
+    // stable home portal at /vendor/home/[token]. The home portal lists
+    // every RFQ they've been invited to + lets them see status updates
+    // across the board. Separate from per-RFQ tokens (rfq_recipients.access_token)
+    // so the admin can revoke the supplier's entire portal access in one
+    // shot without invalidating in-flight RFQs. Migration 0025.
+    portalToken: text("portal_token"),
+    // Tenant scope. NULL means cross-client (shared supplier). Suppliers
+    // owned by a single client (the common case) get assigned to that
+    // client. Migration 0027.
+    clientId: integer("client_id"),
+    // Supplier's own brand mark. Used as the letterhead on the supplier's
+    // generated quotation PDF so when they print it for the buyer, it
+    // carries their identity instead of a generic Lightbase mark. Migration 0030.
+    logoUrl: text("logo_url"),
+    logoName: text("logo_name"),
+    logoPathname: text("logo_pathname"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -114,6 +177,7 @@ export const suppliers = pgTable(
     originIdx: index("suppliers_origin_idx").on(t.origin),
     competitorIdx: uniqueIndex("suppliers_competitor_idx").on(t.competitorId),
     starredIdx: index("suppliers_starred_idx").on(t.isStarred),
+    portalTokenIdx: uniqueIndex("suppliers_portal_token_idx").on(t.portalToken),
   }),
 );
 
@@ -184,6 +248,37 @@ export const supplierComments = pgTable(
     supplierIdx: index("supplier_comments_supplier_idx").on(t.supplierId),
   }),
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPLIER CONTACTS — multiple points of contact per supplier. The
+// suppliers.email column stays as the "primary" denormalised contact
+// (so legacy queries keep working) but additional contacts (sales,
+// engineering, accounts payable, etc.) live in this table. Migration 0028.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const supplierContacts = pgTable(
+  "supplier_contacts",
+  {
+    id: serial("id").primaryKey(),
+    supplierId: integer("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "cascade" }),
+    name: text("name"),
+    email: text("email").notNull(),
+    phone: text("phone"),
+    role: text("role"),               // e.g. "Sales", "Engineering", "AP"
+    isPrimary: boolean("is_primary").notNull().default(false),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    supplierIdx: index("supplier_contacts_supplier_idx").on(t.supplierId),
+    emailIdx: index("supplier_contacts_email_idx").on(t.email),
+  }),
+);
+
+export type SupplierContact = typeof supplierContacts.$inferSelect;
 
 export const supplierAttachments = pgTable(
   "supplier_attachments",
@@ -1405,3 +1500,705 @@ export const oeeAlerts = pgTable(
 );
 
 export type OeeAlert = typeof oeeAlerts.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ERP · RFQs → SUPPLIER QUOTES → PURCHASE ORDERS
+//
+// End-to-end procurement workflow. Replaces the manual employee-driven flow
+// where an RFQ Excel got emailed to suppliers and each quote came back as a
+// PDF. New flow:
+//   1. Buyer creates an `rfqs` row (project, niche, transport preference,
+//      target currency) with one or more `rfq_items` line items.
+//   2. Buyer invites N suppliers (`rfq_recipients`). Each recipient gets a
+//      unique magic-link token granting access to /vendor/[token].
+//   3. Supplier opens the link, fills out `supplier_quotes` + per-item
+//      `supplier_quote_lines` and uploads `supplier_quote_attachments`
+//      (datasheets, certs, brochures). New suppliers auto-create a row in
+//      `suppliers` on first submission.
+//   4. Buyer compares quotes side-by-side, picks one, and `purchase_orders`
+//      is generated from the winning quote with the company's PO template.
+//   5. Every meaningful event (RFQ sent, quote received, RFQ awarded, PO
+//      issued) lands in `erp_notifications` so the team gets bell alerts.
+//
+// Migration 0024. Self-healed in src/app/suppliers/_ensure-orders-schema.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const rfqStatus = pgEnum("rfq_status", [
+  "draft",
+  "sent",
+  "quotes-in",
+  "reviewed",
+  "awarded",
+  "closed",
+  "cancelled",
+]);
+
+export const rfqStage = pgEnum("rfq_stage", [
+  "selection",   // shopping the market — multiple suppliers competing
+  "committed",   // we already know who we're using; just need the paperwork
+]);
+
+export const rfqTransportMode = pgEnum("rfq_transport_mode", [
+  "air",
+  "sea",
+  "truck",
+  "rail",
+  "courier",
+  "any",
+]);
+
+export const quoteStatus = pgEnum("supplier_quote_status", [
+  "invited",      // token issued, no portal access yet
+  "viewed",       // supplier opened the portal
+  "draft",        // supplier started filling out
+  "submitted",    // supplier finished + locked
+  "declined",     // supplier said "no thanks"
+  "expired",      // validity passed without award
+]);
+
+export const poStatus = pgEnum("purchase_order_status", [
+  "draft",
+  "sent",
+  "acknowledged",
+  "in-production",
+  "shipped",
+  "received",
+  "closed",
+  "cancelled",
+]);
+
+export const notificationKind = pgEnum("erp_notification_kind", [
+  "rfq.sent",
+  "rfq.quote-received",
+  "rfq.awarded",
+  "po.issued",
+  "po.acknowledged",
+  "po.shipped",
+  "supplier.signed-up",
+  "supplier.status-update",
+  // Migration 0029 — payment + tracking workflow
+  "po.payment-method-set",
+  "po.invoice-issued",
+  "po.invoice-status",
+  "po.payment-recorded",
+  "po.timeline-update",
+]);
+
+export const poInvoiceStatus = pgEnum("po_invoice_status", [
+  "issued",
+  "received",
+  "approved",
+  "scheduled",
+  "paid",
+  "disputed",
+  "cancelled",
+]);
+
+export const rfqs = pgTable(
+  "rfqs",
+  {
+    id: serial("id").primaryKey(),
+    rfqNumber: text("rfq_number").notNull(),     // human-readable, e.g. "RFQ-260515-001"
+    projectNum: text("project_num").notNull(),   // e.g. "1425"
+    projectName: text("project_name"),            // e.g. "Ledco"
+    niche: text("niche"),                          // category we're shopping
+    stage: rfqStage("stage").notNull().default("selection"),
+    status: rfqStatus("status").notNull().default("draft"),
+    transportMode: rfqTransportMode("transport_mode")
+      .notNull()
+      .default("any"),
+    targetCurrency: text("target_currency").notNull().default("USD"),
+    incoterms: text("incoterms"),                  // FOB, EXW, DAP, DDP, etc.
+    targetDeliveryDate: date("target_delivery_date"),
+    quoteDeadline: timestamp("quote_deadline"),
+    notes: text("notes"),
+    ownerClerkId: text("owner_clerk_id").notNull(),
+    awardedQuoteId: integer("awarded_quote_id"),  // FK fixed up in migration
+    // Optional buyer-uploaded RFQ PDF (e.g. external RFQ format with logos /
+    // covering pages). When present, the supplier sees this PDF; when
+    // absent, they see the platform-generated print view. Migration 0028.
+    sourcePdfUrl: text("source_pdf_url"),
+    sourcePdfName: text("source_pdf_name"),
+    sourcePdfPathname: text("source_pdf_pathname"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    numberIdx: uniqueIndex("rfqs_number_idx").on(t.rfqNumber),
+    projectIdx: index("rfqs_project_idx").on(t.projectNum),
+    statusIdx: index("rfqs_status_idx").on(t.status),
+    ownerIdx: index("rfqs_owner_idx").on(t.ownerClerkId),
+  }),
+);
+
+export type Rfq = typeof rfqs.$inferSelect;
+
+export const rfqItems = pgTable(
+  "rfq_items",
+  {
+    id: serial("id").primaryKey(),
+    rfqId: integer("rfq_id")
+      .notNull()
+      .references(() => rfqs.id, { onDelete: "cascade" }),
+    lineNo: integer("line_no").notNull(),
+    clientRef: text("client_ref"),               // L18SM, L18, etc.
+    productCode: text("product_code"),            // internal product code
+    description: text("description").notNull(),   // 2X2 PANEL, 120-347V, 5000K, SURFACE MOUNT
+    specifications: text("specifications"),       // long-form spec text
+    qty: integer("qty").notNull().default(1),
+    securityStock: integer("security_stock").notNull().default(0),
+    targetUnitPrice: numeric("target_unit_price", { precision: 12, scale: 4 }),
+    productUrl: text("product_url"),              // optional link to product page
+    catalogAttachmentUrl: text("catalog_attachment_url"), // optional brand catalog PDF/XLSX
+    catalogAttachmentName: text("catalog_attachment_name"),
+    notes: text("notes"),
+    // Migration 0032 — inventory linkage. lightbase_ref is the human code
+    // (e.g. "LB-000123"); inventoryItemId is the FK that survives renames.
+    lightbaseRef: text("lightbase_ref"),
+    inventoryItemId: integer("inventory_item_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    rfqIdx: index("rfq_items_rfq_idx").on(t.rfqId),
+    lightbaseRefIdx: index("rfq_items_lightbase_ref_idx").on(t.lightbaseRef),
+    inventoryItemIdx: index("rfq_items_inventory_item_idx").on(t.inventoryItemId),
+  }),
+);
+
+export type RfqItem = typeof rfqItems.$inferSelect;
+
+// Multiple photos + documents per RFQ line item. Replaces the single
+// catalog_attachment_url/name columns on rfq_items (those stay for back-
+// compat but new uploads land here). Migration 0030.
+export const rfqItemAttachments = pgTable(
+  "rfq_item_attachments",
+  {
+    id: serial("id").primaryKey(),
+    rfqItemId: integer("rfq_item_id")
+      .notNull()
+      .references(() => rfqItems.id, { onDelete: "cascade" }),
+    // "photo" renders inline; "doc" renders as a downloadable chip.
+    kind: text("kind").notNull().default("doc"),
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    blobPathname: text("blob_pathname"),
+    contentType: text("content_type"),
+    size: bigint("size", { mode: "number" }).notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    itemIdx: index("rfq_item_attachments_item_idx").on(t.rfqItemId),
+    kindIdx: index("rfq_item_attachments_kind_idx").on(t.kind),
+  }),
+);
+export type RfqItemAttachment = typeof rfqItemAttachments.$inferSelect;
+
+export const rfqRecipients = pgTable(
+  "rfq_recipients",
+  {
+    id: serial("id").primaryKey(),
+    rfqId: integer("rfq_id")
+      .notNull()
+      .references(() => rfqs.id, { onDelete: "cascade" }),
+    // Either points at an existing supplier OR captures a new-supplier
+    // invite by email (supplier row auto-created when they sign in).
+    supplierId: integer("supplier_id").references(() => suppliers.id, {
+      onDelete: "set null",
+    }),
+    inviteEmail: text("invite_email").notNull(),
+    inviteName: text("invite_name"),             // free-form contact / company name
+    accessToken: text("access_token").notNull(), // 32-char magic-link token
+    tokenExpiresAt: timestamp("token_expires_at").notNull(),
+    status: quoteStatus("status").notNull().default("invited"),
+    invitedAt: timestamp("invited_at").defaultNow().notNull(),
+    viewedAt: timestamp("viewed_at"),
+    respondedAt: timestamp("responded_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    rfqIdx: index("rfq_recipients_rfq_idx").on(t.rfqId),
+    tokenIdx: uniqueIndex("rfq_recipients_token_idx").on(t.accessToken),
+    emailIdx: index("rfq_recipients_email_idx").on(t.inviteEmail),
+  }),
+);
+
+export type RfqRecipient = typeof rfqRecipients.$inferSelect;
+
+export const supplierQuotes = pgTable(
+  "supplier_quotes",
+  {
+    id: serial("id").primaryKey(),
+    rfqId: integer("rfq_id")
+      .notNull()
+      .references(() => rfqs.id, { onDelete: "cascade" }),
+    recipientId: integer("recipient_id")
+      .notNull()
+      .references(() => rfqRecipients.id, { onDelete: "cascade" }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, {
+      onDelete: "set null",
+    }),
+    // Supplier-entered fields (snapshot at submission time so future supplier-
+    // record edits don't change the historical quote).
+    companyName: text("company_name").notNull(),
+    contactName: text("contact_name"),
+    contactEmail: text("contact_email"),
+    contactPhone: text("contact_phone"),
+    address: text("address"),
+    countryOfOrigin: text("country_of_origin"),
+    manufacturerName: text("manufacturer_name"),
+    manufacturerPartNumber: text("manufacturer_part_number"),
+    currency: text("currency").notNull().default("USD"),
+    incoterms: text("incoterms"),
+    transportMode: rfqTransportMode("transport_mode")
+      .notNull()
+      .default("any"),
+    shippingCost: numeric("shipping_cost", { precision: 14, scale: 2 })
+      .notNull()
+      .default("0"),
+    leadTimeDays: integer("lead_time_days").notNull().default(0),
+    validityUntil: date("validity_until"),
+    notes: text("notes"),
+    // Original quote PDF the supplier uploaded (if any) — kept alongside the
+    // structured fields so the buyer can verify.
+    sourcePdfUrl: text("source_pdf_url"),
+    sourcePdfName: text("source_pdf_name"),
+    status: quoteStatus("status").notNull().default("draft"),
+    submittedAt: timestamp("submitted_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    rfqIdx: index("supplier_quotes_rfq_idx").on(t.rfqId),
+    supplierIdx: index("supplier_quotes_supplier_idx").on(t.supplierId),
+    statusIdx: index("supplier_quotes_status_idx").on(t.status),
+  }),
+);
+
+export type SupplierQuote = typeof supplierQuotes.$inferSelect;
+
+export const supplierQuoteLines = pgTable(
+  "supplier_quote_lines",
+  {
+    id: serial("id").primaryKey(),
+    quoteId: integer("quote_id")
+      .notNull()
+      .references(() => supplierQuotes.id, { onDelete: "cascade" }),
+    rfqItemId: integer("rfq_item_id").references(() => rfqItems.id, {
+      onDelete: "set null",
+    }),
+    unitPrice: numeric("unit_price", { precision: 14, scale: 4 })
+      .notNull()
+      .default("0"),
+    moq: integer("moq").notNull().default(1),
+    // Volume discounts — array of { qty, unitPrice } for tiered pricing.
+    volumeDiscounts: jsonb("volume_discounts")
+      .$type<Array<{ qty: number; unitPrice: number }>>()
+      .notNull()
+      .default([]),
+    availableStock: integer("available_stock"),
+    leadTimeDays: integer("lead_time_days"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    quoteIdx: index("supplier_quote_lines_quote_idx").on(t.quoteId),
+    itemIdx: index("supplier_quote_lines_item_idx").on(t.rfqItemId),
+  }),
+);
+
+export type SupplierQuoteLine = typeof supplierQuoteLines.$inferSelect;
+
+export const supplierQuoteAttachments = pgTable(
+  "supplier_quote_attachments",
+  {
+    id: serial("id").primaryKey(),
+    quoteId: integer("quote_id")
+      .notNull()
+      .references(() => supplierQuotes.id, { onDelete: "cascade" }),
+    // "datasheet" | "certification" | "brochure" | "image" | "other"
+    kind: text("kind").notNull().default("other"),
+    name: text("name").notNull(),
+    size: bigint("size", { mode: "number" }).notNull().default(0),
+    mimeType: text("mime_type"),
+    url: text("url").notNull(),
+    blobPathname: text("blob_pathname"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    quoteIdx: index("supplier_quote_attachments_quote_idx").on(t.quoteId),
+  }),
+);
+
+export type SupplierQuoteAttachment =
+  typeof supplierQuoteAttachments.$inferSelect;
+
+export const purchaseOrders = pgTable(
+  "purchase_orders",
+  {
+    id: serial("id").primaryKey(),
+    poNumber: text("po_number").notNull(),     // e.g. PO20260506
+    rfqId: integer("rfq_id").references(() => rfqs.id, {
+      onDelete: "set null",
+    }),
+    quoteId: integer("quote_id").references(() => supplierQuotes.id, {
+      onDelete: "set null",
+    }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, {
+      onDelete: "set null",
+    }),
+    supplierName: text("supplier_name").notNull(),
+    projectNum: text("project_num").notNull(),
+    projectName: text("project_name"),
+    propositionReference: text("proposition_reference"),
+    currency: text("currency").notNull().default("USD"),
+    incoterms: text("incoterms"),
+    transportMode: rfqTransportMode("transport_mode")
+      .notNull()
+      .default("any"),
+    subtotal: numeric("subtotal", { precision: 14, scale: 2 })
+      .notNull()
+      .default("0"),
+    discountAmount: numeric("discount_amount", { precision: 14, scale: 2 })
+      .notNull()
+      .default("0"),
+    taxAmount: numeric("tax_amount", { precision: 14, scale: 2 })
+      .notNull()
+      .default("0"),
+    totalAmount: numeric("total_amount", { precision: 14, scale: 2 })
+      .notNull()
+      .default("0"),
+    billingAddress: text("billing_address"),
+    shippingAddress: text("shipping_address"),
+    notes: text("notes"),
+    // Optional buyer-uploaded PDF (e.g. external PO format / countersigned
+    // copy). When present, the supplier sees this PDF; when absent, the
+    // supplier sees the platform-generated print view. Migration 0027.
+    sourcePdfUrl: text("source_pdf_url"),
+    sourcePdfName: text("source_pdf_name"),
+    sourcePdfPathname: text("source_pdf_pathname"),
+    status: poStatus("status").notNull().default("draft"),
+    sentAt: timestamp("sent_at"),
+    acknowledgedAt: timestamp("acknowledged_at"),
+    shippedAt: timestamp("shipped_at"),
+    receivedAt: timestamp("received_at"),
+    createdByClerkId: text("created_by_clerk_id").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    numberIdx: uniqueIndex("purchase_orders_number_idx").on(t.poNumber),
+    projectIdx: index("purchase_orders_project_idx").on(t.projectNum),
+    supplierIdx: index("purchase_orders_supplier_idx").on(t.supplierId),
+    statusIdx: index("purchase_orders_status_idx").on(t.status),
+  }),
+);
+
+export type PurchaseOrder = typeof purchaseOrders.$inferSelect;
+
+export const purchaseOrderLines = pgTable(
+  "purchase_order_lines",
+  {
+    id: serial("id").primaryKey(),
+    poId: integer("po_id")
+      .notNull()
+      .references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    lineNo: integer("line_no").notNull(),
+    ref: text("ref"),                          // L18SM
+    description: text("description").notNull(),
+    qty: integer("qty").notNull().default(1),
+    unitPrice: numeric("unit_price", { precision: 14, scale: 4 })
+      .notNull()
+      .default("0"),
+    totalPrice: numeric("total_price", { precision: 14, scale: 2 })
+      .notNull()
+      .default("0"),
+    // Migration 0032 — inherited from rfq_items at PO generation time so
+    // the inventory link survives RFQ → quote → PO.
+    lightbaseRef: text("lightbase_ref"),
+    inventoryItemId: integer("inventory_item_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    poIdx: index("purchase_order_lines_po_idx").on(t.poId),
+    lightbaseRefIdx: index("purchase_order_lines_lightbase_ref_idx").on(t.lightbaseRef),
+    inventoryItemIdx: index("purchase_order_lines_inventory_item_idx").on(t.inventoryItemId),
+  }),
+);
+
+export type PurchaseOrderLine = typeof purchaseOrderLines.$inferSelect;
+
+export const erpNotifications = pgTable(
+  "erp_notifications",
+  {
+    id: serial("id").primaryKey(),
+    // null targetClerkId = team-wide (everyone sees it)
+    targetClerkId: text("target_clerk_id"),
+    kind: notificationKind("kind").notNull(),
+    title: text("title").notNull(),
+    body: text("body"),
+    // Deep link to open when the notification is clicked.
+    linkUrl: text("link_url"),
+    // Optional FKs so the UI can render quick chips.
+    rfqId: integer("rfq_id").references(() => rfqs.id, {
+      onDelete: "set null",
+    }),
+    quoteId: integer("quote_id").references(() => supplierQuotes.id, {
+      onDelete: "set null",
+    }),
+    poId: integer("po_id").references(() => purchaseOrders.id, {
+      onDelete: "set null",
+    }),
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    targetIdx: index("erp_notifications_target_idx").on(t.targetClerkId),
+    kindIdx: index("erp_notifications_kind_idx").on(t.kind),
+    createdIdx: index("erp_notifications_created_idx").on(t.createdAt),
+  }),
+);
+
+export type ErpNotification = typeof erpNotifications.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PO PAYMENT + DELIVERY TRACKING (migration 0029) — gives suppliers and
+// buyers a shared, structured view of "where is my money / my goods?"
+// without having to phone or email each other for status updates.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const poPaymentMethods = pgTable(
+  "po_payment_methods",
+  {
+    id: serial("id").primaryKey(),
+    poId: integer("po_id")
+      .notNull()
+      .references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    bankName: text("bank_name"),
+    accountHolder: text("account_holder"),
+    iban: text("iban"),
+    swiftBic: text("swift_bic"),
+    accountNumber: text("account_number"),
+    routingNumber: text("routing_number"),
+    additionalMethods: jsonb("additional_methods")
+      .$type<Array<{ kind: string; value: string }>>()
+      .notNull()
+      .default([]),
+    acceptedCurrencies: text("accepted_currencies"),
+    paymentTerms: text("payment_terms"),
+    additionalNotes: text("additional_notes"),
+    attachmentUrl: text("attachment_url"),
+    attachmentName: text("attachment_name"),
+    attachmentPathname: text("attachment_pathname"),
+    postedByClerkId: text("posted_by_clerk_id"),
+    postedAt: timestamp("posted_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    poIdx: index("po_payment_methods_po_idx").on(t.poId),
+  }),
+);
+export type PoPaymentMethod = typeof poPaymentMethods.$inferSelect;
+
+export const poInvoices = pgTable(
+  "po_invoices",
+  {
+    id: serial("id").primaryKey(),
+    poId: integer("po_id")
+      .notNull()
+      .references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    invoiceNumber: text("invoice_number").notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull().default("0"),
+    currency: text("currency").notNull().default("USD"),
+    issueDate: date("issue_date"),
+    dueDate: date("due_date"),
+    fileUrl: text("file_url"),
+    fileName: text("file_name"),
+    filePathname: text("file_pathname"),
+    status: poInvoiceStatus("status").notNull().default("issued"),
+    receivedAt: timestamp("received_at"),
+    approvedAt: timestamp("approved_at"),
+    scheduledPaymentDate: date("scheduled_payment_date"),
+    scheduledAt: timestamp("scheduled_at"),
+    paidAt: timestamp("paid_at"),
+    disputeReason: text("dispute_reason"),
+    notes: text("notes"),
+    postedByClerkId: text("posted_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    poIdx: index("po_invoices_po_idx").on(t.poId),
+    statusIdx: index("po_invoices_status_idx").on(t.status),
+  }),
+);
+export type PoInvoice = typeof poInvoices.$inferSelect;
+
+export const poPayments = pgTable(
+  "po_payments",
+  {
+    id: serial("id").primaryKey(),
+    poId: integer("po_id")
+      .notNull()
+      .references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    invoiceId: integer("invoice_id").references(() => poInvoices.id, {
+      onDelete: "set null",
+    }),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull().default("0"),
+    currency: text("currency").notNull().default("USD"),
+    paidOn: date("paid_on").notNull(),
+    method: text("method"),
+    reference: text("reference"),
+    fileUrl: text("file_url"),
+    fileName: text("file_name"),
+    filePathname: text("file_pathname"),
+    notes: text("notes"),
+    postedByClerkId: text("posted_by_clerk_id").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    poIdx: index("po_payments_po_idx").on(t.poId),
+    invoiceIdx: index("po_payments_invoice_idx").on(t.invoiceId),
+  }),
+);
+export type PoPayment = typeof poPayments.$inferSelect;
+
+export const poTimeline = pgTable(
+  "po_timeline",
+  {
+    id: serial("id").primaryKey(),
+    poId: integer("po_id")
+      .notNull()
+      .references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    // phase mirrors purchase_order_status but is stored as plain text so
+    // free-form comments without a phase change are also possible.
+    phase: text("phase"),
+    title: text("title").notNull(),
+    note: text("note"),
+    trackingNumber: text("tracking_number"),
+    carrier: text("carrier"),
+    eta: date("eta"),
+    attachmentUrl: text("attachment_url"),
+    attachmentName: text("attachment_name"),
+    attachmentPathname: text("attachment_pathname"),
+    postedByRole: text("posted_by_role").notNull().default("supplier"),
+    postedByClerkId: text("posted_by_clerk_id"),
+    postedAt: timestamp("posted_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    poIdx: index("po_timeline_po_idx").on(t.poId),
+    postedIdx: index("po_timeline_posted_idx").on(t.postedAt),
+  }),
+);
+export type PoTimelineEntry = typeof poTimeline.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPLIER ↔ BUYER LIVE CHAT (migration 0031)
+//
+// Each supplier has one default "General" channel auto-created on first
+// access, plus any custom channels the buyer adds (e.g. "Engineering",
+// "Logistics"). Buyers (supplier-editors) and the supplier's portal users
+// (Clerk-authed with is_supplier=true and email matching the supplier)
+// can read + post in every channel for that supplier. Per-user read state
+// powers the unread badge.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const chatChannels = pgTable(
+  "chat_channels",
+  {
+    id: serial("id").primaryKey(),
+    supplierId: integer("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    // 'default' = auto-created General channel (cannot be archived).
+    // 'custom'  = buyer-added.
+    kind: text("kind").notNull().default("custom"),
+    archived: boolean("archived").notNull().default(false),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    supplierIdx: index("chat_channels_supplier_idx").on(t.supplierId),
+    archivedIdx: index("chat_channels_archived_idx").on(t.archived),
+  }),
+);
+export type ChatChannel = typeof chatChannels.$inferSelect;
+
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: serial("id").primaryKey(),
+    channelId: integer("channel_id")
+      .notNull()
+      .references(() => chatChannels.id, { onDelete: "cascade" }),
+    authorClerkId: text("author_clerk_id").notNull(),
+    authorRole: text("author_role").notNull().default("buyer"),
+    authorName: text("author_name"),
+    body: text("body").notNull(),
+    attachmentUrl: text("attachment_url"),
+    attachmentName: text("attachment_name"),
+    attachmentPathname: text("attachment_pathname"),
+    editedAt: timestamp("edited_at"),
+    deletedAt: timestamp("deleted_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    channelIdx: index("chat_messages_channel_idx").on(t.channelId),
+    createdIdx: index("chat_messages_created_idx").on(t.createdAt),
+  }),
+);
+export type ChatMessage = typeof chatMessages.$inferSelect;
+
+export const chatReads = pgTable(
+  "chat_reads",
+  {
+    id: serial("id").primaryKey(),
+    channelId: integer("channel_id")
+      .notNull()
+      .references(() => chatChannels.id, { onDelete: "cascade" }),
+    clerkUserId: text("clerk_user_id").notNull(),
+    lastReadAt: timestamp("last_read_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    channelUserIdx: uniqueIndex("chat_reads_channel_user_idx").on(t.channelId, t.clerkUserId),
+  }),
+);
+export type ChatRead = typeof chatReads.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVENTORY (migration 0032)
+//
+// Every RFQ / quote / PO line item links to an inventory_items row via
+// `lightbase_ref` (the human-readable code, e.g. "LB-000123") + the FK
+// `inventory_item_id`. One part can have many RFQs across multiple
+// suppliers — the per-part detail page aggregates that history.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const inventoryItems = pgTable(
+  "inventory_items",
+  {
+    id: serial("id").primaryKey(),
+    code: text("code").notNull(),
+    name: text("name"),
+    description: text("description"),
+    category: text("category"),
+    unit: text("unit").notNull().default("ea"),
+    defaultSupplierId: integer("default_supplier_id").references(() => suppliers.id, {
+      onDelete: "set null",
+    }),
+    notes: text("notes"),
+    archived: boolean("archived").notNull().default(false),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    codeIdx: uniqueIndex("inventory_items_code_idx").on(t.code),
+    categoryIdx: index("inventory_items_category_idx").on(t.category),
+    archivedIdx: index("inventory_items_archived_idx").on(t.archived),
+  }),
+);
+export type InventoryItem = typeof inventoryItems.$inferSelect;

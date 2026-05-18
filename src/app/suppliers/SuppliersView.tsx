@@ -14,8 +14,16 @@ import {
   addSupplierAttachment,
   deleteSupplierAttachment,
   setSupplierStarred,
+  listSupplierContacts,
+  addSupplierContact,
+  updateSupplierContact,
+  setPrimarySupplierContact,
+  deleteSupplierContact,
   type ProjectEntryInput,
 } from "./actions";
+import type { SupplierContact } from "@/db/schema";
+import SupplierChat from "./SupplierChat";
+import IncotermSelect from "./IncotermSelect";
 import {
   aiGenerateSupplier,
   aiGenerateProjectEntry,
@@ -291,7 +299,7 @@ export default function SuppliersView({
   const [pageNum, setPageNum] = useState(1);
 
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<"details" | "kpis" | "projects" | "comments" | "attachments">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "contacts" | "kpis" | "projects" | "comments" | "attachments" | "chat">("details");
   const [currentDrawerOpen, setCurrentDrawerOpen] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1106,9 +1114,11 @@ export default function SuppliersView({
             <div className="panel-tabs">
               {[
                 ["details", "Details"],
+                ["contacts", "👤 Contacts"],
+                ["chat", "💬 Chat"],
                 ["kpis", "📊 Performance"],
                 ["projects", `📋 Projects (${active.projectEntries.length})`],
-                ["comments", `💬 Comments (${active.comments.length})`],
+                ["comments", `🗒 Comments (${active.comments.length})`],
                 ["attachments", `📎 Attachments (${active.attachments.length})`],
               ].map(([k, label]) => (
                 <div key={k} className={`panel-tab ${activeTab === k ? "active" : ""}`} onClick={() => setActiveTab(k as typeof activeTab)}>
@@ -1137,6 +1147,16 @@ export default function SuppliersView({
                   onResearch={handleAiResearch}
                   aiBackupLabel={aiBackup?.label ?? null}
                   onRevertAi={handleRevertAi}
+                />
+              )}
+              {activeTab === "contacts" && (
+                <ContactsTab supplierId={active.id} canEdit={canEdit} onToast={toast} />
+              )}
+              {activeTab === "chat" && (
+                <SupplierChat
+                  supplierId={active.id}
+                  supplierName={active.name}
+                  viewerRole="buyer"
                 />
               )}
               {activeTab === "kpis" && (
@@ -1514,6 +1534,252 @@ function ChipEditor({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ContactsTab — multi-POC list for one supplier. The primary contact is
+// what gets surfaced in the supplier directory and pre-fills the invite
+// flow; additional contacts are alternate emails (sales / engineering /
+// AP) the buyer can also pick when inviting suppliers to an RFQ.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ContactsTab({
+  supplierId,
+  canEdit,
+  onToast,
+}: {
+  supplierId: number;
+  canEdit: boolean;
+  onToast: (msg: string, err?: boolean) => void;
+}) {
+  const [contacts, setContacts] = useState<SupplierContact[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | "new" | null>(null);
+
+  // Inline new-contact form state
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const rows = await listSupplierContacts(supplierId);
+      setContacts(rows);
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Failed to load contacts", true);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [supplierId]);
+
+  async function add() {
+    if (!newEmail.includes("@")) {
+      onToast("Valid email is required", true);
+      return;
+    }
+    setBusyId("new");
+    try {
+      await addSupplierContact({
+        supplierId,
+        name: newName || undefined,
+        email: newEmail,
+        phone: newPhone || undefined,
+        role: newRole || undefined,
+      });
+      setNewName(""); setNewEmail(""); setNewRole(""); setNewPhone("");
+      onToast("Contact added");
+      await load();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Add failed", true);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function setPrimary(id: number) {
+    setBusyId(id);
+    try {
+      await setPrimarySupplierContact(id);
+      onToast("Primary contact updated");
+      await load();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Update failed", true);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove(id: number, email: string) {
+    if (!confirm(`Remove ${email} from this supplier's contact list?`)) return;
+    setBusyId(id);
+    try {
+      await deleteSupplierContact(id);
+      onToast("Contact removed");
+      await load();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Remove failed", true);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function updateField(id: number, field: "name" | "email" | "phone" | "role", value: string) {
+    setBusyId(id);
+    try {
+      await updateSupplierContact({ id, [field]: value });
+      await load();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Update failed", true);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>
+          Contacts ({contacts?.length ?? 0})
+        </h3>
+        <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--lb-text-3)" }}>
+          One supplier, many people. The <b>primary</b> contact's email is what shows up in the supplier directory and pre-fills the RFQ invite form. Add as many alternates as you need (Sales, Engineering, Accounts Payable, etc.) — the picker on the Orders tab can invite any of them.
+        </p>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 18, textAlign: "center", color: "var(--lb-text-3)", fontSize: 12.5 }}>
+          Loading…
+        </div>
+      ) : !contacts || contacts.length === 0 ? (
+        <div style={{ padding: 18, borderRadius: 10, border: "1px dashed var(--lb-border)", textAlign: "center", color: "var(--lb-text-3)", fontSize: 12.5 }}>
+          No contacts yet. Add the first one below.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {contacts.map((c) => {
+            const busy = busyId === c.id;
+            return (
+              <div
+                key={c.id}
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: c.isPrimary ? "1px solid #facc15" : "1px solid var(--lb-border)",
+                  background: c.isPrimary ? "rgba(250,204,21,0.06)" : "var(--lb-bg)",
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "flex-start",
+                  flexWrap: "wrap",
+                  opacity: busy ? 0.55 : 1,
+                }}
+              >
+                <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6, minWidth: 320 }}>
+                  <input
+                    defaultValue={c.name ?? ""}
+                    placeholder="Name"
+                    disabled={!canEdit || busy}
+                    onBlur={(e) => {
+                      if ((e.target.value ?? "") !== (c.name ?? "")) updateField(c.id, "name", e.target.value);
+                    }}
+                    style={{ padding: "6px 10px", borderRadius: 6, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", color: "var(--lb-text)", fontSize: 12.5 }}
+                  />
+                  <input
+                    defaultValue={c.email}
+                    type="email"
+                    disabled={!canEdit || busy}
+                    onBlur={(e) => {
+                      if (e.target.value !== c.email) updateField(c.id, "email", e.target.value);
+                    }}
+                    style={{ padding: "6px 10px", borderRadius: 6, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", color: "var(--lb-text)", fontSize: 12.5, fontWeight: 600 }}
+                  />
+                  <input
+                    defaultValue={c.role ?? ""}
+                    placeholder="Role (Sales / Engineering / AP)"
+                    disabled={!canEdit || busy}
+                    onBlur={(e) => {
+                      if ((e.target.value ?? "") !== (c.role ?? "")) updateField(c.id, "role", e.target.value);
+                    }}
+                    style={{ padding: "6px 10px", borderRadius: 6, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", color: "var(--lb-text)", fontSize: 12.5 }}
+                  />
+                  <input
+                    defaultValue={c.phone ?? ""}
+                    placeholder="Phone"
+                    disabled={!canEdit || busy}
+                    onBlur={(e) => {
+                      if ((e.target.value ?? "") !== (c.phone ?? "")) updateField(c.id, "phone", e.target.value);
+                    }}
+                    style={{ padding: "6px 10px", borderRadius: 6, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", color: "var(--lb-text)", fontSize: 12.5 }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                  {c.isPrimary ? (
+                    <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "rgba(250,204,21,0.18)", color: "#ca8a04", fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase" }}>
+                      ★ Primary
+                    </span>
+                  ) : canEdit ? (
+                    <button
+                      type="button"
+                      onClick={() => setPrimary(c.id)}
+                      disabled={busy}
+                      style={{ fontSize: 10.5, padding: "3px 9px", borderRadius: 6, background: "transparent", color: "var(--lb-text-2)", border: "1px solid var(--lb-border)", fontWeight: 600, cursor: "pointer" }}
+                    >
+                      Set as primary
+                    </button>
+                  ) : null}
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => remove(c.id, c.email)}
+                      disabled={busy}
+                      style={{ fontSize: 10.5, padding: "3px 9px", borderRadius: 6, background: "rgba(220,38,38,0.1)", color: "#dc2626", border: "1px solid rgba(220,38,38,0.4)", fontWeight: 600, cursor: "pointer" }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {canEdit && (
+        <div
+          style={{
+            marginTop: 4,
+            padding: 12,
+            borderRadius: 10,
+            border: "1px dashed var(--lb-border)",
+            background: "var(--lb-bg)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 800, color: "var(--lb-text-3)", letterSpacing: 0.5, textTransform: "uppercase" }}>
+            Add a contact
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6 }}>
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name" style={{ padding: "8px 10px", borderRadius: 6, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", color: "var(--lb-text)", fontSize: 12.5 }} />
+            <input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} type="email" placeholder="Email *" style={{ padding: "8px 10px", borderRadius: 6, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", color: "var(--lb-text)", fontSize: 12.5, fontWeight: 600 }} />
+            <input value={newRole} onChange={(e) => setNewRole(e.target.value)} placeholder="Role (Sales / Engineering / AP)" style={{ padding: "8px 10px", borderRadius: 6, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", color: "var(--lb-text)", fontSize: 12.5 }} />
+            <input value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder="Phone" style={{ padding: "8px 10px", borderRadius: 6, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", color: "var(--lb-text)", fontSize: 12.5 }} />
+          </div>
+          <button
+            type="button"
+            onClick={add}
+            disabled={busyId === "new" || !newEmail.includes("@")}
+            style={{ alignSelf: "flex-start", padding: "8px 14px", borderRadius: 999, background: "var(--lb-accent)", color: "var(--lb-accent-fg)", border: "1px solid var(--lb-accent)", fontSize: 12.5, fontWeight: 700, cursor: busyId === "new" ? "wait" : "pointer", opacity: busyId === "new" || !newEmail.includes("@") ? 0.6 : 1 }}
+          >
+            + Add contact
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PerformanceTab({
   supplier, score, kpis, setKpis, canEdit,
 }: {
@@ -1584,7 +1850,15 @@ function PerformanceTab({
         <div className="form-group"><label>Annual Capacity</label><input className="form-input" value={kpis.capacity ?? ""} onChange={setK("capacity")} disabled={ro} /></div>
         <div className="form-group"><label>Payment Terms</label><select className="form-input" value={kpis.paymentTerms ?? ""} onChange={setK("paymentTerms")} disabled={ro}><option value="">—</option><option>Net 30</option><option>Net 45</option><option>Net 60</option><option>Net 90</option><option>50/50 T/T</option><option>30/70 T/T</option><option>100% Advance</option><option>L/C at sight</option><option>L/C 30 days</option><option>L/C 60 days</option></select></div>
         <div className="form-group"><label>Currency</label><select className="form-input" value={kpis.currency ?? ""} onChange={setK("currency")} disabled={ro}><option value="">—</option><option>USD</option><option>CAD</option><option>EUR</option><option>CNY</option><option>JPY</option><option>GBP</option><option>AUD</option></select></div>
-        <div className="form-group"><label>Incoterms</label><select className="form-input" value={kpis.incoterms ?? ""} onChange={setK("incoterms")} disabled={ro}><option value="">—</option>{["EXW","FOB","FCA","CIF","CFR","CIP","DAP","DDP"].map((x) => <option key={x}>{x}</option>)}</select></div>
+        <div className="form-group">
+          <label>Incoterms</label>
+          <IncotermSelect
+            value={kpis.incoterms ?? ""}
+            onChange={(v) => setKpis((p) => ({ ...p, incoterms: v }))}
+            disabled={ro}
+            allowEmpty
+          />
+        </div>
         <div className="form-group"><label>Risk Rating</label><select className="form-input" value={kpis.risk ?? ""} onChange={setK("risk")} disabled={ro}><option value="">—</option><option>Low</option><option>Medium</option><option>High</option></select></div>
         <div className="form-group"><label>Backup Supplier</label><input className="form-input" value={kpis.backup ?? ""} onChange={setK("backup")} disabled={ro} /></div>
         <div className="form-group"><label>Insurance Expiry</label><input className="form-input" type="date" value={kpis.insurance ?? ""} onChange={setK("insurance")} disabled={ro} /></div>
@@ -1834,7 +2108,14 @@ function ProjectEntryFields({ form, setForm, live }: { form: ProjectEntryInput; 
         <div className="form-group"><label>Quoted Amount</label><input className="form-input" type="number" step="0.01" value={form.quotedAmount as number} onChange={set("quotedAmount")} /></div>
         <div className="form-group"><label>Actual Amount</label><input className="form-input" type="number" step="0.01" value={form.actualAmount as number} onChange={set("actualAmount")} /></div>
         <div className="form-group"><label>Currency</label><select className="form-input" value={form.currency ?? "USD"} onChange={set("currency")}>{["USD","CAD","EUR","CNY","JPY","GBP"].map((c) => <option key={c}>{c}</option>)}</select></div>
-        <div className="form-group"><label>Incoterms</label><select className="form-input" value={form.incoterms ?? ""} onChange={set("incoterms")}><option value="">—</option>{["EXW","FOB","FCA","CIF","CFR","CIP","DAP","DDP"].map((c) => <option key={c}>{c}</option>)}</select></div>
+        <div className="form-group">
+          <label>Incoterms</label>
+          <IncotermSelect
+            value={form.incoterms ?? ""}
+            onChange={(v) => setForm((f) => ({ ...f, incoterms: v }))}
+            allowEmpty
+          />
+        </div>
         <div className="form-group"><label>Payment Terms</label><input className="form-input" value={form.paymentTerms ?? ""} onChange={set("paymentTerms")} /></div>
       </div>
 

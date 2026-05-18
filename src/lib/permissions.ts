@@ -26,6 +26,75 @@ export function ensureUserProfileColumns(): Promise<void> {
       await db.execute(
         sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "can_view_oee" boolean NOT NULL DEFAULT false`,
       );
+      // Migration 0026 — supplier-user flag. Lets us distinguish vendors
+      // (signed in at the same /sign-in URL but emailed via supplier
+      // outreach) from internal staff so the app shell shows them the
+      // vendor portal only.
+      await db.execute(
+        sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "is_supplier" boolean NOT NULL DEFAULT false`,
+      );
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "user_profiles_is_supplier_idx" ON "user_profiles" ("is_supplier")`,
+      );
+      // Migration 0027 — multi-tenant + job role + PO source PDF
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS "clients" (
+        "id" serial PRIMARY KEY,
+        "name" text NOT NULL,
+        "industry" text,
+        "is_active" boolean NOT NULL DEFAULT true,
+        "notes" text,
+        "created_at" timestamp NOT NULL DEFAULT now(),
+        "updated_at" timestamp NOT NULL DEFAULT now()
+      )`);
+      await db.execute(
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS "clients_name_idx" ON "clients" ("name")`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "job_role" text`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "client_id" integer REFERENCES "clients"("id") ON DELETE SET NULL`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "suppliers" ADD COLUMN IF NOT EXISTS "client_id" integer REFERENCES "clients"("id") ON DELETE SET NULL`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "source_pdf_url" text`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "source_pdf_name" text`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "source_pdf_pathname" text`,
+      );
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "user_profiles_client_idx" ON "user_profiles" ("client_id")`,
+      );
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "suppliers_client_idx" ON "suppliers" ("client_id")`,
+      );
+      // Bootstrap the default client row from CLIENT_CONFIG (env var) and
+      // back-fill every existing supplier/user-profile row that doesn't
+      // already have a client. Non-CADuniQ employees + suppliers get
+      // attached to the deployment's primary client.
+      const defaultName = process.env.NEXT_PUBLIC_CLIENT_NAME ?? "Lightbase";
+      const defaultIndustry = (process.env.NEXT_PUBLIC_CLIENT_INDUSTRY ?? "manufacturing").toLowerCase();
+      await db.execute(sql`
+        INSERT INTO "clients" ("name", "industry")
+          VALUES (${defaultName}, ${defaultIndustry})
+        ON CONFLICT DO NOTHING
+      `);
+      await db.execute(sql`
+        UPDATE "suppliers"
+          SET "client_id" = (SELECT id FROM "clients" WHERE name = ${defaultName} LIMIT 1)
+          WHERE "client_id" IS NULL
+      `);
+      await db.execute(sql`
+        UPDATE "user_profiles"
+          SET "client_id" = (SELECT id FROM "clients" WHERE name = ${defaultName} LIMIT 1)
+          WHERE "client_id" IS NULL
+            AND LOWER(email) NOT LIKE '%@caduniq.com'
+      `);
       // Backfill admins so the new gates inherit role-level access.
       await db.execute(sql`
         UPDATE "user_profiles"
@@ -37,14 +106,43 @@ export function ensureUserProfileColumns(): Promise<void> {
               OR "can_view_crm" = false
               OR "can_view_oee" = false)
       `);
+      // Backfill: any user_profiles row whose email matches a suppliers row
+      // gets flagged as a supplier user (covers people who signed in before
+      // migration 0026 ran).
+      await db.execute(sql`
+        UPDATE "user_profiles" up
+          SET "is_supplier" = true
+          WHERE "is_supplier" = false
+            AND EXISTS (
+              SELECT 1 FROM "suppliers" s
+              WHERE LOWER(s.email) = LOWER(up.email)
+            )
+      `);
     } catch (e) {
       console.warn(
-        "[permissions] ensureUserProfileColumns failed — run `npm run db:apply` to apply migration 0022.",
+        "[permissions] ensureUserProfileColumns failed — run `npm run db:apply` to apply migrations 0022 + 0026.",
         e,
       );
     }
   })();
   return _profileSchemaEnsured;
+}
+
+// Returns true if the email is registered as a supplier contact. Used by
+// getOrCreateProfile to flip the supplier flag on first sign-in so they
+// land on the vendor portal instead of the buyer dashboard.
+async function isSupplierEmail(email: string): Promise<boolean> {
+  if (!email) return false;
+  try {
+    const rows = (await db.execute(
+      sql`SELECT 1 FROM "suppliers" WHERE LOWER(email) = LOWER(${email}) LIMIT 1`,
+    )) as unknown as { rows?: Array<unknown> } | Array<unknown>;
+    // The Neon HTTP driver returns either { rows: [...] } or [...]; cover both.
+    const list = Array.isArray(rows) ? rows : Array.isArray(rows?.rows) ? rows.rows : [];
+    return list.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 // CADuniQ is the operator/vendor — every @caduniq.com mailbox is automatically
@@ -105,6 +203,9 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
     [user?.firstName, user?.lastName].filter(Boolean).join(" ") || null;
 
   const isAdmin = isSeededAdminEmail(email);
+  // Suppliers are external — never auto-admin. A supplier email being on
+  // the admin allowlist would be a configuration mistake, so admin wins.
+  const isSupplier = !isAdmin && (await isSupplierEmail(email));
 
   // A row may already exist for this email under a *different* clerk_user_id
   // (e.g. a previous Clerk user for the same address, or a pre-seeded row).
@@ -141,6 +242,18 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
         if (!existingByEmail.approvedAt) updates.approvedAt = new Date();
         if (!existingByEmail.approvedBy) updates.approvedBy = "system:bootstrap";
       }
+      // Supplier flag is sticky — once flipped on, stays on (cheap to
+      // double-check, lets you re-classify a hijacked email by hand).
+      if (isSupplier && !existingByEmail.isSupplier) {
+        updates.isSupplier = true;
+        if (existingByEmail.role === "pending") {
+          // Suppliers don't need admin approval to use the vendor portal.
+          updates.role = "member";
+          if (!existingByEmail.approvedAt) updates.approvedAt = new Date();
+          if (!existingByEmail.approvedBy)
+            updates.approvedBy = "system:supplier-auto";
+        }
+      }
 
       const [adopted] = await db
         .update(userProfiles)
@@ -157,7 +270,11 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
       clerkUserId: userId,
       email,
       displayName,
-      role: isAdmin ? "admin" : "pending",
+      // Suppliers go straight to member status so the vendor portal works
+      // without an admin approval step — they're already in the suppliers
+      // table, so they're known.
+      role: isAdmin ? "admin" : isSupplier ? "member" : "pending",
+      isSupplier,
       canViewSuppliers: isAdmin,
       canViewCompetitors: isAdmin,
       canViewHandbook: isAdmin,
@@ -166,8 +283,12 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
       canViewCrm: isAdmin,
       canViewOee: isAdmin,
       canEdit: isAdmin,
-      approvedAt: isAdmin ? new Date() : null,
-      approvedBy: isAdmin ? "system:bootstrap" : null,
+      approvedAt: isAdmin || isSupplier ? new Date() : null,
+      approvedBy: isAdmin
+        ? "system:bootstrap"
+        : isSupplier
+          ? "system:supplier-auto"
+          : null,
     })
     .onConflictDoNothing({ target: userProfiles.clerkUserId })
     .returning();
@@ -181,6 +302,28 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
     .where(eq(userProfiles.clerkUserId, userId))
     .limit(1);
   return refetched[0] ?? null;
+}
+
+// True if this user_profiles row is for an external supplier (vendor-portal
+// account). Set on first sign-in when the email matches a row in `suppliers`.
+// Admins win over suppliers — if an email is on both lists, admin sticks.
+export function isSupplierUser(
+  profile: UserProfile | null | undefined,
+): boolean {
+  if (!profile) return false;
+  if (profile.role === "admin") return false;
+  return Boolean(profile.isSupplier);
+}
+
+// CADuniQ staff = anyone on the CADuniQ admin allowlist (the @caduniq.com
+// domain + the named seeded admins). CADuniQ users are cross-tenant —
+// they can browse every client's admin page. Client-side admins (e.g.
+// `hshah@lightbase.ca`) are admins of just their own client tenant.
+export function isCaduniqUser(
+  profile: UserProfile | null | undefined,
+): boolean {
+  if (!profile) return false;
+  return isSeededAdminEmail(profile.email);
 }
 
 export function isAdmin(profile: UserProfile | null | undefined): boolean {

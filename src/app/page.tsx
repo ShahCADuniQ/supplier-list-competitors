@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { desc } from "drizzle-orm";
 import { db } from "@/db";
 import {
@@ -15,6 +16,7 @@ import {
   canViewHandbook,
   canViewEngineering,
   isAdmin,
+  isSupplierUser,
   ADMIN_EMAILS,
   ADMIN_EMAIL_DOMAINS,
 } from "@/lib/permissions";
@@ -36,6 +38,11 @@ export default async function Home() {
   const profile = await getOrCreateProfile();
 
   if (!profile) return <SignedOutHero />;
+
+  // Supplier users skip the buyer dashboard entirely and land on their
+  // vendor portal. They're not staff — the home page would just confuse
+  // them with internal KPIs.
+  if (isSupplierUser(profile)) redirect("/portal");
 
   const sup = canViewSuppliers(profile);
   const comp = canViewCompetitors(profile);

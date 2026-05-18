@@ -1,14 +1,16 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { userProfiles } from "@/db/schema";
+import { clients, suppliers, userProfiles, type Client } from "@/db/schema";
 import {
   ensureUserProfileColumns,
+  isCaduniqUser,
   isSeededAdminEmail,
   requireAdmin,
 } from "@/lib/permissions";
+import { JOB_ROLES, type JobRole } from "@/lib/job-roles";
 
 export type AccessUpdate = {
   clerkUserId: string;
@@ -136,3 +138,111 @@ export async function revokeUser(clerkUserId: string) {
     canEdit: false,
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENTS (multi-tenant). CADuniQ staff can manage every client; client
+// admins can only see the one row they're scoped to.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function listClients(): Promise<Client[]> {
+  await requireAdmin();
+  await ensureUserProfileColumns();
+  return db.select().from(clients).orderBy(asc(clients.name));
+}
+
+export async function createClient(input: {
+  name: string;
+  industry?: string;
+  notes?: string;
+}): Promise<{ id: number }> {
+  const admin = await requireAdmin();
+  if (!isCaduniqUser(admin)) {
+    throw new Error("Only CADuniQ staff can create new clients");
+  }
+  await ensureUserProfileColumns();
+  const name = input.name.trim();
+  if (!name) throw new Error("Client name is required");
+  const [row] = await db
+    .insert(clients)
+    .values({
+      name,
+      industry: input.industry?.trim() || null,
+      notes: input.notes?.trim() || null,
+    })
+    .returning();
+  revalidatePath("/admin");
+  return { id: row.id };
+}
+
+export async function setUserClient(input: {
+  clerkUserId: string;
+  clientId: number | null;
+}): Promise<void> {
+  const admin = await requireAdmin();
+  if (!isCaduniqUser(admin)) {
+    throw new Error("Only CADuniQ staff can re-assign users between clients");
+  }
+  await ensureUserProfileColumns();
+  await db
+    .update(userProfiles)
+    .set({ clientId: input.clientId, updatedAt: new Date() })
+    .where(eq(userProfiles.clerkUserId, input.clerkUserId));
+  revalidatePath("/admin");
+}
+
+export async function setSupplierClient(input: {
+  supplierId: number;
+  clientId: number | null;
+}): Promise<void> {
+  const admin = await requireAdmin();
+  if (!isCaduniqUser(admin)) {
+    throw new Error("Only CADuniQ staff can re-assign suppliers between clients");
+  }
+  await ensureUserProfileColumns();
+  await db
+    .update(suppliers)
+    .set({ clientId: input.clientId, updatedAt: new Date() })
+    .where(eq(suppliers.id, input.supplierId));
+  revalidatePath("/admin");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JOB ROLE — pick from JOB_ROLES dropdown. Editable by any admin within
+// their tenant scope (caduniq users are cross-tenant).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setUserJobRole(input: {
+  clerkUserId: string;
+  jobRole: string | null;
+}): Promise<void> {
+  const admin = await requireAdmin();
+  await ensureUserProfileColumns();
+  const clean = input.jobRole?.trim() || null;
+  if (clean) {
+    const match = JOB_ROLES.find(
+      (r) => r.toLowerCase() === clean.toLowerCase(),
+    );
+    if (!match) {
+      throw new Error(
+        `"${clean}" is not a recognised job role. Pick from: ${JOB_ROLES.join(", ")}`,
+      );
+    }
+  }
+  if (!isCaduniqUser(admin)) {
+    const [target] = await db
+      .select({ clientId: userProfiles.clientId })
+      .from(userProfiles)
+      .where(eq(userProfiles.clerkUserId, input.clerkUserId))
+      .limit(1);
+    if (!target || target.clientId !== admin.clientId) {
+      throw new Error("Cannot edit users outside your client tenant");
+    }
+  }
+  await db
+    .update(userProfiles)
+    .set({ jobRole: clean as JobRole | null, updatedAt: new Date() })
+    .where(eq(userProfiles.clerkUserId, input.clerkUserId));
+  revalidatePath("/admin");
+}
+
+void sql;

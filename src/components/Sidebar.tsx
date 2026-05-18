@@ -7,6 +7,7 @@ import { CLIENT_CONFIG } from "@/lib/client-config";
 type Props = {
   email: string | null;
   role: string | null;
+  isSupplier: boolean;
   canViewSuppliers: boolean;
   canViewCompetitors: boolean;
   canViewHandbook: boolean;
@@ -31,6 +32,7 @@ type RailItem = {
 export default function Sidebar({
   email,
   role,
+  isSupplier,
   canViewSuppliers,
   canViewCompetitors,
   canViewHandbook,
@@ -54,7 +56,19 @@ export default function Sidebar({
   // under the Tools group in the navigation. The Tools rail icon
   // highlights on these routes.
 
-  const items: RailItem[] = [
+  // Suppliers see ONE rail item — their vendor portal. Everything else is
+  // hidden so they can't poke around the ERP / CRM / Admin etc.
+  const items: RailItem[] = isSupplier
+    ? [
+        {
+          href: "/portal",
+          label: "Vendor Portal",
+          icon: "◈",
+          show: true,
+          matchPrefixes: ["/portal"],
+        },
+      ]
+    : [
     {
       href: "/design-engineering",
       label: "Design & Engineering",
