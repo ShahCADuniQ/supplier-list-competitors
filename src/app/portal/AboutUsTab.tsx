@@ -132,7 +132,7 @@ export default function AboutUsTab({
         <p style={{ fontSize: 13, color: "var(--lb-text-2)", margin: 0, maxWidth: 720 }}>
           Everything you submitted at onboarding stays editable here. Keep your
           contact, capabilities, and supporting documents current so the
-          retailer always sees the right version of you.
+          Engineering/Designer Company always sees the right version of you.
         </p>
       </header>
 
@@ -150,7 +150,8 @@ export default function AboutUsTab({
         >
           Upload datasheets, certifications, contracts, photos, or anything
           else worth keeping on file. Files sit on your supplier profile and
-          appear under the matching category for the retailer.
+          appear under the matching category for the Engineering/Designer
+          Company.
         </p>
         <AboutUsAttachments supplierId={supplierId} initial={existingAttachments} />
       </section>
@@ -189,7 +190,7 @@ function ShopInfoEditor({
       return;
     }
     if (changeRetailer && !retailerEmail.trim()) {
-      setErr("Enter the new retailer's email or cancel the change.");
+      setErr("Enter the new Engineering/Designer Company's email or cancel the change.");
       return;
     }
     startTransition(async () => {
@@ -347,9 +348,9 @@ function ShopInfoEditor({
           }}
         >
           <div>
-            <div style={FIELD_LABEL}>Currently linked to retailer</div>
+            <div style={FIELD_LABEL}>Currently linked to Engineering/Designer Company</div>
             <div style={{ fontSize: 14, color: "var(--lb-text)", marginTop: 2 }}>
-              {shop.invitingClientName ?? "(no retailer linked)"}
+              {shop.invitingClientName ?? "(no Engineering/Designer Company linked)"}
             </div>
           </div>
           {!changeRetailer ? (
@@ -367,7 +368,7 @@ function ShopInfoEditor({
                 cursor: "pointer",
               }}
             >
-              Change retailer
+              Change Engineering/Designer Company
             </button>
           ) : (
             <button
@@ -393,7 +394,7 @@ function ShopInfoEditor({
         </div>
         {changeRetailer && (
           <div style={{ marginTop: 10 }}>
-            <Field label="New retailer email *">
+            <Field label="New Engineering/Designer Company email *">
               <input
                 type="email"
                 value={retailerEmail}
@@ -403,9 +404,9 @@ function ShopInfoEditor({
               />
             </Field>
             <div style={{ fontSize: 11.5, color: "var(--lb-text-3)", marginTop: -6 }}>
-              The new email must belong to a retailer that already has a
-              CADuniQ account. We&apos;ll re-validate before saving and
-              re-route your profile to their tenant.
+              The new email must belong to an Engineering/Designer Company
+              that already has a CADuniQ account. We&apos;ll re-validate
+              before saving and re-route your profile to their tenant.
             </div>
           </div>
         )}

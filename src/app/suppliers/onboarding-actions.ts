@@ -188,7 +188,7 @@ export async function updateSupplierShopInfo(input: {
       .limit(1);
     if (!match?.clientId) {
       throw new Error(
-        `We couldn't find a retailer on CADuniQ with the email "${input.newEngineeringCompanyEmail.trim()}". Double-check the spelling or try a different address.`,
+        `We couldn't find an Engineering/Designer Company on CADuniQ with the email "${input.newEngineeringCompanyEmail.trim()}". Double-check the spelling or try a different address.`,
       );
     }
     nextClientId = match.clientId;
@@ -1116,7 +1116,7 @@ export async function approveSupplierByMerging(input: {
           targetClerkId: u.clerkUserId,
           kind: "supplier.status-update",
           title: "Your account has been approved",
-          body: `Your sign-up was linked to ${target.name} in the retailer's directory. The full portal is now unlocked.`,
+          body: `Your sign-up was linked to ${target.name} in the Engineering/Designer Company's directory. The full portal is now unlocked.`,
           linkUrl: "/portal",
         });
       }

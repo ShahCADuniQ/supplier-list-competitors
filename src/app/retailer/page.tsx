@@ -52,7 +52,16 @@ export default async function RetailerPage() {
   return (
     <main style={{
       minHeight: "100vh",
-      background: "linear-gradient(170deg, #eef2ff 0%, #f8f9fc 50%, #fdf2f8 100%)",
+      background: `
+        linear-gradient(
+          170deg,
+          color-mix(in srgb, var(--lb-accent) 6%, transparent) 0%,
+          transparent 50%,
+          color-mix(in srgb, var(--lb-vivid-orange) 5%, transparent) 100%
+        ),
+        var(--lb-bg)
+      `,
+      color: "var(--lb-text)",
       padding: "clamp(32px, 6vw, 80px) 24px",
     }}>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>

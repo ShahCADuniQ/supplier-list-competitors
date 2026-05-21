@@ -542,7 +542,16 @@ function SignedOutHero() {
       {/* ════════ HERO with embedded CAD-to-Cash visual flow ════════ */}
       <section style={{
         padding: "clamp(48px, 8vw, 96px) 28px clamp(32px, 5vw, 64px)",
-        background: "linear-gradient(170deg, #eef2ff 0%, #f8f9fc 40%, #fdf2f8 100%)",
+        background: `
+          linear-gradient(
+            170deg,
+            color-mix(in srgb, var(--lb-accent) 6%, transparent) 0%,
+            transparent 40%,
+            color-mix(in srgb, var(--lb-vivid-orange) 5%, transparent) 100%
+          ),
+          var(--lb-bg)
+        `,
+        color: "var(--lb-text)",
         position: "relative", overflow: "hidden",
       }}>
         <div aria-hidden style={{
@@ -712,7 +721,16 @@ function SignedOutHero() {
       {/* ════════ STACK WE REPLACE — visual comparison ════════ */}
       <section style={{
         padding: "clamp(56px, 7vw, 88px) 28px",
-        background: "linear-gradient(170deg, #fff7ed 0%, #f8f9fc 60%, #eef2ff 100%)",
+        background: `
+          linear-gradient(
+            170deg,
+            color-mix(in srgb, var(--lb-vivid-orange) 6%, transparent) 0%,
+            transparent 60%,
+            color-mix(in srgb, var(--lb-accent) 5%, transparent) 100%
+          ),
+          var(--lb-bg-sunken)
+        `,
+        color: "var(--lb-text)",
       }}>
         <div style={{ maxWidth: 1200, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 40 }}>
@@ -736,7 +754,7 @@ function SignedOutHero() {
             {/* OLD STACK */}
             <div style={{
               padding: 28, borderRadius: 16,
-              background: "#fff", border: "2px solid rgba(220,38,38,0.18)",
+              background: "var(--lb-bg-elev)", border: "2px solid rgba(220,38,38,0.18)",
             }}>
               <div style={{
                 fontSize: 11, fontWeight: 800, color: "#dc2626", letterSpacing: "0.14em",
@@ -822,7 +840,16 @@ function SignedOutHero() {
       {/* ════════ THREE AUDIENCES — role chooser inline ════════ */}
       <section id="audiences" style={{
         padding: "clamp(64px, 8vw, 96px) 28px",
-        background: "linear-gradient(155deg, #fdf2f8 0%, #f8f9fc 50%, #eef2ff 100%)",
+        background: `
+          linear-gradient(
+            155deg,
+            color-mix(in srgb, var(--lb-vivid-violet) 6%, transparent) 0%,
+            transparent 50%,
+            color-mix(in srgb, var(--lb-accent) 5%, transparent) 100%
+          ),
+          var(--lb-bg)
+        `,
+        color: "var(--lb-text)",
         scrollMarginTop: 80,
       }}>
         <div style={{ maxWidth: 1200, margin: "0 auto" }}>
@@ -889,7 +916,7 @@ function SignedOutHero() {
             ].map((aud) => (
               <article key={aud.tag} style={{
                 padding: "clamp(20px, 4vw, 28px)", borderRadius: 16,
-                background: "#fff", border: `2px solid ${aud.color}25`,
+                background: "var(--lb-bg-elev)", border: `2px solid ${aud.color}25`,
                 display: "flex", flexDirection: "column",
                 transition: "transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease",
               }}>

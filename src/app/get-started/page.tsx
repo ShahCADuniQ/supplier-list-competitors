@@ -45,7 +45,16 @@ export default async function GetStartedPage() {
   return (
     <main style={{
       minHeight: "100vh",
-      background: "linear-gradient(170deg, #eef2ff 0%, #f8f9fc 40%, #fdf2f8 100%)",
+      background: `
+        linear-gradient(
+          170deg,
+          color-mix(in srgb, var(--lb-accent) 6%, transparent) 0%,
+          transparent 40%,
+          color-mix(in srgb, var(--lb-vivid-orange) 5%, transparent) 100%
+        ),
+        var(--lb-bg)
+      `,
+      color: "var(--lb-text)",
       padding: "clamp(48px, 8vw, 96px) 24px",
     }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
@@ -98,7 +107,7 @@ export default async function GetStartedPage() {
           {/* Engineering Company */}
           <article style={{
             padding: "clamp(20px, 4vw, 32px)", borderRadius: 18,
-            background: "#fff", border: "2px solid rgba(37,99,235,0.20)",
+            background: "var(--lb-bg-elev)", border: "2px solid rgba(37,99,235,0.20)",
             display: "flex", flexDirection: "column", gap: 16,
             transition: "transform 200ms ease, border-color 200ms ease",
           }}>
@@ -148,7 +157,7 @@ export default async function GetStartedPage() {
           {/* Supplier */}
           <article style={{
             padding: "clamp(20px, 4vw, 32px)", borderRadius: 18,
-            background: "#fff", border: "2px solid rgba(22,163,74,0.20)",
+            background: "var(--lb-bg-elev)", border: "2px solid rgba(22,163,74,0.20)",
             display: "flex", flexDirection: "column", gap: 16,
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -202,7 +211,7 @@ export default async function GetStartedPage() {
           {/* catalog + their own orders. */}
           <article style={{
             padding: "clamp(20px, 4vw, 32px)", borderRadius: 18,
-            background: "#fff", border: "2px solid rgba(234,88,12,0.22)",
+            background: "var(--lb-bg-elev)", border: "2px solid rgba(234,88,12,0.22)",
             display: "flex", flexDirection: "column", gap: 16,
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

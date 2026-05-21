@@ -694,7 +694,7 @@ function ShopSummaryEditor({
       return;
     }
     if (changeEngineering && !engineeringEmail.trim()) {
-      setErr("Enter the new retailer's email or cancel the change.");
+      setErr("Enter the new Engineering/Designer Company's email or cancel the change.");
       return;
     }
     startTransition(async () => {
@@ -872,7 +872,7 @@ function ShopSummaryEditor({
           <div>
             <div style={FIELD_LABEL}>Currently submitting to</div>
             <div style={{ fontSize: 14, color: "var(--lb-text)", marginTop: 2 }}>
-              {summary.invitingClientName ?? "(no retailer linked)"}
+              {summary.invitingClientName ?? "(no Engineering/Designer Company linked)"}
             </div>
           </div>
           {!changeEngineering ? (
@@ -890,7 +890,7 @@ function ShopSummaryEditor({
                 cursor: "pointer",
               }}
             >
-              Change retailer
+              Change Engineering/Designer Company
             </button>
           ) : (
             <button
@@ -917,7 +917,7 @@ function ShopSummaryEditor({
 
         {changeEngineering && (
           <div style={{ marginTop: 10 }}>
-            <Field label="New retailer email *">
+            <Field label="New Engineering/Designer Company email *">
               <input
                 type="email"
                 value={engineeringEmail}
@@ -927,8 +927,9 @@ function ShopSummaryEditor({
               />
             </Field>
             <div style={{ fontSize: 11.5, color: "var(--lb-text-3)", marginTop: -6 }}>
-              The new email must belong to a retailer that already has a
-              CADuniQ account. We&apos;ll re-validate the match before saving.
+              The new email must belong to an Engineering/Designer Company
+              that already has a CADuniQ account. We&apos;ll re-validate
+              the match before saving.
             </div>
           </div>
         )}

@@ -77,7 +77,20 @@ export default function OnboardingWizard({
   return (
     <main style={{
       minHeight: "100vh",
-      background: "linear-gradient(170deg, #eef2ff 0%, #f8f9fc 40%, #fdf2f8 100%)",
+      // Theme-aware background: a soft tinted gradient over the base
+      // surface so it renders correctly in both light AND dark mode.
+      // The accent-tinted overlay is mixed against transparent so the
+      // base --lb-bg shows through and flips with the theme.
+      background: `
+        linear-gradient(
+          170deg,
+          color-mix(in srgb, var(--lb-accent) 6%, transparent) 0%,
+          transparent 40%,
+          color-mix(in srgb, var(--lb-vivid-orange) 5%, transparent) 100%
+        ),
+        var(--lb-bg)
+      `,
+      color: "var(--lb-text)",
       padding: "clamp(32px, 6vw, 64px) 20px",
     }}>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
@@ -240,7 +253,7 @@ function SupplierFlow({
     if (!companyName.trim()) { setErr("Your company name is required"); return; }
     if (!contactName.trim()) { setErr("Please tell us who you are"); return; }
     if (!engineeringEmail.trim()) {
-      setErr("Please enter the email of the retailer that invited you (or that you want to work with).");
+      setErr("Please enter the email of the Engineering/Designer Company that invited you (or that you want to work with).");
       return;
     }
     setBusy(true); setErr(null);
@@ -287,11 +300,11 @@ function SupplierFlow({
           Tell us about your shop.
         </h1>
         <p style={{ margin: 0, color: "var(--lb-text-2)", fontSize: 14, lineHeight: 1.55 }}>
-          This creates your private supplier profile. The retailer you enter
-          below will review it. Everything you fill in here describes your
-          shop. Step 2 (the compliance checklist) opens automatically afterwards
-          and asks only about certifications and regulations, no repeat
-          questions.
+          This creates your private supplier profile. The Engineering/Designer
+          Company you enter below will review it. Everything you fill in here
+          describes your shop. Step 2 (the compliance checklist) opens
+          automatically afterwards and asks only about certifications and
+          regulations, no repeat questions.
         </p>
       </header>
 
@@ -347,7 +360,7 @@ function SupplierFlow({
           <textarea
             value={products}
             onChange={(e) => setProducts(e.target.value)}
-            placeholder="One per line. The retailer uses this to decide which RFQs to send you."
+            placeholder="One per line. The Engineering/Designer Company uses this to decide which RFQs to send you."
             style={{ ...INPUT, minHeight: 70, resize: "vertical" }}
           />
         </Field>
@@ -371,12 +384,13 @@ function SupplierFlow({
           3 · Who invited you?
         </h2>
         <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--lb-text-2)", lineHeight: 1.55 }}>
-          Enter the email of the retailer you&apos;re signing up to work with.
-          We&apos;ll route your profile to them for approval.{" "}
+          Enter the email of the Engineering/Designer Company you&apos;re
+          signing up to work with. We&apos;ll route your profile to them for
+          approval.{" "}
           <strong>They won&apos;t see who else you supply, and you won&apos;t
           see who else they buy from.</strong>
         </p>
-        <Field label="Retailer email *">
+        <Field label="Engineering/Designer Company email *">
           <input
             type="email"
             value={engineeringEmail}
@@ -386,9 +400,9 @@ function SupplierFlow({
           />
         </Field>
         <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--lb-text-3)" }}>
-          This email must belong to a retailer that already has a CADuniQ
-          account. If we can&apos;t find a match we&apos;ll tell you so you can
-          try a different address.
+          This email must belong to an Engineering/Designer Company that
+          already has a CADuniQ account. If we can&apos;t find a match
+          we&apos;ll tell you so you can try a different address.
         </p>
       </section>
 

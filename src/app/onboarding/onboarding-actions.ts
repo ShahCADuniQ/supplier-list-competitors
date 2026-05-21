@@ -143,7 +143,7 @@ export async function claimSupplier(input: {
 
   if (!profileMatch?.clientId) {
     throw new Error(
-      `We couldn't find a retailer on CADuniQ with the email "${input.engineeringCompanyEmail.trim()}". Double-check the spelling, or ask them to sign up first and share their account email with you.`,
+      `We couldn't find an Engineering/Designer Company on CADuniQ with the email "${input.engineeringCompanyEmail.trim()}". Double-check the spelling, or ask them to sign up first and share their account email with you.`,
     );
   }
   const resolvedClientId: number = profileMatch.clientId;
