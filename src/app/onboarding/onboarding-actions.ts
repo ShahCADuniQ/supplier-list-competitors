@@ -19,6 +19,7 @@ import {
   clients,
   crmAccounts,
   crmContacts,
+  erpNotifications,
   suppliers,
   supplierContacts,
   userProfiles,
@@ -196,6 +197,39 @@ export async function claimSupplier(input: {
         isPrimary: true,
       });
     } catch { /* tolerate dup */ }
+  }
+
+  // Ping the engineering tenant's admin team so they know a new
+  // supplier has signed up and started onboarding. The bell only
+  // shows alerts to the targeted clerk_user_id, so we fan-out one
+  // row per admin/editor on that tenant. Best-effort: a notification
+  // failure must NOT roll back the supplier signup itself.
+  try {
+    const team = await db
+      .select({ id: userProfiles.clerkUserId })
+      .from(userProfiles)
+      .where(sql`
+        ${userProfiles.clientId} = ${resolvedClientId}
+        AND ${userProfiles.isSupplier} = false
+        AND ${userProfiles.isRetailer} = false
+        AND (
+          ${userProfiles.role} = 'admin'
+          OR (${userProfiles.canEdit} = true AND ${userProfiles.canViewSuppliers} = true)
+        )
+      `);
+    if (team.length > 0) {
+      await db.insert(erpNotifications).values(
+        team.map((u) => ({
+          targetClerkId: u.id,
+          kind: "supplier.signed-up" as const,
+          title: `New supplier signup: ${input.companyName.trim()}`,
+          body: `${input.contactName.trim()} just started onboarding. They'll appear in your suppliers admin once their compliance checklist is submitted.`,
+          linkUrl: "/admin",
+        })),
+      );
+    }
+  } catch (e) {
+    console.warn("[claimSupplier] notifyTeam failed:", e);
   }
 
   revalidatePath("/portal");

@@ -9,6 +9,7 @@ import {
   suppliers,
   supplierContacts,
   supplierQuotes,
+  userProfiles,
 } from "@/db/schema";
 import {
   getOrCreateProfile,
@@ -19,7 +20,7 @@ import { CLIENT_CONFIG } from "@/lib/client-config";
 import { ensureSupplierColumns } from "@/app/suppliers/_ensure-schema";
 import { ensureOrdersSchema } from "@/app/suppliers/_ensure-orders-schema";
 import { ensureOnboardingSchema } from "@/app/suppliers/_ensure-onboarding-schema";
-import { listSupplierTaxonomyTerms } from "@/app/suppliers/onboarding-actions";
+import { listSupplierOnboardingAttachments } from "@/app/suppliers/onboarding-actions";
 import { supplierOnboardingSubmissions } from "@/db/schema";
 import PortalView from "./PortalView";
 import SupplierOnboardingForm, {
@@ -80,27 +81,49 @@ export default async function PortalPage() {
     }
   }
   if (!supplier) {
-    return (
-      <div
-        style={{
-          minHeight: "70vh",
-          display: "grid",
-          placeItems: "center",
-          padding: 32,
-          color: "var(--lb-text)",
-          fontFamily: "system-ui",
-        }}
-      >
-        <div style={{ maxWidth: 480, textAlign: "center" }}>
-          <h1 style={{ fontSize: 22, marginBottom: 8 }}>Your supplier record is missing</h1>
-          <p style={{ color: "var(--lb-text-3)", fontSize: 13.5 }}>
-            Your account is flagged as a supplier but we can't find your
-            company in the {CLIENT_CONFIG.name} suppliers directory. Reach
-            out to your buyer to get re-linked.
-          </p>
+    // Their user_profiles row is still flagged isSupplier=true but the
+    // supplier row they were linked to has been removed (admin deleted
+    // it, or unmerged it, or the supplier's email was rotated off the
+    // contact list). Instead of dead-ending here, bounce them through
+    // the onboarding wizard so they can submit a fresh sign-up to a
+    // retailer. The wizard at /onboarding has been taught to allow
+    // re-entry when isSupplier is true but no matching supplier row
+    // exists (see the existence check there) — otherwise we'd loop
+    // back here. We pre-stamp pendingSignupRole='supplier' so a
+    // refresh of /onboarding without the URL param still lands on the
+    // supplier flow.
+    if (isAdmin(profile)) {
+      // Admins previewing a supplier with no row — keep the explanation
+      // screen for QA, no redirect.
+      return (
+        <div
+          style={{
+            minHeight: "70vh",
+            display: "grid",
+            placeItems: "center",
+            padding: 32,
+            color: "var(--lb-text)",
+            fontFamily: "system-ui",
+          }}
+        >
+          <div style={{ maxWidth: 480, textAlign: "center" }}>
+            <h1 style={{ fontSize: 22, marginBottom: 8 }}>No supplier record</h1>
+            <p style={{ color: "var(--lb-text-3)", fontSize: 13.5 }}>
+              Your admin account has no associated supplier row to preview.
+            </p>
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
+    try {
+      await db
+        .update(userProfiles)
+        .set({ pendingSignupRole: "supplier", updatedAt: new Date() })
+        .where(eq(userProfiles.clerkUserId, profile.clerkUserId));
+    } catch (e) {
+      console.warn("[portal] failed to stamp pendingSignupRole:", e);
+    }
+    redirect("/onboarding?role=supplier&reason=unlinked");
   }
 
   // Gather every email tied to this supplier so an invite that went to ANY
@@ -260,10 +283,12 @@ export default async function PortalPage() {
       invitingClientName,
     };
 
-    // Shared taxonomy terms (custom manufacturing + material entries
-    // added by past suppliers) so the inline editor's MultiSelect
-    // renders the same UNION the step-1 wizard does.
-    const taxonomy = await listSupplierTaxonomyTerms();
+    // Pull the supplier's existing attachments so step 2 can show
+    // counts + existing files per category without each category
+    // mounting its own loading state.
+    const onboardingAttachments = await listSupplierOnboardingAttachments({
+      supplierId: supplier.id,
+    });
 
     return (
       <div style={{ padding: 32, background: "var(--lb-bg)", minHeight: "100vh" }}>
@@ -278,11 +303,26 @@ export default async function PortalPage() {
               ? supplier.onboardingReviewerNotes ?? null
               : null
           }
-          customManufacturing={taxonomy.manufacturing}
-          customMaterials={taxonomy.material}
+          existingAttachments={onboardingAttachments}
         />
       </div>
     );
+  }
+
+  // Approved-supplier portal data: load the supplier's existing
+  // attachments for the "About us" tab + resolve the inviting retailer's
+  // name once for the same tab.
+  const approvedAttachments = await listSupplierOnboardingAttachments({
+    supplierId: supplier.id,
+  });
+  let approvedInvitingName: string | null = null;
+  if (supplier.clientId) {
+    const [c] = await db
+      .select({ name: clients.name })
+      .from(clients)
+      .where(eq(clients.id, supplier.clientId))
+      .limit(1);
+    approvedInvitingName = c?.name ?? null;
   }
 
   return (
@@ -296,6 +336,19 @@ export default async function PortalPage() {
         logoUrl: supplier.logoUrl ?? null,
         logoName: supplier.logoName ?? null,
       }}
+      aboutUs={{
+        companyName: supplier.name,
+        contactName: supplier.contactName ?? null,
+        email: supplier.email ?? null,
+        phone: supplier.phone ?? null,
+        website: supplier.website ?? null,
+        category: supplier.category ?? null,
+        subCategory: supplier.subCategory ?? null,
+        origin: supplier.origin ?? null,
+        products: supplier.products ?? null,
+        invitingClientName: approvedInvitingName,
+      }}
+      aboutUsAttachments={approvedAttachments}
       invites={rows.map((r) => ({
         recipientId: r.recipient.id,
         rfqId: r.rfq.id,

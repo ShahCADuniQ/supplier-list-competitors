@@ -97,7 +97,7 @@ export default async function GetStartedPage() {
         }}>
           {/* Engineering Company */}
           <article style={{
-            padding: 32, borderRadius: 18,
+            padding: "clamp(20px, 4vw, 32px)", borderRadius: 18,
             background: "#fff", border: "2px solid rgba(37,99,235,0.20)",
             display: "flex", flexDirection: "column", gap: 16,
             transition: "transform 200ms ease, border-color 200ms ease",
@@ -123,7 +123,7 @@ export default async function GetStartedPage() {
                 whole back-office.
               </p>
             </div>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
               {[
                 "Manage every project, supplier, and order in one workspace",
                 "Suppliers can't see what other suppliers are quoting",
@@ -147,7 +147,7 @@ export default async function GetStartedPage() {
 
           {/* Supplier */}
           <article style={{
-            padding: 32, borderRadius: 18,
+            padding: "clamp(20px, 4vw, 32px)", borderRadius: 18,
             background: "#fff", border: "2px solid rgba(22,163,74,0.20)",
             display: "flex", flexDirection: "column", gap: 16,
           }}>
@@ -172,7 +172,7 @@ export default async function GetStartedPage() {
                 you make.
               </p>
             </div>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
               {[
                 "Receive qualified RFQs. No cold calling, no sales effort.",
                 "Build a private catalog with datasheets, IES, drawings, photos",
@@ -201,7 +201,7 @@ export default async function GetStartedPage() {
           {/* engineering company they purchase from and see a curated */}
           {/* catalog + their own orders. */}
           <article style={{
-            padding: 32, borderRadius: 18,
+            padding: "clamp(20px, 4vw, 32px)", borderRadius: 18,
             background: "#fff", border: "2px solid rgba(234,88,12,0.22)",
             display: "flex", flexDirection: "column", gap: 16,
           }}>
@@ -227,7 +227,7 @@ export default async function GetStartedPage() {
                 brand.
               </p>
             </div>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
               {[
                 "Browse only the products your supplier has shared with you",
                 "Place reorders in one click; track every shipment in real-time",

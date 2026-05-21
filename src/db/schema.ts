@@ -516,6 +516,11 @@ export const supplierProductAttachments = pgTable(
       .notNull()
       .references(() => supplierProducts.id, { onDelete: "cascade" }),
     category: supplierProductAttachmentCategory("category").notNull(),
+    // When the supplier creates a free-text section, the row is stored
+    // with category='other_file' (the catch-all enum value) and the
+    // user-defined section name is preserved here. NULL → not part of a
+    // custom section. The UI groups custom-labeled rows by this column.
+    customCategoryLabel: text("custom_category_label"),
     name: text("name").notNull(),
     url: text("url").notNull(),
     blobPathname: text("blob_pathname"),

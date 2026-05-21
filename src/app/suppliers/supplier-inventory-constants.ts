@@ -78,41 +78,74 @@ export const SUPPLIER_MATERIALS = [
 ] as const;
 export type SupplierMaterial = (typeof SUPPLIER_MATERIALS)[number];
 
-// The same category vocabulary used on the suppliers list itself
-// (SuppliersView.tsx). Surfacing it here so the product catalog can offer
-// the SAME set in its category picker — keeps cross-table joins (group
-// products by category, compare to supplier category) meaningful.
+// Canonical supplier-category vocabulary. Single source of truth — the
+// onboarding wizard, the supplier-database admin panel, the supplier
+// product catalog, and the AI extractor all import from here so the
+// list never drifts. Grouped by topic in the source order so the
+// dropdown reads coherently top-to-bottom (lighting first since that's
+// Lightbase's domain, then electronics, mechanical, services, etc.).
+//
+// Categories are deliberately broad — manufacturing PROCESSES (CNC,
+// sheet-metal, injection moulding, etc.) belong to the separate
+// "Manufacturing capabilities" multi-select, not in this list. A
+// supplier picks ONE primary category here and tags multiple processes
+// in the dedicated multi-select.
+//
+// When adding a new category, also add it to the migration map in
+// scripts/migrate-supplier-categories.ts if you're consolidating
+// existing values.
 export const SUPPLIER_CATEGORIES = [
-  "Acoustics",
-  "Agency",
-  "Agriculture/Tech",
-  "Building Materials",
-  "Buy/Sell Distribution",
-  "Competitor",
-  "Design Services",
-  "Digital Services",
-  "Distribution",
-  "Drivers/Power",
-  "Electrical",
-  "Electronics",
-  "Equipment",
-  "Exhibition/Display",
-  "Flooring",
-  "Furniture",
-  "Hardware",
-  "LED/Components",
-  "LED/Lighting",
-  "Logistics/Freight",
-  "Manufacturing",
-  "Manufacturing / Logistics",
-  "Materials",
+  // Lighting — core domain.
+  "LED Components",
+  "LED Luminaires",
+  "Lamps & Bulbs",
   "Optics",
-  "Sealing/Thermal",
-  "Services",
-  "Software",
+  "Drivers & Power Supplies",
+
+  // Electronics.
+  "Electronics & PCBs",
+  "Wire, Cable & Connectors",
+
+  // Mechanical + materials.
+  "Metals & Extrusions",
+  "Plastics & Composites",
+  "Glass & Mirrors",
+  "Mechanical Hardware",
+  "Sealants & Thermal Materials",
+
+  // Manufacturing services (NOT processes — those live in the
+  // Manufacturing-capabilities multi-select).
+  "Contract Manufacturing",
+  "Surface Finishing",
+  "Tooling & Mold Making",
+
+  // Distribution + logistics.
+  "Distribution & Wholesale",
+  "Logistics & Freight",
+
+  // Adjacent industries.
+  "Furniture & Architectural",
+  "Building Materials",
+  "Flooring",
+  "Acoustics",
+  "Horticultural Lighting",
+  "Exhibition & Display",
+
+  // Services.
+  "Design Services",
+  "Software & Digital",
+  "Testing & Certification",
+
+  // Catch-all.
+  "Other",
 ] as const;
 export type SupplierCategory = (typeof SUPPLIER_CATEGORIES)[number];
 
+// The fixed canonical sections the drawer always renders. The "other_file"
+// enum value still exists in the DB and is now used under the hood for
+// supplier-defined custom sections — those are surfaced from the
+// attachments themselves (grouped by custom_category_label), not from
+// this list.
 export const SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES = [
   { key: "spec_datasheet",            label: "Specifications & Datasheet" },
   { key: "ies_file",                  label: "IES Photometric Files" },
@@ -122,7 +155,6 @@ export const SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES = [
   { key: "certification_compliance",  label: "Certifications & Compliance" },
   { key: "test_report_qc",            label: "Test Reports & QC" },
   { key: "photo_media",               label: "Photos & Media" },
-  { key: "other_file",                label: "Other Files" },
 ] as const;
 
 export type SupplierProductAttachmentCategory =
@@ -139,6 +171,5 @@ export function shortCategoryLabel(k: SupplierProductAttachmentCategory): string
     case "certification_compliance": return "Cert.";
     case "test_report_qc":           return "QC";
     case "photo_media":              return "Media";
-    case "other_file":               return "Other";
   }
 }

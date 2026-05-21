@@ -469,12 +469,14 @@ function SignedOutHero() {
         position: "sticky", top: 0, zIndex: 50,
         background: "rgba(255,255,255,0.85)", backdropFilter: "blur(14px)",
         borderBottom: "1px solid var(--lb-border)",
-        padding: "14px 28px",
+        padding: "12px clamp(16px, 4vw, 28px)",
         display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 8,
       }}>
         <Link href="/" style={{
           display: "flex", alignItems: "center", gap: 10,
           textDecoration: "none", color: "var(--lb-text)",
+          minWidth: 0,
         }}>
           <span aria-hidden style={{
             display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -482,25 +484,48 @@ function SignedOutHero() {
             background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ea580c 100%)",
             color: "#fff", fontWeight: 900, fontSize: 19, letterSpacing: "-0.04em",
             boxShadow: "0 4px 14px rgba(37,99,235,0.22)",
+            flexShrink: 0,
           }}>C</span>
           <span style={{ fontWeight: 800, fontSize: 19, letterSpacing: "-0.015em" }}>
-            CADuniQ <span style={{ fontWeight: 500, color: "var(--lb-text-2)" }}>Manufacturing</span>
+            CADuniQ{" "}
+            {/* "Manufacturing" subtitle hides on very small screens to */}
+            {/* keep the nav from wrapping or pushing CTAs off-screen. */}
+            <span
+              className="hidden sm:inline"
+              style={{ fontWeight: 500, color: "var(--lb-text-2)" }}
+            >
+              Manufacturing
+            </span>
           </span>
         </Link>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <Link href="#how-it-works" style={{
-            padding: "8px 12px", fontSize: 13.5, fontWeight: 600,
-            color: "var(--lb-text-2)", textDecoration: "none",
-          }}>How it works</Link>
-          <Link href="#audiences" style={{
-            padding: "8px 12px", fontSize: 13.5, fontWeight: 600,
-            color: "var(--lb-text-2)", textDecoration: "none",
-          }}>For you</Link>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+          {/* Anchor nav links hide on phones — they're nice-to-have on */}
+          {/* desktop but eat the limited horizontal budget on mobile. */}
+          <Link
+            href="#how-it-works"
+            className="hidden md:inline-flex"
+            style={{
+              padding: "8px 12px", fontSize: 13.5, fontWeight: 600,
+              color: "var(--lb-text-2)", textDecoration: "none",
+            }}
+          >
+            How it works
+          </Link>
+          <Link
+            href="#audiences"
+            className="hidden md:inline-flex"
+            style={{
+              padding: "8px 12px", fontSize: 13.5, fontWeight: 600,
+              color: "var(--lb-text-2)", textDecoration: "none",
+            }}
+          >
+            For you
+          </Link>
           <Link href="/sign-in" style={{
             padding: "8px 16px", fontSize: 13.5, fontWeight: 600,
             borderRadius: 999, color: "var(--lb-text)",
             border: "1px solid var(--lb-border)", background: "var(--lb-bg-elev)",
-            textDecoration: "none",
+            textDecoration: "none", whiteSpace: "nowrap",
           }}>Sign in</Link>
           <Link href="/get-started" style={{
             padding: "8px 18px", fontSize: 13.5, fontWeight: 700,
@@ -509,6 +534,7 @@ function SignedOutHero() {
             border: "1px solid #2563eb",
             textDecoration: "none",
             boxShadow: "0 4px 14px rgba(37,99,235,0.22)",
+            whiteSpace: "nowrap",
           }}>Sign up →</Link>
         </div>
       </nav>
@@ -862,7 +888,7 @@ function SignedOutHero() {
               },
             ].map((aud) => (
               <article key={aud.tag} style={{
-                padding: 28, borderRadius: 16,
+                padding: "clamp(20px, 4vw, 28px)", borderRadius: 16,
                 background: "#fff", border: `2px solid ${aud.color}25`,
                 display: "flex", flexDirection: "column",
                 transition: "transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease",

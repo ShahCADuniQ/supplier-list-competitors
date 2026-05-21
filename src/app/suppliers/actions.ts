@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { del } from "@vercel/blob";
+import { isCanonicalCatId } from "./supplier-attachment-categories";
 import { db } from "@/db";
 import {
   suppliers,
@@ -358,6 +359,54 @@ export async function deleteSupplierAttachment(id: number) {
   }
   await db.delete(supplierAttachments).where(eq(supplierAttachments.id, id));
   revalidatePath("/suppliers");
+}
+
+// Bulk-delete every file in a CUSTOM section. Canonical sections are
+// rejected server-side so the UI can't accidentally wipe a default
+// bucket. Removes blobs first, then DB rows in one statement so the
+// section disappears next render.
+export async function deleteSupplierCustomSection(input: {
+  supplierId: number;
+  catId: string;
+}): Promise<{ deleted: number }> {
+  await requireSupplierEditor();
+  const catId = input.catId.trim();
+  if (!catId) throw new Error("Section is required");
+  // Defense in depth: refuse to delete a default section even if a UI
+  // bug or hand-crafted request tries to.
+  if (isCanonicalCatId(catId)) {
+    throw new Error("Default sections can't be deleted.");
+  }
+  const rows = await db
+    .select({
+      id: supplierAttachments.id,
+      url: supplierAttachments.url,
+      blobPathname: supplierAttachments.blobPathname,
+    })
+    .from(supplierAttachments)
+    .where(
+      and(
+        eq(supplierAttachments.supplierId, input.supplierId),
+        eq(supplierAttachments.catId, catId),
+      ),
+    );
+  for (const r of rows) {
+    if (r.blobPathname) {
+      try { await del(r.url); } catch (e) {
+        console.error("Failed to remove blob", r.blobPathname, e);
+      }
+    }
+  }
+  await db
+    .delete(supplierAttachments)
+    .where(
+      and(
+        eq(supplierAttachments.supplierId, input.supplierId),
+        eq(supplierAttachments.catId, catId),
+      ),
+    );
+  revalidatePath("/suppliers");
+  return { deleted: rows.length };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

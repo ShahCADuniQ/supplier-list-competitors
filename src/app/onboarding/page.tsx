@@ -1,13 +1,12 @@
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { userProfiles } from "@/db/schema";
+import { suppliers, supplierContacts, userProfiles } from "@/db/schema";
 import {
   getOrCreateProfile,
   isCaduniqUser,
   isRetailerUser,
 } from "@/lib/permissions";
-import { listSupplierTaxonomyTerms } from "@/app/suppliers/onboarding-actions";
 import OnboardingWizard from "./OnboardingWizard";
 
 // Post-signup onboarding wizard. Reads `?role=` from the URL (set by the
@@ -45,7 +44,35 @@ export default async function OnboardingPage({
   // → / → /onboarding (infinite loop, "render takes forever" in the
   // browser).
   if (profile.role === "admin") redirect("/admin");
-  if (profile.isSupplier) redirect("/portal");
+  // A supplier-flagged user normally lives at /portal. BUT if their
+  // supplier row has been deleted (admin removed them, or their email
+  // got rotated off the contact list), bouncing them to /portal here
+  // would just send them back to a dead-end. Detect "isSupplier=true
+  // AND no matching supplier row" and let the wizard re-render so they
+  // can submit a fresh sign-up. The /portal page already pre-stamps
+  // pendingSignupRole='supplier' before sending them here.
+  if (profile.isSupplier) {
+    const emailLc = (profile.email ?? "").toLowerCase();
+    let hasSupplierRow = false;
+    if (emailLc) {
+      const [bySupplierEmail] = await db
+        .select({ id: suppliers.id })
+        .from(suppliers)
+        .where(sql`LOWER(${suppliers.email}) = ${emailLc}`)
+        .limit(1);
+      if (bySupplierEmail) hasSupplierRow = true;
+      if (!hasSupplierRow) {
+        const [byContactEmail] = await db
+          .select({ id: supplierContacts.id })
+          .from(supplierContacts)
+          .where(sql`LOWER(${supplierContacts.email}) = ${emailLc}`)
+          .limit(1);
+        if (byContactEmail) hasSupplierRow = true;
+      }
+    }
+    if (hasSupplierRow) redirect("/portal");
+    // No supplier row → fall through to the wizard so they can re-register.
+  }
   if (isRetailerUser(profile)) redirect("/retailer");
 
   const params = await searchParams;
@@ -74,19 +101,11 @@ export default async function OnboardingPage({
     }
   }
 
-  // Pull the shared taxonomy of custom manufacturing/material terms so
-  // the supplier wizard's MultiSelect can render UNION(curated, custom).
-  // Cheap query (one table, ordered by value); only needed for the
-  // supplier flow, but cost is negligible for the other two too.
-  const taxonomy = await listSupplierTaxonomyTerms();
-
   return (
     <OnboardingWizard
       role={role as "engineering" | "supplier" | "retailer"}
       defaultEmail={profile.email ?? ""}
       defaultName={profile.displayName ?? ""}
-      customManufacturing={taxonomy.manufacturing}
-      customMaterials={taxonomy.material}
     />
   );
 }

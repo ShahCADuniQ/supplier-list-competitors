@@ -303,7 +303,15 @@ export async function deleteSupplierProduct(input: { id: number }): Promise<void
 
 export async function addSupplierProductAttachment(input: {
   productId: number;
-  category: SupplierProductAttachmentCategory;
+  // Accept the broader DB-level category (the postgres enum) so callers
+  // can pass "other_file" for custom-section uploads. The narrowed
+  // SupplierProductAttachmentCategory excludes "other_file" since that
+  // value never renders as a fixed rail entry anymore.
+  category: SupplierProductAttachmentCategory | "other_file";
+  // Free-text section name. Only meaningful when category === "other_file".
+  // When set, the row is grouped under this label in the drawer's
+  // "custom sections" area.
+  customCategoryLabel?: string | null;
   name: string;
   url: string;
   blobPathname?: string;
@@ -317,11 +325,20 @@ export async function addSupplierProductAttachment(input: {
   await ensureSupplierInventorySchema();
   if (!input.name.trim()) throw new Error("File name is required");
 
+  const customLabel =
+    input.category === "other_file" && input.customCategoryLabel
+      ? input.customCategoryLabel.trim().slice(0, 80) || null
+      : null;
+  if (input.category === "other_file" && !customLabel) {
+    throw new Error("A custom section name is required for this upload.");
+  }
+
   const [row] = await db
     .insert(supplierProductAttachments)
     .values({
       productId: input.productId,
       category: input.category,
+      customCategoryLabel: customLabel,
       name: input.name.trim(),
       url: input.url,
       blobPathname: input.blobPathname ?? null,
@@ -457,4 +474,53 @@ export async function deleteSupplierProductAttachment(input: { id: number }): Pr
 
   revalidatePath("/suppliers");
   revalidatePath("/portal");
+}
+
+// Delete every file in a CUSTOM product section. Only the user-defined
+// sections (category='other_file' rows carrying a customCategoryLabel)
+// can be cleared this way — the eight canonical product sections are
+// fixed and can't be removed. Frees blobs first, then deletes the rows.
+export async function deleteSupplierProductCustomSection(input: {
+  productId: number;
+  customCategoryLabel: string;
+}): Promise<{ deleted: number }> {
+  await requireProductAccess(input.productId);
+  await ensureSupplierInventorySchema();
+  const label = input.customCategoryLabel.trim();
+  if (!label) throw new Error("Section name is required");
+
+  const rows = await db
+    .select({
+      id: supplierProductAttachments.id,
+      url: supplierProductAttachments.url,
+      blobPathname: supplierProductAttachments.blobPathname,
+    })
+    .from(supplierProductAttachments)
+    .where(
+      and(
+        eq(supplierProductAttachments.productId, input.productId),
+        eq(supplierProductAttachments.category, "other_file"),
+        eq(supplierProductAttachments.customCategoryLabel, label),
+      ),
+    );
+  for (const r of rows) {
+    if (r.blobPathname) {
+      try { await del(r.url); } catch (e) {
+        console.warn("Blob cleanup failed", r.blobPathname, e);
+      }
+    }
+  }
+  await db
+    .delete(supplierProductAttachments)
+    .where(
+      and(
+        eq(supplierProductAttachments.productId, input.productId),
+        eq(supplierProductAttachments.category, "other_file"),
+        eq(supplierProductAttachments.customCategoryLabel, label),
+      ),
+    );
+
+  revalidatePath("/suppliers");
+  revalidatePath("/portal");
+  return { deleted: rows.length };
 }

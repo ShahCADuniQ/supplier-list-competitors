@@ -17,6 +17,7 @@ import {
   createSupplierProduct,
   deleteSupplierProduct,
   deleteSupplierProductAttachment,
+  deleteSupplierProductCustomSection,
   listSupplierProducts,
   listSuppliersWithCatalog,
   updateSupplierProduct,
@@ -403,10 +404,11 @@ function ProductCard({ product, onOpen }: {
           </span>
         )}
       </div>
-      {/* Card heading shows the PRODUCT CODE prominently (per the brief — */}
-      {/* "it should only show product code"). The internal product name +  */}
-      {/* category are still surfaced in the drawer, just not on the card. */}
-      <div>
+      {/* Card heading shows the PRODUCT CODE prominently on top, with the */}
+      {/* product name in a smaller line underneath. Code-first matches */}
+      {/* how engineers actually look up parts; the name supplies the */}
+      {/* human-readable context. */}
+      <div style={{ minWidth: 0 }}>
         <div style={{
           fontWeight: 700,
           fontSize: 15,
@@ -419,6 +421,18 @@ function ProductCard({ product, onOpen }: {
         }}>
           {product.productCode || "—"}
         </div>
+        {product.name && product.name !== product.productCode && (
+          <div style={{
+            fontSize: 12,
+            color: "var(--lb-text-3)",
+            marginTop: 2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}>
+            {product.name}
+          </div>
+        )}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
         {SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES.map((c) => {
@@ -619,16 +633,29 @@ function NewProductDialog({ supplierId, onClose, onCreated }: {
 // attachments with submission timestamp + size and an upload button.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Tab state for the drawer rail. "enum" → one of the fixed canonical
+// sections; "custom" → a free-text section the supplier created. Custom
+// sections persist via their attachments (category='other_file' rows
+// carrying customCategoryLabel) plus a transient local list for
+// freshly-created sections that have no files yet.
+type ActiveTab =
+  | { kind: "enum"; key: SupplierProductAttachmentCategory }
+  | { kind: "custom"; label: string };
+
 function ProductDrawer({ product, canEdit, onClose, onChanged }: {
   product: SupplierProductWithAttachments;
   canEdit: boolean;
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const [tab, setTab] = useState<SupplierProductAttachmentCategory>("spec_datasheet");
+  const [tab, setTab] = useState<ActiveTab>({ kind: "enum", key: "spec_datasheet" });
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Locally-created sections that have no files yet. They live here
+  // until the supplier uploads the first file into them — after that the
+  // section persists naturally as a group of "other_file" attachments.
+  const [draftSections, setDraftSections] = useState<string[]>([]);
 
   const grouped = useMemo(() => {
     const out = Object.fromEntries(
@@ -640,6 +667,62 @@ function ProductDrawer({ product, canEdit, onClose, onChanged }: {
     }
     return out;
   }, [product.attachments]);
+
+  // Custom sections derived from the attachments themselves — group
+  // category='other_file' rows by their customCategoryLabel
+  // (case-insensitive). Empty drafts the supplier just created are
+  // unioned in so the rail entry shows up even before the first upload.
+  const customSections = useMemo(() => {
+    const byKey = new Map<string, { label: string; attachments: SupplierProductAttachment[] }>();
+    for (const a of product.attachments) {
+      if (a.category !== "other_file") continue;
+      const label = (a.customCategoryLabel ?? "").trim();
+      if (!label) continue;
+      const k = label.toLowerCase();
+      const existing = byKey.get(k);
+      if (existing) existing.attachments.push(a);
+      else byKey.set(k, { label, attachments: [a] });
+    }
+    for (const d of draftSections) {
+      const k = d.toLowerCase();
+      if (!byKey.has(k)) byKey.set(k, { label: d, attachments: [] });
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [product.attachments, draftSections]);
+
+  function addCustomSection() {
+    const raw = window.prompt("Name this section (e.g. Installation guides, Warranty docs):");
+    const name = (raw ?? "").trim();
+    if (!name) return;
+    if (name.length > 80) {
+      setErr("Section names must be 80 characters or fewer.");
+      return;
+    }
+    const existingLabels = new Set([
+      ...customSections.map((s) => s.label.toLowerCase()),
+      ...draftSections.map((s) => s.toLowerCase()),
+    ]);
+    if (!existingLabels.has(name.toLowerCase())) {
+      setDraftSections((prev) => [...prev, name]);
+    }
+    setTab({ kind: "custom", label: name });
+  }
+
+  // After a successful upload into a draft section, drop it from
+  // draftSections (it's now persisted via its attachments). Triggered by
+  // the parent reload via the existing onChanged callback.
+  useEffect(() => {
+    if (draftSections.length === 0) return;
+    const persistedLabels = new Set(
+      customSections
+        .filter((s) => s.attachments.length > 0)
+        .map((s) => s.label.toLowerCase()),
+    );
+    const stillDrafts = draftSections.filter((d) => !persistedLabels.has(d.toLowerCase()));
+    if (stillDrafts.length !== draftSections.length) {
+      setDraftSections(stillDrafts);
+    }
+  }, [customSections, draftSections]);
 
   async function onDelete() {
     if (!confirm(`Delete "${product.name}" and every attached file? This can't be undone.`)) return;
@@ -691,64 +774,178 @@ function ProductDrawer({ product, canEdit, onClose, onChanged }: {
         >
           {SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES.map((c) => {
             const n = grouped[c.key].length;
-            const active = tab === c.key;
+            const active = tab.kind === "enum" && tab.key === c.key;
             return (
-              <button
+              <RailButton
                 key={c.key}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setTab(c.key)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  padding: "8px 10px",
-                  fontSize: 12.5,
-                  fontWeight: active ? 700 : 500,
-                  borderRadius: 6,
-                  border: active ? "1px solid var(--lb-accent)" : "1px solid transparent",
-                  background: active ? "rgba(8,145,178,0.12)" : "transparent",
-                  color: active ? "var(--lb-accent)" : "var(--lb-text-2)",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  transition: "background 140ms ease, color 140ms ease",
-                }}
-              >
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {c.label}
-                </span>
-                <span style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  minWidth: 22,
-                  padding: "1px 7px",
-                  borderRadius: 999,
-                  background: n > 0
-                    ? (active ? "var(--lb-accent)" : "rgba(8,145,178,0.18)")
-                    : "var(--lb-bg)",
-                  color: n > 0 ? (active ? "var(--lb-accent-fg)" : "#0891b2") : "var(--lb-text-3)",
-                  textAlign: "center",
-                }}>
-                  {n}
-                </span>
-              </button>
+                label={c.label}
+                count={n}
+                active={active}
+                onClick={() => setTab({ kind: "enum", key: c.key })}
+              />
             );
           })}
+
+          {/* Custom sections live below the canonical eight. */}
+          {customSections.length > 0 && (
+            <div style={{
+              marginTop: 8,
+              paddingTop: 8,
+              borderTop: "1px solid var(--lb-border)",
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+              padding: "8px 10px 4px",
+            }}>
+              Your sections
+            </div>
+          )}
+          {customSections.map((s) => {
+            const active = tab.kind === "custom" && tab.label.toLowerCase() === s.label.toLowerCase();
+            return (
+              <RailButton
+                key={`custom:${s.label.toLowerCase()}`}
+                label={s.label}
+                count={s.attachments.length}
+                active={active}
+                onClick={() => setTab({ kind: "custom", label: s.label })}
+              />
+            );
+          })}
+
+          {canEdit && (
+            <button
+              type="button"
+              onClick={addCustomSection}
+              style={{
+                marginTop: 6,
+                padding: "8px 10px",
+                fontSize: 12.5,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: "1px dashed var(--lb-border)",
+                background: "transparent",
+                color: "var(--lb-text-2)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              + Add section
+            </button>
+          )}
         </nav>
         <div style={{ flex: 1, minWidth: 0, padding: 16 }}>
-          <CategoryPanel
-            productId={product.id}
-            productThumbnailUrl={product.thumbnailUrl}
-            category={tab}
-            attachments={grouped[tab]}
-            canEdit={canEdit}
-            onChanged={onChanged}
-          />
+          {tab.kind === "enum" ? (
+            <CategoryPanel
+              productId={product.id}
+              productThumbnailUrl={product.thumbnailUrl}
+              category={tab.key}
+              customCategoryLabel={null}
+              attachments={grouped[tab.key]}
+              canEdit={canEdit}
+              onChanged={onChanged}
+            />
+          ) : (
+            <CategoryPanel
+              productId={product.id}
+              productThumbnailUrl={product.thumbnailUrl}
+              category="other_file"
+              customCategoryLabel={tab.label}
+              attachments={
+                customSections.find(
+                  (s) => s.label.toLowerCase() === tab.label.toLowerCase(),
+                )?.attachments ?? []
+              }
+              canEdit={canEdit}
+              onChanged={onChanged}
+              onDeleteCustomSection={async (label) => {
+                const section = customSections.find(
+                  (s) => s.label.toLowerCase() === label.toLowerCase(),
+                );
+                const fileCount = section?.attachments.length ?? 0;
+                // Draft section (no files yet): just drop it locally
+                // and pop the tab back to the first canonical entry.
+                if (fileCount === 0) {
+                  setDraftSections((prev) => prev.filter((d) => d.toLowerCase() !== label.toLowerCase()));
+                  setTab({ kind: "enum", key: "spec_datasheet" });
+                  return;
+                }
+                const ok = window.confirm(
+                  `Delete the "${label}" section and the ${fileCount} file${fileCount === 1 ? "" : "s"} inside? This can't be undone.`,
+                );
+                if (!ok) return;
+                setBusy(true);
+                setErr(null);
+                try {
+                  await deleteSupplierProductCustomSection({
+                    productId: product.id,
+                    customCategoryLabel: label,
+                  });
+                  setTab({ kind: "enum", key: "spec_datasheet" });
+                  onChanged();
+                } catch (e) {
+                  setErr(e instanceof Error ? e.message : "Section delete failed");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+          )}
         </div>
       </div>
     </DrawerShell>
+  );
+}
+
+function RailButton({ label, count, active, onClick }: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 8,
+        padding: "8px 10px",
+        fontSize: 12.5,
+        fontWeight: active ? 700 : 500,
+        borderRadius: 6,
+        border: active ? "1px solid var(--lb-accent)" : "1px solid transparent",
+        background: active ? "rgba(8,145,178,0.12)" : "transparent",
+        color: active ? "var(--lb-accent)" : "var(--lb-text-2)",
+        cursor: "pointer",
+        textAlign: "left",
+        transition: "background 140ms ease, color 140ms ease",
+      }}
+    >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {label}
+      </span>
+      <span style={{
+        fontSize: 11,
+        fontWeight: 700,
+        minWidth: 22,
+        padding: "1px 7px",
+        borderRadius: 999,
+        background: count > 0
+          ? (active ? "var(--lb-accent)" : "rgba(8,145,178,0.18)")
+          : "var(--lb-bg)",
+        color: count > 0 ? (active ? "var(--lb-accent-fg)" : "#0891b2") : "var(--lb-text-3)",
+        textAlign: "center",
+      }}>
+        {count}
+      </span>
+    </button>
   );
 }
 
@@ -863,13 +1060,20 @@ function ProductMetaBlock({ product, editing, onToggleEdit, onSaved, onDelete, c
   );
 }
 
-function CategoryPanel({ productId, productThumbnailUrl, category, attachments, canEdit, onChanged }: {
+function CategoryPanel({ productId, productThumbnailUrl, category, customCategoryLabel, attachments, canEdit, onChanged, onDeleteCustomSection }: {
   productId: number;
   productThumbnailUrl: string | null;
-  category: SupplierProductAttachmentCategory;
+  // Either one of the fixed enum sections OR "other_file" when uploading
+  // into a supplier-defined custom section (in which case the label is
+  // carried in customCategoryLabel).
+  category: SupplierProductAttachmentCategory | "other_file";
+  customCategoryLabel: string | null;
   attachments: SupplierProductAttachment[];
   canEdit: boolean;
   onChanged: () => void;
+  // Custom-only delete affordance. Provided by ProductDrawer; absent for
+  // canonical sections, which are never deletable.
+  onDeleteCustomSection?: (label: string) => void;
 }) {
   // Pending comment typed BEFORE the file is picked — applies to the next
   // batch of files dropped in. Cleared once uploads finish. Per the brief,
@@ -895,6 +1099,7 @@ function CategoryPanel({ productId, productThumbnailUrl, category, attachments, 
         await addSupplierProductAttachment({
           productId,
           category,
+          customCategoryLabel: customCategoryLabel ?? undefined,
           name: file.name,
           url: up.url,
           blobPathname: up.pathname,
@@ -920,8 +1125,48 @@ function CategoryPanel({ productId, productThumbnailUrl, category, attachments, 
     }
   }
 
+  const isCustomSection = category === "other_file" && !!customCategoryLabel;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Header for custom sections only — surfaces the section name */}
+      {/* and a Delete button. Default sections show no header here */}
+      {/* because their identity is already obvious from the rail tab. */}
+      {isCustomSection && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          padding: "0 2px 4px",
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--lb-text)" }}>
+            {customCategoryLabel}
+            <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: "var(--lb-text-3)" }}>
+              custom section
+            </span>
+          </div>
+          {canEdit && onDeleteCustomSection && (
+            <button
+              type="button"
+              onClick={() => onDeleteCustomSection(customCategoryLabel!)}
+              style={{
+                padding: "5px 12px",
+                fontSize: 12,
+                fontWeight: 700,
+                borderRadius: 999,
+                background: "transparent",
+                border: "1px solid rgba(220,38,38,0.4)",
+                color: "#dc2626",
+                cursor: "pointer",
+              }}
+            >
+              🗑 Delete section
+            </button>
+          )}
+        </div>
+      )}
+
       {canEdit && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <textarea

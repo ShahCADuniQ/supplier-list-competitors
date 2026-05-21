@@ -1,15 +1,13 @@
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 import { AI_MODEL, openaiClient } from "./openai";
 import { fetchUrlAsText, parseFile, type ParsedSource } from "./parsers";
+import { SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
 
-const CATEGORIES = [
-  "Acoustics", "Agency", "Agriculture/Tech", "Building Materials",
-  "Buy/Sell Distribution", "Design Services", "Digital Services", "Distribution",
-  "Drivers/Power", "Electrical", "Electronics", "Equipment", "Exhibition/Display",
-  "Flooring", "Furniture", "Hardware", "LED/Components", "LED/Lighting",
-  "Logistics/Freight", "Manufacturing", "Manufacturing / Logistics", "Materials",
-  "Optics", "Sealing/Thermal", "Services", "Software",
-];
+// AI extractor uses the same canonical category vocabulary the
+// onboarding wizard and the supplier admin offer in their dropdowns,
+// so a freshly-extracted supplier slots into a real category and
+// doesn't introduce a one-off label nobody else recognises.
+const CATEGORIES = [...SUPPLIER_CATEGORIES];
 const ORIGINS = [
   "Australia", "Austria", "Canada", "Canada/China", "China", "Finland",
   "Germany", "Global", "Indonesia", "Japan", "N/A", "Taiwan", "USA", "Vietnam",

@@ -19,6 +19,8 @@ import {
 import { SupplierLogoUploader } from "@/app/suppliers/LogoUploader";
 import SupplierChat from "@/app/suppliers/SupplierChat";
 import { SupplierCatalogView } from "@/app/suppliers/SupplierInventoryTab";
+import type { OnboardingAttachmentRow } from "@/app/suppliers/onboarding-actions";
+import AboutUsTab, { type AboutUsShop } from "./AboutUsTab";
 import type { PurchaseOrder, Rfq, RfqRecipient, SupplierQuote } from "@/db/schema";
 
 type Invite = {
@@ -57,6 +59,8 @@ export default function PortalView({
   invites,
   pos,
   isAdminPreview,
+  aboutUs,
+  aboutUsAttachments,
 }: {
   clientName: string;
   supplier: {
@@ -70,12 +74,15 @@ export default function PortalView({
   invites: Invite[];
   pos: PoSummary[];
   isAdminPreview: boolean;
+  aboutUs: AboutUsShop;
+  aboutUsAttachments: OnboardingAttachmentRow[];
 }) {
-  // Three top-level tabs the supplier sees: their product catalogue (their
-  // own listings), incoming order requests (RFQs + awarded POs), and live
-  // chat with the buyer. Defaults to the catalogue so a fresh supplier
-  // with no RFQs yet still lands on something they can interact with.
-  const [tab, setTab] = useState<"catalogue" | "orders" | "chat">(
+  // Four top-level tabs: their product catalogue, incoming order requests
+  // (RFQs + awarded POs), live chat with the buyer, and the editable
+  // About Us profile (company info + attachments they submitted at
+  // onboarding). Defaults to the catalogue so a fresh supplier with no
+  // RFQs yet still lands on something they can interact with.
+  const [tab, setTab] = useState<"catalogue" | "orders" | "chat" | "about">(
     invites.length > 0 || pos.length > 0 ? "orders" : "catalogue",
   );
   // Project filter + free-text search across both invites and POs. "all" =
@@ -266,6 +273,7 @@ export default function PortalView({
             { key: "catalogue", label: "Catalogue", count: undefined as number | undefined },
             { key: "orders", label: "Order requests", count: invites.length + pos.length },
             { key: "chat", label: "Chat", count: undefined as number | undefined },
+            { key: "about", label: "About us", count: undefined as number | undefined },
           ] as const
         ).map((t) => {
           const isActive = tab === t.key;
@@ -448,6 +456,14 @@ export default function PortalView({
             height={560}
           />
         </Panel>
+      )}
+
+      {tab === "about" && (
+        <AboutUsTab
+          supplierId={supplier.id}
+          shop={aboutUs}
+          existingAttachments={aboutUsAttachments}
+        />
       )}
     </div>
   );

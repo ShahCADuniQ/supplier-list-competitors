@@ -18,47 +18,59 @@
 // mid-flow and resume later without losing progress.
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { upload } from "@vercel/blob/client";
 import {
-  addSupplierTaxonomyTerm,
+  addSupplierOnboardingAttachment,
+  deleteSupplierOnboardingAttachment,
+  deleteSupplierOnboardingCustomSection,
   saveSupplierOnboardingDraft,
   submitSupplierOnboarding,
   updateSupplierShopInfo,
+  type OnboardingAttachmentRow,
 } from "@/app/suppliers/onboarding-actions";
-import MultiSelect from "@/components/MultiSelect";
+import { SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
 import {
-  MANUFACTURING_TYPES,
-  SUPPLIER_CATEGORIES,
-  SUPPLIER_MATERIALS,
-} from "@/app/suppliers/supplier-inventory-constants";
+  SUPPLIER_ATTACHMENT_CATEGORIES,
+  CUSTOM_SECTION_META,
+  customCatLabel,
+  customCatSlug,
+  listCustomSectionIds,
+} from "@/app/suppliers/supplier-attachment-categories";
 
-// Case-insensitive UNION of curated baseline + custom taxonomy entries.
-function mergeOptions(base: readonly string[], extras: readonly string[]): string[] {
-  const seen = new Set(base.map((s) => s.toLowerCase()));
-  const out: string[] = [...base];
-  for (const e of extras) {
-    const k = e.toLowerCase();
-    if (!seen.has(k)) {
-      seen.add(k);
-      out.push(e);
-    }
-  }
-  return out;
+// Slug-safe filename for the Vercel Blob pathname.
+function safeBlobName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/_{2,}/g, "_");
 }
 
-// Universal knock-out + scoring questions, ported from the Canadian
-// Quick-Check brief. Critical items must be answered "Yes" or "N/A" — a
-// "No" disqualifies the submission.
+function fmtBytes(n: number | null | undefined): string {
+  if (!n || n <= 0) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Compliance questions for selling lighting products into Canada. The
+// list is intentionally focused on what's legally required to ship +
+// what a buyer needs to evaluate fitness for a Canadian lighting
+// program. Critical items must be answered "Yes" or "N/A"; the submit
+// button stays disabled until every critical item has an answer.
+//
+// "Critical" = required to legally sell the product in Canada or to
+// underwrite a PO (insurance). "Non-critical" = nice-to-have due
+// diligence the buyer uses to break ties between suppliers.
 const UNIVERSAL_QUESTIONS: Array<{ id: string; text: string; ref: string; critical: boolean }> = [
   { id: "u1", text: "Do you hold ISO 9001 certification or run an equivalent documented Quality Management System?", ref: "ISO 9001:2015", critical: true },
-  { id: "u2", text: "Can you supply products with valid cUL, CSA or ETL-c (Intertek) listing for the Canadian market?", ref: "CSA C22.2 No. 250 series · cUL · ETL-Canada", critical: true },
+  { id: "u2", text: "Can you supply products with a valid cUL, CSA or ETL-c (Intertek) electrical safety listing for the Canadian market?", ref: "CSA C22.2 No. 250 series · cUL · ETL-Canada", critical: true },
   { id: "u3", text: "Are your electronic products compliant with ISED ICES-003 (Class A or Class B EMC)?", ref: "ISED ICES-003", critical: true },
   { id: "u4", text: "Can you provide product datasheets and Safety Data Sheets in BOTH English and French (Quebec Bill 96)?", ref: "Quebec Charter of French Language · CPLA", critical: true },
-  { id: "u5", text: "Can your supply chain be disclosed under the Fighting Against Forced Labour and Child Labour in Supply Chains Act (Bill S-211)?", ref: "Bill S-211", critical: true },
-  { id: "u6", text: "Can you provide RoHS, REACH and Health Canada CCPSA declarations for the parts you supply?", ref: "RoHS 3 · REACH · CCPSA", critical: true },
-  { id: "u7", text: "Can you supply CBSA-compliant HS classification codes and country-of-origin marking on every product?", ref: "CBSA D11-3-1", critical: true },
+  { id: "u5", text: "Can you provide RoHS, REACH and Health Canada CCPSA declarations for the parts you supply?", ref: "RoHS 3 · REACH · CCPSA", critical: true },
+  { id: "u6", text: "Can you supply CBSA-compliant HS classification codes and country-of-origin marking on every product?", ref: "CBSA D11-3-1", critical: true },
+  { id: "u7", text: "Do your lamps / luminaires meet NRCan Energy Efficiency Regulations and minimum efficacy requirements for the Canadian market?", ref: "NRCan EER 2016 · CSA C654 / C862", critical: true },
   { id: "u8", text: "Do you carry Product Liability insurance of at least CAD 2,000,000 per occurrence?", ref: "Certificate of Insurance required at PO", critical: true },
-  { id: "u9", text: "Are your products aligned with NRCan Energy Efficiency Regulations where applicable (MEPS for lamps / luminaires)?", ref: "NRCan EER 2016", critical: false },
-  { id: "u10", text: "Have you previously supplied lighting OEMs or distributors selling into Canada?", ref: "Three references required at next stage", critical: false },
+  { id: "u9", text: "Can you provide LM-79 photometric test reports (lumen output, CCT, CRI, distribution) from an accredited lab?", ref: "IES LM-79-19 · NVLAP / A2LA-accredited lab", critical: false },
+  { id: "u10", text: "Can you provide LM-80 / TM-21 LED lifetime + lumen-maintenance data for the packages you use?", ref: "IES LM-80-20 · TM-21-21", critical: false },
+  { id: "u11", text: "Are your higher-power LED products evaluated for photobiological safety (eye safety / blue-light hazard)?", ref: "IEC 62471 · CIE S 009", critical: false },
+  { id: "u12", text: "Are your products DLC-qualified, or could they be submitted to the DesignLights Consortium for utility-rebate eligibility?", ref: "DLC Technical Requirements V5+", critical: false },
 ];
 
 const FIELD_LABEL: React.CSSProperties = {
@@ -143,8 +155,7 @@ export default function SupplierOnboardingForm({
   rejectionReason,
   clientName,
   shopSummary,
-  customManufacturing = [],
-  customMaterials = [],
+  existingAttachments = [],
 }: {
   supplierId: number;
   supplierName: string;
@@ -152,8 +163,10 @@ export default function SupplierOnboardingForm({
   rejectionReason?: string | null;
   clientName: string;
   shopSummary: ShopSummary;
-  customManufacturing?: string[];
-  customMaterials?: string[];
+  // Files the supplier already uploaded during this onboarding session.
+  // Grouped by catId in the rendered UI; the per-row Delete button posts
+  // to deleteSupplierOnboardingAttachment.
+  existingAttachments?: OnboardingAttachmentRow[];
 }) {
   const [notes, setNotes] = useState(prefill?.notes ?? "");
   const [answers, setAnswers] = useState<Record<string, "yes" | "no" | "na">>(
@@ -188,29 +201,19 @@ export default function SupplierOnboardingForm({
     return () => window.clearTimeout(t);
   }, [supplierId, answers, notes]);
 
-  // Compute score + verdict. Critical "Yes" = +3, non-critical "Yes" =
-  // +1, any critical "No" knocks the submission to "Not qualified".
-  const { score, scoreMax, verdict, knockouts, allCriticalAnswered } = useMemo(() => {
-    let earned = 0;
-    let max = 0;
-    const ko: string[] = [];
-    for (const q of UNIVERSAL_QUESTIONS) {
-      const weight = q.critical ? 3 : 1;
-      max += weight;
-      const a = answers[q.id];
-      if (a === "yes") earned += weight;
-      else if (q.critical && a === "no") ko.push(q.text);
-    }
-    const allCrit = UNIVERSAL_QUESTIONS.filter((q) => q.critical).every(
-      (q) => answers[q.id] !== undefined,
-    );
-    const pct = max > 0 ? earned / max : 0;
-    let v: "pre-qualified" | "conditional" | "not-qualified";
-    if (ko.length > 0) v = "not-qualified";
-    else if (pct >= 0.75) v = "pre-qualified";
-    else v = "conditional";
-    return { score: earned, scoreMax: max, verdict: v, knockouts: ko, allCriticalAnswered: allCrit };
-  }, [answers]);
+  // Track only whether every critical question has been answered. We
+  // deliberately don't compute a public score or "qualified / not
+  // qualified" verdict here — that's a decision the reviewer makes when
+  // they evaluate the submission, not something the supplier should see
+  // pre-rendered. Submission stays gated on critical-answered so the
+  // reviewer never gets a half-filled form.
+  const allCriticalAnswered = useMemo(
+    () =>
+      UNIVERSAL_QUESTIONS.filter((q) => q.critical).every(
+        (q) => answers[q.id] !== undefined,
+      ),
+    [answers],
+  );
 
   async function submit() {
     setErr(null);
@@ -226,9 +229,9 @@ export default function SupplierOnboardingForm({
           answers,
           notes: notes.trim(),
         },
-        score,
-        scoreMax,
-        verdict,
+        // No score/verdict sent: the reviewer evaluates on the answers
+        // themselves. Keeping these fields optional on the server lets
+        // older clients still work without renaming the action.
       });
       window.location.reload();
     } catch (e) {
@@ -315,8 +318,6 @@ export default function SupplierOnboardingForm({
         supplierId={supplierId}
         supplierName={supplierName}
         summary={shopSummary}
-        customManufacturing={customManufacturing}
-        customMaterials={customMaterials}
       />
 
       {/* CHECKLIST */}
@@ -360,9 +361,31 @@ export default function SupplierOnboardingForm({
         </div>
       </section>
 
+      {/* ATTACHMENTS */}
+      <section style={PANEL_STYLE}>
+        <h2 style={H2_STYLE}>2 · Supporting documents (optional)</h2>
+        <p
+          style={{
+            fontSize: 12.5,
+            color: "var(--lb-text-3)",
+            marginTop: -8,
+            marginBottom: 14,
+          }}
+        >
+          Upload datasheets, certifications, sample quotes, or anything else
+          that helps the reviewer understand your shop. Files attach to your
+          supplier profile and appear under the matching category whenever{" "}
+          {clientName} opens it.
+        </p>
+        <OnboardingAttachments
+          supplierId={supplierId}
+          initial={existingAttachments}
+        />
+      </section>
+
       {/* NOTES */}
       <section style={PANEL_STYLE}>
-        <h2 style={H2_STYLE}>2 · Anything else?</h2>
+        <h2 style={H2_STYLE}>3 · Anything else?</h2>
         <Field label={`Notes for ${clientName}'s reviewer`}>
           <textarea
             value={notes}
@@ -379,12 +402,7 @@ export default function SupplierOnboardingForm({
           ...PANEL_STYLE,
           position: "sticky",
           bottom: 16,
-          borderLeft:
-            knockouts.length > 0
-              ? "6px solid #dc2626"
-              : verdict === "pre-qualified"
-                ? "6px solid #16a34a"
-                : "6px solid var(--lb-accent)",
+          borderLeft: "6px solid var(--lb-accent)",
         }}
       >
         <div
@@ -397,32 +415,14 @@ export default function SupplierOnboardingForm({
           }}
         >
           <div>
-            <div
-              style={{
-                fontSize: 11.5,
-                fontWeight: 700,
-                letterSpacing: 1.2,
-                textTransform: "uppercase",
-                color:
-                  knockouts.length > 0
-                    ? "#dc2626"
-                    : verdict === "pre-qualified"
-                      ? "#16a34a"
-                      : "var(--lb-accent)",
-              }}
-            >
-              {knockouts.length > 0
-                ? "Not qualified"
-                : verdict === "pre-qualified"
-                  ? "Pre-qualified"
-                  : "Conditional"}
-            </div>
-            <div style={{ fontSize: 13.5, color: "var(--lb-text-2)", marginTop: 4 }}>
-              {knockouts.length > 0
-                ? `${knockouts.length} critical requirement${knockouts.length === 1 ? "" : "s"} not met. Review the starred items above.`
-                : allCriticalAnswered
-                  ? `You can submit your application. ${clientName} will review and respond.`
-                  : "Answer every starred (critical) question to see your verdict."}
+            {/* Simple status line. No "Pre-qualified / Not qualified"
+                verdict is rendered here — the supplier shouldn't be
+                pre-judged by the form; the reviewer makes that call
+                when they read the submission. */}
+            <div style={{ fontSize: 13.5, color: "var(--lb-text-2)" }}>
+              {allCriticalAnswered
+                ? `You can submit your application. ${clientName} will review and respond.`
+                : "Answer every starred (critical) question to enable submit."}
             </div>
             {err && (
               <div style={{ color: "#dc2626", fontSize: 12.5, marginTop: 6 }}>{err}</div>
@@ -449,39 +449,24 @@ export default function SupplierOnboardingForm({
               {draftStatus === "idle" && "Your answers save automatically as you type."}
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ fontSize: 24, fontWeight: 800, color: "var(--lb-text)" }}>
-              {score}
-              <span
-                style={{
-                  fontSize: 12,
-                  fontWeight: 500,
-                  color: "var(--lb-text-3)",
-                  marginLeft: 2,
-                }}
-              >
-                / {scoreMax}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={submit}
-              disabled={busy || !allCriticalAnswered}
-              style={{
-                padding: "10px 20px",
-                fontSize: 14,
-                fontWeight: 700,
-                borderRadius: 999,
-                border: "1px solid var(--lb-accent)",
-                background: "var(--lb-accent)",
-                color: "var(--lb-accent-fg)",
-                cursor: busy ? "wait" : "pointer",
-                opacity: busy || !allCriticalAnswered ? 0.6 : 1,
-              }}
-            >
-              {busy ? "Submitting…" : `Submit to ${clientName}`}
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={busy || !allCriticalAnswered}
+            style={{
+              padding: "10px 20px",
+              fontSize: 14,
+              fontWeight: 700,
+              borderRadius: 999,
+              border: "1px solid var(--lb-accent)",
+              background: "var(--lb-accent)",
+              color: "var(--lb-accent-fg)",
+              cursor: busy ? "wait" : "pointer",
+              opacity: busy || !allCriticalAnswered ? 0.6 : 1,
+            }}
+          >
+            {busy ? "Submitting…" : `Submit to ${clientName}`}
+          </button>
         </div>
       </section>
     </div>
@@ -500,14 +485,10 @@ function ShopSummaryCard({
   supplierId,
   supplierName,
   summary,
-  customManufacturing,
-  customMaterials,
 }: {
   supplierId: number;
   supplierName: string;
   summary: ShopSummary;
-  customManufacturing: string[];
-  customMaterials: string[];
 }) {
   const [editing, setEditing] = useState(false);
 
@@ -516,8 +497,6 @@ function ShopSummaryCard({
       <ShopSummaryEditor
         supplierId={supplierId}
         summary={summary}
-        customManufacturing={customManufacturing}
-        customMaterials={customMaterials}
         onCancel={() => setEditing(false)}
         onSaved={() => {
           setEditing(false);
@@ -678,15 +657,11 @@ function ShopSummaryCard({
 function ShopSummaryEditor({
   supplierId,
   summary,
-  customManufacturing,
-  customMaterials,
   onCancel,
   onSaved,
 }: {
   supplierId: number;
   summary: ShopSummary;
-  customManufacturing: string[];
-  customMaterials: string[];
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -698,20 +673,10 @@ function ShopSummaryEditor({
   const [category, setCategory] = useState(summary.category ?? "");
   const [subCategory, setSubCategory] = useState(summary.subCategory ?? "");
   const [products, setProducts] = useState(summary.products ?? "");
-  const [manufacturingTypes, setManufacturingTypes] = useState<string[]>(
-    summary.manufacturingTypes,
-  );
-  const [materials, setMaterials] = useState<string[]>(summary.materials);
-  // Distributor toggle. Pre-checked if the supplier already flipped it
-  // on at step 1. Flipping it on hides the manufacturing/materials
-  // controls and the save will wipe both arrays server-side.
-  const [isDistributor, setIsDistributor] = useState(summary.isDistributor);
-  const [mfgOptions, setMfgOptions] = useState<string[]>(() =>
-    mergeOptions(MANUFACTURING_TYPES, customManufacturing),
-  );
-  const [matOptions, setMatOptions] = useState<string[]>(() =>
-    mergeOptions(SUPPLIER_MATERIALS, customMaterials),
-  );
+  // Manufacturing capabilities, materials, and the buy-&-sell flag are
+  // not editable from this step-2 form anymore — see the comment in
+  // save() below. The values still sit on the supplier row from step 1
+  // and update via the regular portal post-approval.
 
   // Retargeting the engineering company is opt-in. Default off so a
   // routine save doesn't have to re-validate the email match.
@@ -720,25 +685,6 @@ function ShopSummaryEditor({
 
   const [pending, startTransition] = useTransition();
   const [err, setErr] = useState<string | null>(null);
-
-  async function persistCustomMfg(value: string): Promise<string> {
-    const res = await addSupplierTaxonomyTerm({ kind: "manufacturing", value });
-    setMfgOptions((prev) =>
-      prev.some((o) => o.toLowerCase() === res.value.toLowerCase())
-        ? prev
-        : [...prev, res.value],
-    );
-    return res.value;
-  }
-  async function persistCustomMat(value: string): Promise<string> {
-    const res = await addSupplierTaxonomyTerm({ kind: "material", value });
-    setMatOptions((prev) =>
-      prev.some((o) => o.toLowerCase() === res.value.toLowerCase())
-        ? prev
-        : [...prev, res.value],
-    );
-    return res.value;
-  }
 
   function save() {
     if (pending) return;
@@ -753,6 +699,12 @@ function ShopSummaryEditor({
     }
     startTransition(async () => {
       try {
+        // Step 2 only edits the basics + the engineering-company link.
+        // We deliberately don't send manufacturingTypes / materials /
+        // isDistributor — those were captured at step 1 and the
+        // supplier edits them later from their portal once approved.
+        // Keeping them out of this payload also stops the editor from
+        // accidentally clearing them when a supplier hits Save here.
         await updateSupplierShopInfo({
           supplierId,
           companyName,
@@ -763,9 +715,6 @@ function ShopSummaryEditor({
           subCategory: subCategory || null,
           origin: origin || null,
           products: products || null,
-          manufacturingTypes: isDistributor ? [] : manufacturingTypes,
-          materials: isDistributor ? [] : materials,
-          isDistributor,
           ...(changeEngineering
             ? { newEngineeringCompanyEmail: engineeringEmail }
             : {}),
@@ -893,53 +842,13 @@ function ShopSummaryEditor({
         </Field>
       </div>
 
-      {/* Buy & sell only toggle — same UX as the step-1 wizard. */}
-      <label
-        style={{
-          marginTop: 14,
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 10,
-          padding: 12,
-          border: "1px solid var(--lb-border)",
-          borderRadius: 8,
-          background: "var(--lb-bg)",
-          cursor: "pointer",
-        }}
-      >
-        <input
-          type="checkbox"
-          checked={isDistributor}
-          onChange={(e) => setIsDistributor(e.target.checked)}
-          style={{ marginTop: 3 }}
-        />
-        <span style={{ fontSize: 13.5, color: "var(--lb-text)", lineHeight: 1.45 }}>
-          <strong>I&apos;m a buy &amp; sell supplier</strong> (distributor /
-          reseller). I don&apos;t manufacture in-house, so skip the
-          manufacturing and materials questions.
-        </span>
-      </label>
-
-      {!isDistributor && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14, marginTop: 14 }}>
-          <MultiSelect
-            label="Manufacturing capabilities"
-            options={mfgOptions}
-            selected={manufacturingTypes}
-            onChange={setManufacturingTypes}
-            allowCustom
-            onAddCustom={persistCustomMfg}
-          />
-          <MultiSelect
-            label="Materials you work with"
-            options={matOptions}
-            selected={materials}
-            onChange={setMaterials}
-            allowCustom
-            onAddCustom={persistCustomMat}
-          />
-        </div>
-      )}
+      {/* Manufacturing capabilities, materials, and the buy-&-sell flag
+          are NOT re-asked here on step 2 — they were captured at step 1
+          and the values stay editable from the supplier's portal once
+          they're approved. Repeating them in step 2 just made the
+          compliance review screen longer for no real input gain. The
+          step-2 editor's submit still preserves whatever was already
+          on the supplier row (see ShopSummaryEditor.save). */}
 
       {/* Engineering company retargeting */}
       <div
@@ -1165,6 +1074,450 @@ function YesNoNa({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Categorised attachment uploader for the onboarding form. Mirrors the
+// Lightbase admin's AttachmentsTab look but uses the supplier-self
+// server actions (the canEdit-gated ones reject suppliers). Files land
+// on Vercel Blob at suppliers/<id>/<catId>/<safeName> so the reviewer's
+// AttachmentsTab picks them up under the matching category.
+// ─────────────────────────────────────────────────────────────────────
+
+function OnboardingAttachments({
+  supplierId,
+  initial,
+}: {
+  supplierId: number;
+  initial: OnboardingAttachmentRow[];
+}) {
+  const [items, setItems] = useState<OnboardingAttachmentRow[]>(initial);
+  const [busyCat, setBusyCat] = useState<string | null>(null);
+  const [attErr, setAttErr] = useState<string | null>(null);
+  // Section names the supplier just created but hasn't uploaded into yet.
+  // Cleared once the first file with that catId lands.
+  const [draftSections, setDraftSections] = useState<string[]>([]);
+
+  // Custom sections derived from the attachments themselves — every
+  // non-canonical catId becomes its own section. Mirrors the same logic
+  // the engineering admin's AttachmentsTab uses, so a section created
+  // here shows up there automatically.
+  const persistedCustomIds = useMemo(
+    () => listCustomSectionIds(items.map((a) => a.catId)),
+    [items],
+  );
+
+  const customCats = useMemo(() => {
+    const seen = new Set<string>(persistedCustomIds);
+    const out: { id: string; label: string; isDraft: boolean }[] = persistedCustomIds.map(
+      (id) => ({ id, label: customCatLabel(id), isDraft: false }),
+    );
+    for (const d of draftSections) {
+      const slug = customCatSlug(d);
+      if (slug && !seen.has(slug)) {
+        seen.add(slug);
+        out.push({ id: slug, label: d, isDraft: true });
+      }
+    }
+    return out;
+  }, [persistedCustomIds, draftSections]);
+
+  useEffect(() => {
+    if (draftSections.length === 0) return;
+    const persistedSlugs = new Set(persistedCustomIds);
+    const stillDrafts = draftSections.filter(
+      (d) => !persistedSlugs.has(customCatSlug(d)),
+    );
+    if (stillDrafts.length !== draftSections.length) {
+      setDraftSections(stillDrafts);
+    }
+  }, [persistedCustomIds, draftSections]);
+
+  // Render order: 8 canonical sections (shared with the reviewer) then
+  // custom sections (created by the supplier or the reviewer). The
+  // `deletable` flag drives the per-section trash button so default
+  // sections stay locked.
+  const allCats = useMemo(() => [
+    ...SUPPLIER_ATTACHMENT_CATEGORIES.map((c) => ({
+      id: c.id,
+      label: c.label,
+      icon: c.icon,
+      color: c.color,
+      desc: c.desc,
+      deletable: false,
+      isDraft: false,
+    })),
+    ...customCats.map((c) => ({
+      id: c.id,
+      label: c.label,
+      icon: CUSTOM_SECTION_META.icon,
+      color: CUSTOM_SECTION_META.color,
+      desc: c.isDraft
+        ? "Custom section (waiting for first upload)"
+        : "Custom section",
+      deletable: true,
+      isDraft: c.isDraft,
+    })),
+  ], [customCats]);
+
+  async function handleDeleteSection(catId: string, label: string, isDraft: boolean, fileCount: number) {
+    if (isDraft) {
+      setDraftSections((prev) =>
+        prev.filter((d) => customCatSlug(d) !== catId),
+      );
+      return;
+    }
+    const msg = fileCount > 0
+      ? `Delete the "${label}" section and the ${fileCount} file${fileCount === 1 ? "" : "s"} inside? This can't be undone.`
+      : `Delete the "${label}" section?`;
+    if (!window.confirm(msg)) return;
+    setAttErr(null);
+    try {
+      await deleteSupplierOnboardingCustomSection({ supplierId, catId });
+      setItems((prev) => prev.filter((a) => a.catId !== catId));
+    } catch (e) {
+      setAttErr(e instanceof Error ? e.message : "Section delete failed");
+    }
+  }
+
+  const byCat = useMemo(() => {
+    const map: Record<string, OnboardingAttachmentRow[]> = {};
+    for (const c of allCats) map[c.id] = [];
+    for (const a of items) {
+      if (map[a.catId]) map[a.catId].push(a);
+      else map[a.catId] = [a];
+    }
+    return map;
+  }, [items, allCats]);
+
+  function addCustomSection() {
+    const raw = window.prompt("Name this section (e.g. Warranty docs, Installation guides):");
+    const name = (raw ?? "").trim();
+    if (!name) return;
+    if (name.length > 80) {
+      setAttErr("Section names must be 80 characters or fewer.");
+      return;
+    }
+    const slug = customCatSlug(name);
+    if (!slug) return;
+    if (customCats.some((c) => c.id === slug)) return;
+    setDraftSections((prev) => [...prev, name]);
+  }
+
+  async function handleUpload(catId: string, files: FileList | File[]) {
+    setAttErr(null);
+    setBusyCat(catId);
+    try {
+      for (const f of Array.from(files)) {
+        const pathname = `suppliers/${supplierId}/${catId}/${safeBlobName(f.name)}`;
+        const blob = await upload(pathname, f, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: f.type || undefined,
+        });
+        const res = await addSupplierOnboardingAttachment({
+          supplierId,
+          catId,
+          name: f.name,
+          size: f.size,
+          mimeType: f.type || null,
+          url: blob.url,
+          blobPathname: blob.pathname,
+        });
+        setItems((prev) => [
+          {
+            id: res.id,
+            catId,
+            name: f.name,
+            size: f.size,
+            mimeType: f.type || null,
+            url: blob.url,
+            createdAt: new Date(),
+            uploader: null,
+          },
+          ...prev,
+        ]);
+      }
+    } catch (e) {
+      setAttErr(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setBusyCat(null);
+    }
+  }
+
+  async function handleDelete(attachmentId: number, name: string) {
+    if (!window.confirm(`Delete "${name}"?`)) return;
+    setAttErr(null);
+    try {
+      await deleteSupplierOnboardingAttachment({ supplierId, attachmentId });
+      setItems((prev) => prev.filter((a) => a.id !== attachmentId));
+    } catch (e) {
+      setAttErr(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
+  return (
+    <div>
+      {attErr && (
+        <div
+          style={{
+            padding: 10,
+            marginBottom: 10,
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.10)",
+            border: "1px solid rgba(220,38,38,0.40)",
+            color: "#dc2626",
+            fontSize: 12.5,
+          }}
+        >
+          {attErr}
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {allCats.map((cat) => {
+          const list = byCat[cat.id] ?? [];
+          const busy = busyCat === cat.id;
+          return (
+            <div
+              key={cat.id}
+              style={{
+                borderRadius: 10,
+                border: "1px solid var(--lb-border)",
+                background: "var(--lb-bg)",
+                padding: "12px 14px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  justifyContent: "space-between",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 8,
+                      display: "grid",
+                      placeItems: "center",
+                      background: `${cat.color}22`,
+                      color: cat.color,
+                      fontSize: 16,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {cat.icon}
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 13.5,
+                        fontWeight: 700,
+                        color: "var(--lb-text)",
+                      }}
+                    >
+                      {cat.label}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11.5,
+                        color: "var(--lb-text-3)",
+                        marginTop: 1,
+                      }}
+                    >
+                      {cat.desc}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: list.length > 0 ? `${cat.color}1a` : "var(--lb-bg-elev)",
+                      color: list.length > 0 ? cat.color : "var(--lb-text-3)",
+                      border: "1px solid var(--lb-border)",
+                    }}
+                  >
+                    {list.length}
+                  </span>
+                  <label
+                    style={{
+                      padding: "5px 12px",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      borderRadius: 999,
+                      background: "var(--lb-bg-elev)",
+                      border: "1px solid var(--lb-border)",
+                      color: busy ? "var(--lb-text-3)" : "var(--lb-text)",
+                      cursor: busy ? "wait" : "pointer",
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    {busy ? "Uploading…" : "+ Add"}
+                    <input
+                      type="file"
+                      multiple
+                      disabled={busy}
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          handleUpload(cat.id, e.target.files);
+                        }
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {cat.deletable && (
+                    <button
+                      type="button"
+                      title="Delete section"
+                      onClick={() =>
+                        handleDeleteSection(cat.id, cat.label, cat.isDraft, list.length)
+                      }
+                      style={{
+                        padding: "5px 10px",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        background: "var(--lb-bg-elev)",
+                        border: "1px solid var(--lb-border)",
+                        color: "#dc2626",
+                        cursor: "pointer",
+                      }}
+                    >
+                      🗑
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {list.length === 0 ? (
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 12,
+                    color: "var(--lb-text-3)",
+                    fontStyle: "italic",
+                  }}
+                >
+                  No files in this category yet.
+                </div>
+              ) : (
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: "10px 0 0",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                  }}
+                >
+                  {list.map((a) => (
+                    <li
+                      key={a.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 10,
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        background: "var(--lb-bg-elev)",
+                        border: "1px solid var(--lb-border)",
+                      }}
+                    >
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            color: "var(--lb-text)",
+                            fontWeight: 600,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                          title={a.name}
+                        >
+                          {a.name}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: "var(--lb-text-3)", marginTop: 1 }}>
+                          {fmtBytes(a.size)}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        {a.url && (
+                          <a
+                            href={a.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              padding: "4px 10px",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              borderRadius: 999,
+                              color: "var(--lb-text-2)",
+                              background: "var(--lb-bg)",
+                              border: "1px solid var(--lb-border)",
+                              textDecoration: "none",
+                            }}
+                          >
+                            View
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(a.id, a.name)}
+                          style={{
+                            padding: "4px 10px",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            borderRadius: 999,
+                            color: "#dc2626",
+                            background: "var(--lb-bg)",
+                            border: "1px solid var(--lb-border)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+
+        <button
+          type="button"
+          onClick={addCustomSection}
+          style={{
+            marginTop: 4,
+            padding: "10px 14px",
+            fontSize: 12.5,
+            fontWeight: 600,
+            borderRadius: 10,
+            border: "1px dashed var(--lb-border)",
+            background: "transparent",
+            color: "var(--lb-text-2)",
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          + Add section
+        </button>
+      </div>
     </div>
   );
 }

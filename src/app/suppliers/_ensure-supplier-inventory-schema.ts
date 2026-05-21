@@ -71,6 +71,10 @@ export function ensureSupplierInventorySchema(): Promise<void> {
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_product_attachments_product_idx" ON "supplier_product_attachments" ("product_id")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_product_attachments_category_idx" ON "supplier_product_attachments" ("category")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_product_attachments_uploaded_idx" ON "supplier_product_attachments" ("uploaded_at")`);
+      // Custom-section support: an optional free-text label stored
+      // alongside category='other_file' so suppliers can roll their own
+      // section names without us minting a new enum value per name.
+      await db.execute(sql`ALTER TABLE "supplier_product_attachments" ADD COLUMN IF NOT EXISTS "custom_category_label" text`);
     } catch (e) {
       _ensured = null; // allow retry on next call if this somehow failed
       throw e;

@@ -3,12 +3,11 @@
 // Post-signup wizard. Three completely separate forms depending on the
 // `role` chosen at /get-started.
 //
-// Supplier flow: this is the single "tell us about your shop" screen.
-// It captures EVERY shop-side fact — company info, capability tags,
-// materials, manufacturing processes, products — and writes them onto
-// the suppliers row. The step-2 form at /portal then collects only the
-// compliance answers (CSA, Bill 96, RoHS, etc), so the two screens are
-// strictly non-overlapping.
+// Supplier flow: the sign-up screen only collects the bare-minimum
+// company identifiers needed to route the request to the retailer for
+// approval. Capabilities, materials, distributor flag, and supporting
+// documents are filled in later — first via the compliance step at
+// /portal, then continuously through the "About us" tab once approved.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -18,12 +17,7 @@ import {
   claimRetailer,
   claimSupplier,
 } from "./onboarding-actions";
-import MultiSelect from "@/components/MultiSelect";
-import {
-  MANUFACTURING_TYPES,
-  SUPPLIER_MATERIALS,
-} from "@/app/suppliers/supplier-inventory-constants";
-import { addSupplierTaxonomyTerm } from "@/app/suppliers/onboarding-actions";
+import { SUPPLIER_CATEGORIES as CANONICAL_SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
 
 const SECTION: React.CSSProperties = {
   background: "var(--lb-bg-elev)",
@@ -63,37 +57,22 @@ const ENGINEERING_INDUSTRIES = [
   "Other",
 ];
 
-const SUPPLIER_CATEGORIES = [
-  "CNC Machining",
-  "Sheet Metal Fabrication",
-  "Injection Molding",
-  "Die Casting",
-  "3D Printing / Additive",
-  "Electronics / PCB Assembly",
-  "Aluminum Extrusion",
-  "Anodizing / Powder Coating",
-  "Optics",
-  "Drivers / Power Supplies",
-  "LED Components",
-  "Wire & Cable / Connectors",
-  "Distribution",
-  "Other",
-];
+// Primary-capability picker on step 1. Re-exported from the canonical
+// list in supplier-inventory-constants.ts so the wizard offers exactly
+// the same options the supplier-database admin picker shows. The OLD
+// list here was a mix of manufacturing PROCESSES (CNC, sheet-metal,
+// etc.) — those now belong in the dedicated "Manufacturing
+// capabilities" multi-select further down the form, NOT here.
+const SUPPLIER_CATEGORIES = [...CANONICAL_SUPPLIER_CATEGORIES];
 
 export default function OnboardingWizard({
   role,
   defaultEmail,
   defaultName,
-  customManufacturing = [],
-  customMaterials = [],
 }: {
   role: "engineering" | "supplier" | "retailer";
   defaultEmail: string;
   defaultName: string;
-  // Shared taxonomy entries loaded by /onboarding/page.tsx and merged
-  // with the curated constants when the supplier MultiSelect renders.
-  customManufacturing?: string[];
-  customMaterials?: string[];
 }) {
   return (
     <main style={{
@@ -121,8 +100,6 @@ export default function OnboardingWizard({
           <SupplierFlow
             defaultEmail={defaultEmail}
             defaultName={defaultName}
-            customManufacturing={customManufacturing}
-            customMaterials={customMaterials}
           />
         ) : (
           <RetailerFlow defaultEmail={defaultEmail} defaultName={defaultName} />
@@ -242,13 +219,9 @@ function EngineeringFlow({ defaultEmail, defaultName }: { defaultEmail: string; 
 function SupplierFlow({
   defaultEmail,
   defaultName,
-  customManufacturing,
-  customMaterials,
 }: {
   defaultEmail: string;
   defaultName: string;
-  customManufacturing: string[];
-  customMaterials: string[];
 }) {
   const router = useRouter();
   const [companyName, setCompanyName] = useState("");
@@ -259,44 +232,9 @@ function SupplierFlow({
   const [subCategory, setSubCategory] = useState("");
   const [country, setCountry] = useState("");
   const [products, setProducts] = useState("");
-  const [manufacturingTypes, setManufacturingTypes] = useState<string[]>([]);
-  const [materials, setMaterials] = useState<string[]>([]);
   const [engineeringEmail, setEngineeringEmail] = useState("");
-  // Distributor flag: when on, the multi-selects are skipped and saved
-  // as empty arrays. Lets buy-and-sell suppliers (resellers, distributors,
-  // brokers) sign up without having to fake an answer to questions that
-  // don't apply to them.
-  const [isDistributor, setIsDistributor] = useState(false);
-  // Local copies of the option lists so a custom entry the user typed
-  // shows up immediately even before the next page load picks it up
-  // from the shared taxonomy table.
-  const [mfgOptions, setMfgOptions] = useState<string[]>(() =>
-    mergeOptions(MANUFACTURING_TYPES, customManufacturing),
-  );
-  const [matOptions, setMatOptions] = useState<string[]>(() =>
-    mergeOptions(SUPPLIER_MATERIALS, customMaterials),
-  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
-  async function persistCustomMfg(value: string): Promise<string> {
-    const res = await addSupplierTaxonomyTerm({ kind: "manufacturing", value });
-    setMfgOptions((prev) =>
-      prev.some((o) => o.toLowerCase() === res.value.toLowerCase())
-        ? prev
-        : [...prev, res.value],
-    );
-    return res.value;
-  }
-  async function persistCustomMat(value: string): Promise<string> {
-    const res = await addSupplierTaxonomyTerm({ kind: "material", value });
-    setMatOptions((prev) =>
-      prev.some((o) => o.toLowerCase() === res.value.toLowerCase())
-        ? prev
-        : [...prev, res.value],
-    );
-    return res.value;
-  }
 
   async function submit() {
     if (!companyName.trim()) { setErr("Your company name is required"); return; }
@@ -307,6 +245,10 @@ function SupplierFlow({
     }
     setBusy(true); setErr(null);
     try {
+      // Manufacturing capabilities, materials, and the buy-&-sell flag
+      // are NOT collected on sign-up anymore — the supplier sets them
+      // later from their "About us" tab in the portal. Sending empty
+      // arrays + false here keeps the server payload shape stable.
       await claimSupplier({
         companyName,
         contactName,
@@ -316,12 +258,9 @@ function SupplierFlow({
         subCategory,
         country,
         products,
-        // Distributors don't manufacture in-house — submit empty arrays
-        // for both so the engineering company isn't shown leftover
-        // selections from before the supplier ticked the box.
-        manufacturingTypes: isDistributor ? [] : manufacturingTypes,
-        materials: isDistributor ? [] : materials,
-        isDistributor,
+        manufacturingTypes: [],
+        materials: [],
+        isDistributor: false,
         engineeringCompanyEmail: engineeringEmail,
       });
       // claimSupplier throws if the engineering company email doesn't
@@ -412,58 +351,15 @@ function SupplierFlow({
             style={{ ...INPUT, minHeight: 70, resize: "vertical" }}
           />
         </Field>
-        {/* Buy & sell toggle. Hides the next two questions when on — */}
-        {/* distributors don't manufacture in-house and don't need to */}
-        {/* enumerate raw materials. The flag persists on the suppliers */}
-        {/* row so the reviewer sees the explicit distributor signal. */}
-        <label
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 10,
-            marginTop: 14,
-            padding: 12,
-            border: "1px solid var(--lb-border)",
-            borderRadius: 8,
-            background: "var(--lb-bg)",
-            cursor: "pointer",
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={isDistributor}
-            onChange={(e) => setIsDistributor(e.target.checked)}
-            style={{ marginTop: 3 }}
-          />
-          <span style={{ fontSize: 13.5, color: "var(--lb-text)", lineHeight: 1.45 }}>
-            <strong>I&apos;m a buy &amp; sell supplier</strong> (distributor /
-            reseller). I don&apos;t manufacture in-house, so skip the
-            manufacturing and materials questions.
-          </span>
-        </label>
-
-        {!isDistributor && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14, marginTop: 14 }}>
-            <MultiSelect
-              label="Manufacturing capabilities"
-              hint="Tick every process you can do in-house. Use the search box for fast filtering, or add a custom entry below."
-              options={mfgOptions}
-              selected={manufacturingTypes}
-              onChange={setManufacturingTypes}
-              allowCustom
-              onAddCustom={persistCustomMfg}
-            />
-            <MultiSelect
-              label="Materials you work with"
-              hint="Pick every material you regularly handle. Add custom entries with the input below the list."
-              options={matOptions}
-              selected={materials}
-              onChange={setMaterials}
-              allowCustom
-              onAddCustom={persistCustomMat}
-            />
-          </div>
-        )}
+        <p style={{
+          margin: "10px 0 0",
+          fontSize: 11.5,
+          color: "var(--lb-text-3)",
+          fontStyle: "italic",
+        }}>
+          Capabilities, materials, and supporting documents are filled in
+          later from your portal &mdash; we keep this first step short.
+        </p>
       </section>
 
       {/* Engineering company link */}
@@ -701,21 +597,4 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
-}
-
-// Case-insensitive UNION of two string lists, preserving the order of
-// the first then appending any new entries from the second. Used to
-// merge the curated taxonomy constants with custom terms that prior
-// suppliers added to supplier_taxonomy_terms.
-function mergeOptions(base: readonly string[], extras: readonly string[]): string[] {
-  const seen = new Set(base.map((s) => s.toLowerCase()));
-  const out: string[] = [...base];
-  for (const e of extras) {
-    const k = e.toLowerCase();
-    if (!seen.has(k)) {
-      seen.add(k);
-      out.push(e);
-    }
-  }
-  return out;
 }

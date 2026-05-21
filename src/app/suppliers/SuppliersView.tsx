@@ -13,6 +13,7 @@ import {
   deleteSupplierComment,
   addSupplierAttachment,
   deleteSupplierAttachment,
+  deleteSupplierCustomSection,
   setSupplierStarred,
   listSupplierContacts,
   addSupplierContact,
@@ -28,6 +29,15 @@ import SupplierChat from "./SupplierChat";
 // inside each supplier's detail panel so the catalog is always one
 // click away from anywhere the supplier shows up.
 import { SupplierCatalogView } from "./SupplierInventoryTab";
+import { SUPPLIER_CATEGORIES } from "./supplier-inventory-constants";
+import {
+  SUPPLIER_ATTACHMENT_CATEGORIES,
+  SUPPLIER_ATTACHMENT_CATEGORIES_CLIENT_ONLY,
+  CUSTOM_SECTION_META,
+  customCatLabel,
+  customCatSlug,
+  listCustomSectionIds,
+} from "./supplier-attachment-categories";
 import IncotermSelect from "./IncotermSelect";
 import {
   aiGenerateSupplier,
@@ -54,21 +64,10 @@ type FullSupplier = Supplier & {
   attachments: SupplierAttachment[];
 };
 
-// File category accent colors — chosen from the SaaS donut palette for
-// dark-mode legibility. Used in `${color}22` tinted backgrounds + as the
-// icon foreground so they read as bright chips on dark surfaces.
-const ATT_CATEGORIES = [
-  { id: "specs", label: "Specifications & Datasheets", icon: "📋", color: "#2563ff", desc: "Product specs, technical datasheets, drawings" },
-  { id: "quotes", label: "Quotes & Pricing", icon: "💰", color: "#4ade80", desc: "Price lists, RFQ responses, quotations" },
-  { id: "contracts", label: "Contracts & NDAs", icon: "📜", color: "#a78bfa", desc: "MSAs, NDAs, supply agreements, terms" },
-  { id: "certs", label: "Certifications & Compliance", icon: "🛡", color: "#fbbf24", desc: "CE, UL, RoHS, REACH, ISO, FCC, CSA" },
-  { id: "tests", label: "Test Reports & QC", icon: "🧪", color: "#22d3ee", desc: "Photometric, IES, LM-80, IP ratings, QC reports" },
-  { id: "catalogs", label: "Catalogs & Brochures", icon: "📚", color: "#ff4d2e", desc: "Marketing materials, product catalogs" },
-  { id: "invoices", label: "Invoices & POs", icon: "🧾", color: "#60a5fa", desc: "Purchase orders, invoices, payment receipts" },
-  { id: "comms", label: "Communications", icon: "✉️", color: "#fb7185", desc: "Important emails, letters, meeting notes" },
-  { id: "media", label: "Photos & Media", icon: "🖼", color: "#e879f9", desc: "Product photos, factory tours, samples" },
-  { id: "other", label: "Other", icon: "📁", color: "#94a3b8", desc: "Miscellaneous documents" },
-];
+// Categories now live in supplier-attachment-categories.ts so the
+// supplier portal renders the same canonical 8 + their own custom
+// sections. ATT_CATEGORIES is composed at render time from the shared
+// constants plus the client-side-only "Invoices & POs" entry.
 
 const SCORE_WEIGHTS = {
   quality: 0.3,
@@ -78,14 +77,11 @@ const SCORE_WEIGHTS = {
   costReliability: 0.1,
 } as const;
 
-const CATEGORIES = [
-  "Acoustics", "Agency", "Agriculture/Tech", "Building Materials", "Buy/Sell Distribution",
-  "Competitor",
-  "Design Services", "Digital Services", "Distribution", "Drivers/Power", "Electrical",
-  "Electronics", "Equipment", "Exhibition/Display", "Flooring", "Furniture", "Hardware",
-  "LED/Components", "LED/Lighting", "Logistics/Freight", "Manufacturing",
-  "Manufacturing / Logistics", "Materials", "Optics", "Sealing/Thermal", "Services", "Software",
-];
+// Pulls from the canonical list in supplier-inventory-constants.ts so
+// the supplier-database picker, the onboarding wizard, and the product
+// catalog all show the same options. Wrapped as a mutable array since
+// some dropdown components want a non-readonly type.
+const CATEGORIES = [...SUPPLIER_CATEGORIES];
 const ORIGINS = [
   "Australia", "Austria", "Canada", "Canada/China", "China", "Finland", "Germany",
   "Global", "Indonesia", "Japan", "N/A", "Taiwan", "USA", "Vietnam",
@@ -1229,6 +1225,12 @@ export default function SuppliersView({
                   toggleCat={toggleCat}
                   onUpload={uploadFiles}
                   onDelete={(id) => runAction(() => deleteSupplierAttachment(id), "Deleted")}
+                  onDeleteSection={(catId) =>
+                    runAction(
+                      () => deleteSupplierCustomSection({ supplierId: active.id, catId }),
+                      "Section deleted",
+                    )
+                  }
                   onDownload={downloadAttachment}
                 />
               )}
@@ -2031,23 +2033,114 @@ function CommentsTab({
 }
 
 function AttachmentsTab({
-  supplier, canEdit, attSearch, setAttSearch, collapsedCats, toggleCat, onUpload, onDelete, onDownload,
+  supplier, canEdit, attSearch, setAttSearch, collapsedCats, toggleCat, onUpload, onDelete, onDeleteSection, onDownload,
 }: {
   supplier: FullSupplier; canEdit: boolean;
   attSearch: string; setAttSearch: (v: string) => void;
   collapsedCats: Set<string>; toggleCat: (id: string) => void;
   onUpload: (files: FileList | File[], catId: string) => void;
   onDelete: (id: number) => void;
+  onDeleteSection: (catId: string) => void;
   onDownload: (a: SupplierAttachment) => void;
 }) {
   const search = attSearch.toLowerCase().trim();
+  // Local draft sections — names the admin just created but hasn't
+  // uploaded into yet. They merge with the persisted custom sections
+  // (those derived from non-canonical catIds on the supplier's
+  // attachments) so the row stays visible until the first upload lands
+  // and the database becomes the source of truth.
+  const [draftSections, setDraftSections] = useState<string[]>([]);
+
+  // Persisted custom sections — every non-canonical catId on this
+  // supplier's attachments. Suppliers can add them from /portal/about-us
+  // and the engineering admin sees them here automatically.
+  const persistedCustomIds = useMemo(
+    () => listCustomSectionIds(supplier.attachments.map((a) => a.catId)),
+    [supplier.attachments],
+  );
+
+  // Union of persisted + draft (case-insensitive), preserving order.
+  const customCats = useMemo(() => {
+    const seen = new Set<string>(persistedCustomIds);
+    const out: { id: string; label: string; isDraft: boolean }[] = persistedCustomIds.map(
+      (id) => ({ id, label: customCatLabel(id), isDraft: false }),
+    );
+    for (const d of draftSections) {
+      const slug = customCatSlug(d);
+      if (slug && !seen.has(slug)) {
+        seen.add(slug);
+        // Use the user-typed label for drafts so it reads as they typed
+        // it; once persisted we lose that and fall back to title-casing
+        // the slug.
+        out.push({ id: slug, label: d, isDraft: true });
+      }
+    }
+    return out;
+  }, [persistedCustomIds, draftSections]);
+
+  // Drop drafts once they're backed by at least one attachment.
+  useEffect(() => {
+    if (draftSections.length === 0) return;
+    const persistedSlugs = new Set(persistedCustomIds);
+    const stillDrafts = draftSections.filter(
+      (d) => !persistedSlugs.has(customCatSlug(d)),
+    );
+    if (stillDrafts.length !== draftSections.length) {
+      setDraftSections(stillDrafts);
+    }
+  }, [persistedCustomIds, draftSections]);
+
+  function addCustomSection() {
+    const raw = window.prompt("Name this section (e.g. Warranty docs, Site visits):");
+    const name = (raw ?? "").trim();
+    if (!name) return;
+    if (name.length > 80) return;
+    const slug = customCatSlug(name);
+    if (!slug) return;
+    if (customCats.some((c) => c.id === slug)) return;
+    setDraftSections((prev) => [...prev, name]);
+  }
+
+  // Render order: 8 shared canonical → 1 client-only (Invoices & POs) →
+  // every custom section the admin or supplier has created. The
+  // `deletable` flag on each entry drives the per-section trash button —
+  // only custom sections can be removed; defaults stay forever.
+  const allCats: { id: string; label: string; icon: string; color: string; desc: string; deletable: boolean; isDraft: boolean }[] = [
+    ...SUPPLIER_ATTACHMENT_CATEGORIES.map((c) => ({ ...c, deletable: false, isDraft: false })),
+    ...SUPPLIER_ATTACHMENT_CATEGORIES_CLIENT_ONLY.map((c) => ({ ...c, deletable: false, isDraft: false })),
+    ...customCats.map((c) => ({
+      id: c.id,
+      label: c.label,
+      icon: CUSTOM_SECTION_META.icon,
+      color: CUSTOM_SECTION_META.color,
+      desc: c.isDraft ? "Custom section (waiting for first upload)" : "Custom section",
+      deletable: true,
+      isDraft: c.isDraft,
+    })),
+  ];
+
+  function handleDeleteSection(catId: string, label: string, isDraft: boolean, fileCount: number) {
+    if (isDraft) {
+      // No files persisted yet — just drop the local draft.
+      setDraftSections((prev) =>
+        prev.filter((d) => customCatSlug(d) !== catId),
+      );
+      return;
+    }
+    const msg = fileCount > 0
+      ? `Delete the "${label}" section and the ${fileCount} file${fileCount === 1 ? "" : "s"} inside? This can't be undone.`
+      : `Delete the "${label}" section?`;
+    if (!window.confirm(msg)) return;
+    onDeleteSection(catId);
+  }
+
   return (
     <>
       <div className="att-toolbar">
         <input type="text" className="att-search" placeholder="Search attachments..." value={attSearch} onChange={(e) => setAttSearch(e.target.value)} />
       </div>
       <div className="att-cats">
-        {ATT_CATEGORIES.map((cat) => {
+        {allCats.map((cat) => {
           const items = supplier.attachments.filter((a) => a.catId === cat.id && (!search || a.name.toLowerCase().includes(search)));
           const collapsed = collapsedCats.has(cat.id);
           return (
@@ -2071,11 +2164,24 @@ function AttachmentsTab({
                       }} />
                     </label>
                   )}
+                  {canEdit && cat.deletable && (
+                    <button
+                      type="button"
+                      className="icon-btn danger"
+                      title="Delete section"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteSection(cat.id, cat.label, cat.isDraft, items.length);
+                      }}
+                    >
+                      🗑
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="att-cat-body">
                 <div className="att-list">
-                  {items.length === 0 ? <div className="att-empty">No files in this category yet.</div> :
+                  {items.length === 0 ? <div className="att-empty">No files in this section yet.</div> :
                     items.map((a) => {
                       const ext = (a.name.split(".").pop() || "").toLowerCase();
                       let cls = ""; const label = ext.toUpperCase();
@@ -2110,6 +2216,27 @@ function AttachmentsTab({
             </div>
           );
         })}
+
+        {canEdit && (
+          <button
+            type="button"
+            onClick={addCustomSection}
+            style={{
+              marginTop: 8,
+              padding: "10px 14px",
+              fontSize: 13,
+              fontWeight: 600,
+              borderRadius: 10,
+              border: "1px dashed var(--lb-border)",
+              background: "transparent",
+              color: "var(--t2)",
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+          >
+            + Add section
+          </button>
+        )}
       </div>
     </>
   );
