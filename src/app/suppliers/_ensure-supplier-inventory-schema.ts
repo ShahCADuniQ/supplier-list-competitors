@@ -75,6 +75,20 @@ export function ensureSupplierInventorySchema(): Promise<void> {
       // alongside category='other_file' so suppliers can roll their own
       // section names without us minting a new enum value per name.
       await db.execute(sql`ALTER TABLE "supplier_product_attachments" ADD COLUMN IF NOT EXISTS "custom_category_label" text`);
+      // Part → model hierarchy. Top-level parts have parent_product_id
+      // NULL; model rows reference their parent part. Self-FK with
+      // ON DELETE CASCADE so deleting a part wipes its models in one
+      // shot (and the attachment cascade on the model rows then drops
+      // every model's files).
+      await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "parent_product_id" integer`);
+      await db.execute(sql`DO $$ BEGIN
+        ALTER TABLE "supplier_products"
+          ADD CONSTRAINT "supplier_products_parent_fk"
+          FOREIGN KEY ("parent_product_id")
+          REFERENCES "supplier_products"("id")
+          ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN null; END $$`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_products_parent_idx" ON "supplier_products" ("parent_product_id")`);
     } catch (e) {
       _ensured = null; // allow retry on next call if this somehow failed
       throw e;

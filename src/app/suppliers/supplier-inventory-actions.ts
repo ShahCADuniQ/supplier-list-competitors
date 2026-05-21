@@ -217,6 +217,11 @@ export async function createSupplierProduct(input: {
   notes?: string;
   thumbnailUrl?: string;
   thumbnailPathname?: string;
+  // When set, the new row becomes a model / configuration nested under
+  // the given part. Validated server-side to ensure the parent is part
+  // of the same supplier (a hostile client can't reparent a row onto
+  // somebody else's part).
+  parentProductId?: number;
   // Reserved — the server overrides this with the auth-resolved role so
   // the supplier can't pass createdByRole: "lightbase" to forge an audit
   // entry. Field is kept on the type for API symmetry.
@@ -226,10 +231,35 @@ export async function createSupplierProduct(input: {
   await ensureSupplierInventorySchema();
   if (!input.name.trim()) throw new Error("Product name is required");
 
+  // Validate the parent — it must belong to the same supplier AND itself
+  // be a top-level part (we only allow one level of nesting: part →
+  // model, no models-of-models).
+  let parentProductId: number | null = null;
+  if (input.parentProductId != null) {
+    const [parent] = await db
+      .select({
+        id: supplierProducts.id,
+        supplierId: supplierProducts.supplierId,
+        parentProductId: supplierProducts.parentProductId,
+      })
+      .from(supplierProducts)
+      .where(eq(supplierProducts.id, input.parentProductId))
+      .limit(1);
+    if (!parent) throw new Error("Parent part not found");
+    if (parent.supplierId !== input.supplierId) {
+      throw new Error("Parent part belongs to a different supplier");
+    }
+    if (parent.parentProductId != null) {
+      throw new Error("Models can only nest one level under a part");
+    }
+    parentProductId = parent.id;
+  }
+
   const [row] = await db
     .insert(supplierProducts)
     .values({
       supplierId: input.supplierId,
+      parentProductId,
       name: input.name.trim(),
       productCode: input.productCode?.trim() || null,
       description: input.description?.trim() || null,
@@ -245,6 +275,80 @@ export async function createSupplierProduct(input: {
   revalidatePath("/suppliers");
   revalidatePath("/portal");
   return { id: row.id };
+}
+
+// Reparent existing flat products INTO a part as configurations. Used
+// by the "Move existing products here" picker on a part's drawer — lets
+// the admin promote a flat catalog (Asahi's AF21D12H… cards, etc.) into
+// a single "AF Series-22mm" part without having to delete and re-upload.
+//
+// Server-side rules:
+//   • All products + the target part must belong to the same supplier.
+//   • The target part must itself be top-level (a model can't host
+//     models — single-level nesting only).
+//   • A product can't be moved under itself.
+//   • Pass parentProductId: null to demote a model back to a top-level
+//     part (release a configuration).
+export async function moveSupplierProductsToPart(input: {
+  productIds: number[];
+  parentProductId: number | null;
+}): Promise<{ moved: number }> {
+  await ensureSupplierInventorySchema();
+  if (input.productIds.length === 0) return { moved: 0 };
+
+  // Authorise on each product the caller wants to move.
+  for (const id of input.productIds) {
+    await requireProductAccess(id);
+  }
+
+  // Resolve all the rows in one query so we can validate same-supplier
+  // and detect models-of-models in one pass.
+  const rows = await db
+    .select({
+      id: supplierProducts.id,
+      supplierId: supplierProducts.supplierId,
+      parentProductId: supplierProducts.parentProductId,
+    })
+    .from(supplierProducts)
+    .where(
+      inArray(supplierProducts.id, [
+        ...input.productIds,
+        ...(input.parentProductId != null ? [input.parentProductId] : []),
+      ]),
+    );
+
+  if (input.parentProductId != null) {
+    const parent = rows.find((r) => r.id === input.parentProductId);
+    if (!parent) throw new Error("Target part not found");
+    if (parent.parentProductId != null) {
+      throw new Error("Configurations can only nest one level under a part");
+    }
+    // requireProductAccess on the parent too — admins can do anything
+    // in their tenant, suppliers can only operate on their own catalog.
+    await requireProductAccess(parent.id);
+
+    // Same-supplier check for every row we're moving.
+    for (const id of input.productIds) {
+      if (id === parent.id) throw new Error("A part can't be moved under itself");
+      const r = rows.find((x) => x.id === id);
+      if (!r) throw new Error(`Product ${id} not found`);
+      if (r.supplierId !== parent.supplierId) {
+        throw new Error("All products must belong to the same supplier as the target part");
+      }
+    }
+  }
+
+  await db
+    .update(supplierProducts)
+    .set({
+      parentProductId: input.parentProductId,
+      updatedAt: new Date(),
+    })
+    .where(inArray(supplierProducts.id, input.productIds));
+
+  revalidatePath("/suppliers");
+  revalidatePath("/portal");
+  return { moved: input.productIds.length };
 }
 
 export async function updateSupplierProduct(input: {

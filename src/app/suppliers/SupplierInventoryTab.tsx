@@ -18,6 +18,7 @@ import {
   deleteSupplierProduct,
   deleteSupplierProductAttachment,
   deleteSupplierProductCustomSection,
+  moveSupplierProductsToPart,
   listSupplierProducts,
   listSuppliersWithCatalog,
   updateSupplierProduct,
@@ -257,16 +258,46 @@ export function SupplierCatalogView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Top-level "parts" only — model rows (parentProductId != null) hang
+  // inside their parent's drawer rather than appearing as standalone
+  // cards. Search matches on a part OR any of its model children so the
+  // user can type a model code and still find it.
+  const modelsByParent = useMemo(() => {
+    const map = new Map<number, SupplierProductWithAttachments[]>();
+    for (const p of products ?? []) {
+      if (p.parentProductId != null) {
+        const list = map.get(p.parentProductId) ?? [];
+        list.push(p);
+        map.set(p.parentProductId, list);
+      }
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return map;
+  }, [products]);
+
   const filtered = useMemo(() => {
+    const list = (products ?? []).filter((p) => p.parentProductId == null);
     const q = search.trim().toLowerCase();
-    const list = products ?? [];
     if (!q) return list;
-    return list.filter((p) =>
-      `${p.name} ${p.productCode ?? ""} ${p.category ?? ""} ${p.description ?? ""}`
-        .toLowerCase()
-        .includes(q),
-    );
-  }, [products, search]);
+    return list.filter((p) => {
+      const hay = [
+        p.name,
+        p.productCode ?? "",
+        p.category ?? "",
+        p.description ?? "",
+        ...(modelsByParent.get(p.id) ?? []).flatMap((m) => [
+          m.name,
+          m.productCode ?? "",
+          m.description ?? "",
+        ]),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [products, search, modelsByParent]);
 
   const openProduct = openProductId != null
     ? (products ?? []).find((p) => p.id === openProductId) ?? null
@@ -292,7 +323,8 @@ export function SupplierCatalogView({
                 {supplierName || "Supplier"} — Catalog
               </h1>
               <p style={{ fontSize: 13, color: "var(--lb-text-3)", margin: "4px 0 0" }}>
-                Products this supplier offers. Drop datasheets, quotes, contracts, certifications, QC reports, or photos under any product — each file is timestamped at upload.
+                Each card is a <strong>part</strong>. Open a part to drop part-level files,
+                then add <strong>configurations</strong> inside it (e.g. AF Series-22mm → AF21D12H3060G, AF21D12H1060G…) — every configuration carries its own files.
               </p>
             </>
           )}
@@ -309,7 +341,7 @@ export function SupplierCatalogView({
             <button type="button" onClick={() => setView("list")} style={PILL_BTN(view === "list")}>List</button>
           </div>
           {canEdit && (
-            <button type="button" onClick={() => setCreating(true)} style={PRIMARY_BTN}>+ New product</button>
+            <button type="button" onClick={() => setCreating(true)} style={PRIMARY_BTN}>+ New part</button>
           )}
         </div>
       </header>
@@ -324,11 +356,18 @@ export function SupplierCatalogView({
         <div style={{ color: "var(--lb-text-3)", fontSize: 13 }}>Loading catalog…</div>
       ) : filtered.length === 0 ? (
         <div style={{ padding: 32, textAlign: "center", color: "var(--lb-text-3)", fontSize: 13, border: "1px dashed var(--lb-border)", borderRadius: 10 }}>
-          {search ? "No products match your search." : "No products in this catalog yet. Click \"+ New product\" to add one."}
+          {search ? "No parts match your search." : "No parts in this catalog yet. Click \"+ New part\" to create one — you can add configurations under it after."}
         </div>
       ) : view === "card" ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-          {filtered.map((p) => <ProductCard key={p.id} product={p} onOpen={() => setOpenProductId(p.id)} />)}
+          {filtered.map((p) => (
+            <ProductCard
+              key={p.id}
+              product={p}
+              modelCount={(modelsByParent.get(p.id) ?? []).length}
+              onOpen={() => setOpenProductId(p.id)}
+            />
+          ))}
         </div>
       ) : (
         <ProductListTable products={filtered} onOpen={(id) => setOpenProductId(id)} />
@@ -344,9 +383,18 @@ export function SupplierCatalogView({
       {openProduct && (
         <ProductDrawer
           product={openProduct}
+          // Configurations under this part. Empty array when none.
+          models={modelsByParent.get(openProduct.id) ?? []}
+          parentProduct={
+            openProduct.parentProductId != null
+              ? (products ?? []).find((p) => p.id === openProduct.parentProductId) ?? null
+              : null
+          }
+          allProducts={products ?? []}
           canEdit={canEdit}
           onClose={() => setOpenProductId(null)}
           onChanged={reload}
+          onOpenSibling={(id) => setOpenProductId(id)}
         />
       )}
     </div>
@@ -357,9 +405,10 @@ export function SupplierCatalogView({
 // Card view of one product. Shows thumbnail + per-category attachment counts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ProductCard({ product, onOpen }: {
+function ProductCard({ product, onOpen, modelCount = 0 }: {
   product: SupplierProductWithAttachments;
   onOpen: () => void;
+  modelCount?: number;
 }) {
   // Card cover preference:
   //   1. Explicit cover the supplier picked (product.thumbnailUrl).
@@ -452,8 +501,27 @@ function ProductCard({ product, onOpen }: {
           );
         })}
       </div>
-      <div style={{ fontSize: 10.5, color: "var(--lb-text-3)" }}>
-        Added {fmtStamp(product.createdAt)}
+      <div style={{
+        fontSize: 10.5,
+        color: "var(--lb-text-3)",
+        display: "flex",
+        gap: 8,
+        flexWrap: "wrap",
+        alignItems: "center",
+      }}>
+        <span>Added {fmtStamp(product.createdAt)}</span>
+        {modelCount > 0 && (
+          <span style={{
+            padding: "2px 7px",
+            borderRadius: 999,
+            background: "rgba(124,58,237,0.15)",
+            color: "#7c3aed",
+            border: "1px solid rgba(124,58,237,0.3)",
+            fontWeight: 700,
+          }}>
+            {modelCount} model{modelCount === 1 ? "" : "s"}
+          </span>
+        )}
       </div>
     </button>
   );
@@ -565,10 +633,13 @@ function td(): React.CSSProperties {
 // New product dialog
 // ─────────────────────────────────────────────────────────────────────────────
 
-function NewProductDialog({ supplierId, onClose, onCreated }: {
+function NewProductDialog({ supplierId, onClose, onCreated, parentProductId, parentName }: {
   supplierId: number;
   onClose: () => void;
   onCreated: () => void;
+  // When set, the new row is created as a model under this part.
+  parentProductId?: number;
+  parentName?: string;
 }) {
   const [name, setName] = useState("");
   const [productCode, setProductCode] = useState("");
@@ -587,6 +658,7 @@ function NewProductDialog({ supplierId, onClose, onCreated }: {
         productCode: productCode || undefined,
         category: category || undefined,
         description: description || undefined,
+        parentProductId,
       });
       onCreated();
     } catch (e) {
@@ -597,7 +669,14 @@ function NewProductDialog({ supplierId, onClose, onCreated }: {
   }
 
   return (
-    <ModalShell title="New product" onClose={onClose}>
+    <ModalShell
+      title={
+        parentProductId != null
+          ? `New model under ${parentName ?? "part"}`
+          : "New product"
+      }
+      onClose={onClose}
+    >
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <Field label="Name *">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. AF21D12H80G LED Module" style={INPUT_STYLE} autoFocus />
@@ -642,16 +721,35 @@ type ActiveTab =
   | { kind: "enum"; key: SupplierProductAttachmentCategory }
   | { kind: "custom"; label: string };
 
-function ProductDrawer({ product, canEdit, onClose, onChanged }: {
+function ProductDrawer({ product, models, parentProduct, allProducts, canEdit, onClose, onChanged, onOpenSibling }: {
   product: SupplierProductWithAttachments;
+  // Sub-models nested under this part. Empty for parts with no
+  // configurations, and ignored entirely when the drawer is showing a
+  // model (models can't have models of their own).
+  models: SupplierProductWithAttachments[];
+  // When the drawer is showing a MODEL, this is the part it belongs to.
+  // Null when the drawer is on a top-level part.
+  parentProduct: SupplierProductWithAttachments | null;
+  // Every product for this supplier (parts + models). Used by the
+  // "Move existing parts in" picker so the admin can promote flat
+  // products into the current part as configurations.
+  allProducts: SupplierProductWithAttachments[];
   canEdit: boolean;
   onClose: () => void;
   onChanged: () => void;
+  // Open another product (a sibling model, or the parent part). The
+  // parent owns the open-product state so we route through it instead
+  // of pushing local drawer stacks.
+  onOpenSibling: (id: number) => void;
 }) {
   const [tab, setTab] = useState<ActiveTab>({ kind: "enum", key: "spec_datasheet" });
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [creatingModel, setCreatingModel] = useState(false);
+  const [movingExisting, setMovingExisting] = useState(false);
+
+  const isPart = product.parentProductId == null;
   // Locally-created sections that have no files yet. They live here
   // until the supplier uploads the first file into them — after that the
   // section persists naturally as a group of "other_file" attachments.
@@ -738,6 +836,35 @@ function ProductDrawer({ product, canEdit, onClose, onChanged }: {
 
   return (
     <DrawerShell title={product.name} subtitle={product.supplierName} onClose={onClose}>
+      {/* Breadcrumb back to parent — only on models. */}
+      {parentProduct && (
+        <div style={{
+          padding: "10px 16px 0",
+          fontSize: 12,
+          color: "var(--lb-text-3)",
+        }}>
+          <button
+            type="button"
+            onClick={() => onOpenSibling(parentProduct.id)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--lb-accent)",
+              cursor: "pointer",
+              padding: 0,
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            ← Back to {parentProduct.name}
+          </button>
+          <span style={{ margin: "0 6px" }}>·</span>
+          <span style={{ fontWeight: 700, color: "var(--lb-text-2)" }}>
+            Model / configuration
+          </span>
+        </div>
+      )}
+
       {/* product meta + edit/delete */}
       <ProductMetaBlock
         product={product}
@@ -749,6 +876,46 @@ function ProductDrawer({ product, canEdit, onClose, onChanged }: {
         busy={busy}
       />
       {err && <div style={{ color: "#dc2626", fontSize: 12.5, padding: "4px 16px" }}>{err}</div>}
+
+      {/* Configurations — only shown for parts (not models). */}
+      {isPart && (
+        <ModelsBlock
+          parentProduct={product}
+          models={models}
+          canEdit={canEdit}
+          onOpenModel={(id) => onOpenSibling(id)}
+          onAddModel={() => setCreatingModel(true)}
+          onMoveExisting={() => setMovingExisting(true)}
+        />
+      )}
+
+      {creatingModel && (
+        <NewProductDialog
+          supplierId={product.supplierId}
+          parentProductId={product.id}
+          parentName={product.name}
+          onClose={() => setCreatingModel(false)}
+          onCreated={() => { setCreatingModel(false); onChanged(); }}
+        />
+      )}
+
+      {movingExisting && (
+        <MoveProductsToPartDialog
+          parent={product}
+          // Pickable rows = all OTHER top-level parts on the same
+          // supplier (you can't pull a row into itself, and we don't
+          // surface existing configurations because they're already
+          // nested somewhere).
+          candidates={allProducts.filter(
+            (p) =>
+              p.id !== product.id &&
+              p.supplierId === product.supplierId &&
+              p.parentProductId == null,
+          )}
+          onClose={() => setMovingExisting(false)}
+          onMoved={() => { setMovingExisting(false); onChanged(); }}
+        />
+      )}
 
       {/* Vertical category rail on the left, panel on the right. Each */}
       {/* button stretches full-width so even long labels stay legible — no */}
@@ -896,6 +1063,405 @@ function ProductDrawer({ product, canEdit, onClose, onChanged }: {
         </div>
       </div>
     </DrawerShell>
+  );
+}
+
+// Part-level "Models / Configurations" block. Rendered only when the
+// drawer is showing a top-level part. Each model carries its own
+// attachment categories; clicking a row swaps the drawer to that
+// model's view (via onOpenModel). The "+ Add model" button kicks off
+// the NewProductDialog with parentProductId pre-filled.
+function ModelsBlock({
+  parentProduct,
+  models,
+  canEdit,
+  onOpenModel,
+  onAddModel,
+  onMoveExisting,
+}: {
+  parentProduct: SupplierProductWithAttachments;
+  models: SupplierProductWithAttachments[];
+  canEdit: boolean;
+  onOpenModel: (id: number) => void;
+  onAddModel: () => void;
+  // Open the "move existing parts into this part as configurations"
+  // picker. Lets the admin promote a flat catalog into a single part.
+  onMoveExisting: () => void;
+}) {
+  return (
+    <section
+      style={{
+        padding: 16,
+        borderBottom: "1px solid var(--lb-border)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+            }}
+          >
+            Configurations
+          </div>
+          <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>
+            {models.length === 0
+              ? `No configurations for ${parentProduct.name} yet. Files dropped below apply to the part itself.`
+              : `${models.length} configuration${models.length === 1 ? "" : "s"} under ${parentProduct.name}. Each one carries its own files.`}
+          </div>
+        </div>
+        {canEdit && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={onMoveExisting}
+              style={{
+                padding: "6px 14px",
+                fontSize: 12.5,
+                fontWeight: 700,
+                borderRadius: 999,
+                background: "var(--lb-bg-elev)",
+                border: "1px solid var(--lb-border)",
+                color: "var(--lb-text)",
+                cursor: "pointer",
+              }}
+            >
+              Move existing parts in…
+            </button>
+            <button
+              type="button"
+              onClick={onAddModel}
+              style={{
+                padding: "6px 14px",
+                fontSize: 12.5,
+                fontWeight: 700,
+                borderRadius: 999,
+                background: "var(--lb-accent)",
+                border: "1px solid var(--lb-accent)",
+                color: "var(--lb-accent-fg)",
+                cursor: "pointer",
+              }}
+            >
+              + Add configuration
+            </button>
+          </div>
+        )}
+      </div>
+
+      {models.length > 0 && (
+        <ul
+          style={{
+            listStyle: "none",
+            padding: 0,
+            margin: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          {models.map((m) => {
+            const fileCount = m.attachments.length;
+            return (
+              <li key={m.id}>
+                <button
+                  type="button"
+                  onClick={() => onOpenModel(m.id)}
+                  title="Open this model's files"
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    background: "var(--lb-bg)",
+                    border: "1px solid var(--lb-border)",
+                    color: "var(--lb-text)",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    fontSize: 13,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        fontFamily: m.productCode
+                          ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                          : undefined,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {m.productCode || m.name}
+                    </div>
+                    {m.productCode && m.name && m.name !== m.productCode && (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "var(--lb-text-3)",
+                          marginTop: 2,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {m.name}
+                      </div>
+                    )}
+                  </div>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--lb-text-3)",
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {fileCount} file{fileCount === 1 ? "" : "s"}
+                  </span>
+                  <span style={{ color: "var(--lb-text-3)", fontSize: 14 }}>→</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// Picker dialog: pull existing top-level parts into the current part as
+// configurations. Multi-select with a search filter; on save it calls
+// moveSupplierProductsToPart which sets parent_product_id on every
+// selected row in one shot.
+function MoveProductsToPartDialog({
+  parent,
+  candidates,
+  onClose,
+  onMoved,
+}: {
+  parent: SupplierProductWithAttachments;
+  candidates: SupplierProductWithAttachments[];
+  onClose: () => void;
+  onMoved: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return candidates;
+    return candidates.filter((p) =>
+      `${p.name} ${p.productCode ?? ""} ${p.category ?? ""}`
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [candidates, search]);
+
+  function toggle(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function submit() {
+    if (selected.size === 0 || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await moveSupplierProductsToPart({
+        productIds: Array.from(selected),
+        parentProductId: parent.id,
+      });
+      onMoved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Move failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ModalShell title={`Move parts into ${parent.name}`} onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+        <p style={{ margin: 0, fontSize: 12.5, color: "var(--lb-text-3)" }}>
+          Pick the existing parts you want to nest as configurations under{" "}
+          <strong>{parent.name}</strong>. Their files come with them — nothing is
+          re-uploaded.
+        </p>
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Filter by name, code, or category…"
+          style={INPUT_STYLE}
+          autoFocus
+        />
+        {candidates.length === 0 ? (
+          <div
+            style={{
+              padding: 16,
+              textAlign: "center",
+              border: "1px dashed var(--lb-border)",
+              borderRadius: 8,
+              color: "var(--lb-text-3)",
+              fontSize: 12.5,
+            }}
+          >
+            No other top-level parts on this supplier yet.
+          </div>
+        ) : (
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              maxHeight: 320,
+              overflowY: "auto",
+              border: "1px solid var(--lb-border)",
+              borderRadius: 8,
+              background: "var(--lb-bg)",
+            }}
+          >
+            {filtered.length === 0 ? (
+              <li style={{ padding: 12, color: "var(--lb-text-3)", fontSize: 12.5 }}>
+                Nothing matches that filter.
+              </li>
+            ) : (
+              filtered.map((p) => {
+                const on = selected.has(p.id);
+                return (
+                  <li key={p.id}>
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "8px 10px",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        background: on
+                          ? "color-mix(in srgb, var(--lb-accent) 12%, transparent)"
+                          : "transparent",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => toggle(p.id)}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 700,
+                            color: "var(--lb-text)",
+                            fontFamily: p.productCode
+                              ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                              : undefined,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {p.productCode || p.name}
+                        </div>
+                        {p.productCode && p.name && p.name !== p.productCode && (
+                          <div
+                            style={{
+                              fontSize: 11.5,
+                              color: "var(--lb-text-3)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {p.name}
+                          </div>
+                        )}
+                      </div>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          color: "var(--lb-text-3)",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {p.attachments.length} file{p.attachments.length === 1 ? "" : "s"}
+                      </span>
+                    </label>
+                  </li>
+                );
+              })
+            )}
+          </ul>
+        )}
+        {err && (
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              background: "rgba(220,38,38,0.10)",
+              border: "1px solid rgba(220,38,38,0.40)",
+              color: "#dc2626",
+              fontSize: 12.5,
+            }}
+          >
+            {err}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 12, color: "var(--lb-text-3)" }}>
+            {selected.size} selected
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" onClick={onClose} style={MINI_BTN} disabled={busy}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={busy || selected.size === 0}
+              style={{
+                ...PRIMARY_BTN,
+                opacity: busy || selected.size === 0 ? 0.6 : 1,
+              }}
+            >
+              {busy
+                ? "Moving…"
+                : selected.size > 0
+                  ? `Move ${selected.size} into ${parent.name}`
+                  : "Pick at least one"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </ModalShell>
   );
 }
 

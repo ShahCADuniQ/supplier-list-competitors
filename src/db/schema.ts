@@ -468,6 +468,14 @@ export const supplierProducts = pgTable(
     supplierId: integer("supplier_id")
       .notNull()
       .references(() => suppliers.id, { onDelete: "cascade" }),
+    // Optional parent product. When NULL the row is a top-level "part"
+    // (the thing the supplier actually sells); when set, the row is a
+    // model / configuration / variant nested under its parent part. The
+    // attachments table (supplier_product_attachments) is shared across
+    // both levels — a part's attachments hang off the part row, and
+    // each model's attachments hang off its own row. Self-reference
+    // with ON DELETE CASCADE so deleting a part wipes its models too.
+    parentProductId: integer("parent_product_id"),
     name: text("name").notNull(),
     productCode: text("product_code"),
     description: text("description"),
@@ -487,6 +495,7 @@ export const supplierProducts = pgTable(
     supplierIdx: index("supplier_products_supplier_idx").on(t.supplierId),
     archivedIdx: index("supplier_products_archived_idx").on(t.archived),
     nameIdx: index("supplier_products_name_idx").on(t.name),
+    parentIdx: index("supplier_products_parent_idx").on(t.parentProductId),
   }),
 );
 export type SupplierProduct = typeof supplierProducts.$inferSelect;
