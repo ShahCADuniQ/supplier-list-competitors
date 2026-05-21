@@ -394,6 +394,23 @@ export function ensureOrdersSchema(): Promise<void> {
       await db.execute(sql`ALTER TABLE "purchase_order_lines" ADD COLUMN IF NOT EXISTS "inventory_item_id" integer REFERENCES "inventory_items"("id") ON DELETE SET NULL`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "purchase_order_lines_lightbase_ref_idx" ON "purchase_order_lines" ("lightbase_ref")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "purchase_order_lines_inventory_item_idx" ON "purchase_order_lines" ("inventory_item_id")`);
+
+      // Migration 0033 — IFC import + assembly hierarchy + qty lifecycle.
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "kind" text NOT NULL DEFAULT 'part'`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "parent_assembly_id" integer REFERENCES "inventory_items"("id") ON DELETE SET NULL`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "weight_g" numeric(14,4)`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "surface_area_mm2" numeric(16,4)`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "volume_mm3" numeric(16,4)`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "material" text`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "density_g_cm3" numeric(10,4)`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "thumbnail_url" text`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "thumbnail_pathname" text`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "ifc_source_url" text`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "ifc_source_name" text`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "pending_qty" integer NOT NULL DEFAULT 0`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "confirmed_qty" integer NOT NULL DEFAULT 0`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_kind_idx" ON "inventory_items" ("kind")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_parent_idx" ON "inventory_items" ("parent_assembly_id")`);
     } catch (e) {
       console.warn(
         "[orders] ensureOrdersSchema failed — run `npm run db:apply` to apply migration 0024.",

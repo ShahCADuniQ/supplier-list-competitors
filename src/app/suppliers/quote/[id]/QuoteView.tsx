@@ -14,12 +14,30 @@ import type {
 } from "@/db/schema";
 import { TRANSPORT_MODE_META, fmtMoney } from "@/app/suppliers/_orders-constants";
 
+// Same subset of inventory fields the RfqView uses — passed through from
+// the loader so the printable quote shows WEIGHT / SURFACE AREA / VOLUME.
+type QuoteViewInventory = {
+  id: number;
+  weightG: string | null;
+  surfaceAreaMm2: string | null;
+  volumeMm3: string | null;
+  material: string | null;
+};
+
+function fmtNumber(v: string | number | null): string {
+  if (v == null || v === "") return "—";
+  const n = typeof v === "number" ? v : parseFloat(v);
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export default function QuoteView({
   quote,
   rfq,
   items,
   lines,
   attachmentsByItem = {},
+  inventoryByItemId = {},
   supplierLogoUrl = null,
   clientLogoUrl = null,
   clientName,
@@ -29,6 +47,7 @@ export default function QuoteView({
   items: RfqItem[];
   lines: SupplierQuoteLine[];
   attachmentsByItem?: Record<number, RfqItemAttachment[]>;
+  inventoryByItemId?: Record<number, QuoteViewInventory>;
   supplierLogoUrl?: string | null;
   clientLogoUrl?: string | null;
   clientName: string;
@@ -191,6 +210,10 @@ export default function QuoteView({
                 <th style={{ ...th, textAlign: "right" }}>QTY</th>
                 <th style={{ ...th, textAlign: "right" }}>SEC. STOCK</th>
                 <th style={{ ...th, textAlign: "right" }}>TOTAL QTY</th>
+                <th style={{ ...th, textAlign: "left" }}>MATERIAL</th>
+                <th style={{ ...th, textAlign: "right" }}>WEIGHT (g)</th>
+                <th style={{ ...th, textAlign: "right" }}>SURFACE (mm²)</th>
+                <th style={{ ...th, textAlign: "right" }}>VOLUME (mm³)</th>
                 <th style={{ ...th, textAlign: "right" }}>MOQ</th>
                 <th style={{ ...th, textAlign: "right" }}>Unit price</th>
                 <th style={{ ...th, textAlign: "right" }}>Total</th>
@@ -199,7 +222,7 @@ export default function QuoteView({
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} style={{ padding: 18, textAlign: "center", color: "#888" }}>
+                  <td colSpan={14} style={{ padding: 18, textAlign: "center", color: "#888" }}>
                     No line items.
                   </td>
                 </tr>
@@ -207,6 +230,7 @@ export default function QuoteView({
                 rows.map(({ it, l, unit, total }) => {
                   const atts = attachmentsByItem[it.id] ?? [];
                   const photos = atts.filter((a) => a.kind === "photo");
+                  const inv = it.inventoryItemId != null ? inventoryByItemId[it.inventoryItemId] : undefined;
                   return (
                     <tr key={it.id} style={{ borderBottom: "1px solid #e5e7eb" }}>
                       <td style={{ ...td, textAlign: "center", background: "#f0f9ff" }}>
@@ -240,6 +264,18 @@ export default function QuoteView({
                       <td style={{ ...td, textAlign: "right" }}>{it.securityStock}</td>
                       <td style={{ ...td, textAlign: "right", fontWeight: 700, background: "#f5f5f7" }}>
                         {it.qty + it.securityStock}
+                      </td>
+                      <td style={{ ...td, textAlign: "left", color: "#222", fontSize: 10.5 }}>
+                        {inv?.material ?? "—"}
+                      </td>
+                      <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                        {fmtNumber(inv?.weightG ?? null)}
+                      </td>
+                      <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                        {fmtNumber(inv?.surfaceAreaMm2 ?? null)}
+                      </td>
+                      <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                        {fmtNumber(inv?.volumeMm3 ?? null)}
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>{l?.moq ?? "—"}</td>
                       <td style={{ ...td, textAlign: "right" }}>

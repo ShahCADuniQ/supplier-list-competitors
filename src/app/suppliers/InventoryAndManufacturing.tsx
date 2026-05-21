@@ -11,6 +11,11 @@ import BarcodeGenerator from "./BarcodeGenerator";
 import StubTab from "./StubTab";
 import OrdersTab from "./OrdersTab";
 import InventoryTab from "./InventoryTab";
+import OnboardingReviewPanel from "./OnboardingReviewPanel";
+// SupplierInventoryTab is no longer rendered as its own top-level tab.
+// Its content (SupplierCatalogView) is now embedded inside each
+// supplier's detail panel in SuppliersView, so you click into a
+// supplier and use the new "Inventory" tab there.
 import type {
   Supplier,
   SupplierAttachment,
@@ -27,9 +32,13 @@ type FullSupplier = Supplier & {
 };
 
 const SUB_TABS = [
+  { key: "onboarding-requests", label: "Onboarding Request" },
   { key: "suppliers", label: "Suppliers" },
   { key: "orders", label: "Orders (RFQ & PO)" },
-  { key: "inventory", label: "Inventory" },
+  // Supplier Inventory was here; moved into each supplier's detail
+  // panel inside SuppliersView (the "Inventory" tab on the right side
+  // of the panel header).
+  { key: "inventory", label: "Lightbase Inventory" },
   { key: "manufacturing", label: "Manufacturing" },
   { key: "boms", label: "BOMs" },
   { key: "quality", label: "Quality" },
@@ -45,7 +54,7 @@ export default function InventoryAndManufacturing({
   initialData: FullSupplier[];
   canEdit: boolean;
 }) {
-  const [tab, setTab] = useState<TabKey>("suppliers");
+  const [tab, setTab] = useState<TabKey>("onboarding-requests");
 
   return (
     <div className="flex flex-col min-h-full" style={{ background: "var(--lb-bg)" }}>
@@ -94,6 +103,11 @@ export default function InventoryAndManufacturing({
       </nav>
 
       <main className="flex-1">
+        {tab === "onboarding-requests" && (
+          <div style={{ padding: 24, background: "var(--lb-bg)", minHeight: "100%" }}>
+            <OnboardingReviewPanel canEdit={canEdit} />
+          </div>
+        )}
         {tab === "suppliers" && (
           <SuppliersView initialData={initialData} canEdit={canEdit} />
         )}

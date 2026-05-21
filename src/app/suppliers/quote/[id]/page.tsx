@@ -4,6 +4,7 @@ import { desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   clients,
+  inventoryItems,
   rfqItemAttachments,
   rfqItems,
   rfqs,
@@ -130,6 +131,26 @@ export default async function QuotePage({
     (attachmentsByItem[a.rfqItemId] ?? (attachmentsByItem[a.rfqItemId] = [])).push(a);
   }
 
+  // Same inventory-properties join as RfqView so the quote prints with
+  // WEIGHT / SURFACE AREA / VOLUME columns matching the original RFQ.
+  const inventoryIds = items
+    .map((it) => it.inventoryItemId)
+    .filter((id): id is number => id != null);
+  const invRows = inventoryIds.length > 0
+    ? await db
+        .select({
+          id: inventoryItems.id,
+          weightG: inventoryItems.weightG,
+          surfaceAreaMm2: inventoryItems.surfaceAreaMm2,
+          volumeMm3: inventoryItems.volumeMm3,
+          material: inventoryItems.material,
+        })
+        .from(inventoryItems)
+        .where(inArray(inventoryItems.id, inventoryIds))
+    : [];
+  const inventoryByItemId: Record<number, (typeof invRows)[number]> = {};
+  for (const r of invRows) inventoryByItemId[r.id] = r;
+
   return (
     <div style={{ background: "var(--lb-bg)", minHeight: "100%", padding: 24 }}>
       <div style={{ maxWidth: 1000, margin: "0 auto", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -147,6 +168,7 @@ export default async function QuotePage({
           items={items}
           lines={lines}
           attachmentsByItem={attachmentsByItem}
+          inventoryByItemId={inventoryByItemId}
           supplierLogoUrl={supplierLogoRow?.logoUrl ?? null}
           clientLogoUrl={clientRow?.logoUrl ?? null}
           clientName={CLIENT_CONFIG.name}

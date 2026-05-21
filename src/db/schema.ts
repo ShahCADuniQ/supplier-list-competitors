@@ -34,6 +34,12 @@ export const userProfiles = pgTable(
     // every internal section (ERP / CRM / OEE / Tools / Admin). Migration
     // 0026; self-healed in src/lib/permissions.ts.
     isSupplier: boolean("is_supplier").notNull().default(false),
+    // Retailer / buyer users — companies that BUY finished goods from a
+    // CADuniQ engineering company (the third public sign-up role on
+    // /get-started). They see a curated buyer portal at /retailer and
+    // are blocked from every internal section. Self-healed by
+    // ensureUserProfileColumns().
+    isRetailer: boolean("is_retailer").notNull().default(false),
     // Job role within their company (CEO, COO, Operations, Procurement, …).
     // See JOB_ROLES in src/lib/job-roles.ts. Migration 0027.
     jobRole: text("job_role"),
@@ -42,6 +48,13 @@ export const userProfiles = pgTable(
     // first run via the backfill in ensure-orders-schema's sibling helper.
     // Migration 0027.
     clientId: integer("client_id"),
+    // Tracks the role the user picked on /get-started but hasn't yet
+    // completed onboarding for ("engineering" | "supplier" | "retailer").
+    // Set when they first land on /onboarding?role=X, used by the home page
+    // to resume them on the correct wizard if they sign out mid-flow.
+    // Stays set after onboarding completes (claim flags + clientId are the
+    // authoritative routing inputs once any of them flip on).
+    pendingSignupRole: text("pending_signup_role"),
     canViewSuppliers: boolean("can_view_suppliers").notNull().default(false),
     canViewCompetitors: boolean("can_view_competitors").notNull().default(false),
     canViewHandbook: boolean("can_view_handbook").notNull().default(false),
@@ -94,6 +107,21 @@ export const clients = pgTable(
     logoUrl: text("logo_url"),
     logoName: text("logo_name"),
     logoPathname: text("logo_pathname"),
+    // Per-client module gates. Set by CADuniQ admins from the CADuniQ HQ
+    // dashboard. Effective module access for a user is the AND of these
+    // tenant-level gates with the per-user gates on user_profiles, so a
+    // CADuniQ admin can shut off entire modules for a whole client even
+    // if individual users on that client have can_view_* enabled.
+    // Default true so existing tenants (Lightbase) keep working; new
+    // tenants created via claimEngineeringCompany also default to all
+    // modules enabled — the CADuniQ admin opts down per client as needed.
+    canUseSuppliers: boolean("can_use_suppliers").notNull().default(true),
+    canUseCompetitors: boolean("can_use_competitors").notNull().default(true),
+    canUseHandbook: boolean("can_use_handbook").notNull().default(true),
+    canUseEngineering: boolean("can_use_engineering").notNull().default(true),
+    canUseDesignEngineering: boolean("can_use_design_engineering").notNull().default(true),
+    canUseCrm: boolean("can_use_crm").notNull().default(true),
+    canUseOee: boolean("can_use_oee").notNull().default(true),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -105,6 +133,19 @@ export const clients = pgTable(
 export type Client = typeof clients.$inferSelect;
 
 export const supplierStatus = pgEnum("supplier_status", ["Active", "Historical"]);
+
+// Onboarding gate — new suppliers signing in via the portal land in
+// `pending`, fill out the checklist + company info, submit it (→ `submitted`),
+// then Lightbase admins approve (`approved`) or reject (`rejected`). Until
+// the row is `approved`, the supplier portal shows ONLY the onboarding
+// form — no catalogue, no orders, no chat. Existing suppliers are
+// back-filled to `approved` by the migration so they don't get locked out.
+export const supplierOnboardingStatus = pgEnum("supplier_onboarding_status", [
+  "pending",
+  "submitted",
+  "approved",
+  "rejected",
+]);
 
 export const suppliers = pgTable(
   "suppliers",
@@ -168,6 +209,30 @@ export const suppliers = pgTable(
     logoUrl: text("logo_url"),
     logoName: text("logo_name"),
     logoPathname: text("logo_pathname"),
+    // Onboarding gate. Migration 0036 — default 'approved' for back-fill
+    // so existing rows aren't locked out; new portal sign-ups default to
+    // 'pending' via the createOrFindSupplierForUser flow.
+    onboardingStatus: supplierOnboardingStatus("onboarding_status")
+      .notNull()
+      .default("approved"),
+    onboardingSubmittedAt: timestamp("onboarding_submitted_at"),
+    onboardingReviewedAt: timestamp("onboarding_reviewed_at"),
+    onboardingReviewedByClerkId: text("onboarding_reviewed_by_clerk_id"),
+    onboardingReviewerNotes: text("onboarding_reviewer_notes"),
+    // Buy-and-sell flag. Set when a supplier identifies as a pure
+    // distributor / reseller — they don't manufacture in-house and
+    // don't work directly with raw materials. When true the onboarding
+    // wizard hides the manufacturing-capabilities and materials
+    // questions entirely; both arrays stay empty. The admin sees this
+    // explicit signal instead of having to infer from empty arrays.
+    isDistributor: boolean("is_distributor").notNull().default(false),
+    // Auto-saved step-2 form state. Whenever the supplier edits a field
+    // in the compliance checklist we debounce-write the whole form blob
+    // here so a sign-out / sign back in restores their progress. Wiped
+    // after a successful submit (the submission row in
+    // supplier_onboarding_submissions becomes the authoritative copy).
+    onboardingDraft: jsonb("onboarding_draft").$type<Record<string, unknown>>(),
+    onboardingDraftUpdatedAt: timestamp("onboarding_draft_updated_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -305,6 +370,172 @@ export const supplierAttachments = pgTable(
     catIdx: index("supplier_attachments_cat_idx").on(t.catId),
   }),
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPLIER ONBOARDING SUBMISSIONS (Migration 0036)
+//
+// Captures the full checklist + company-info payload the supplier fills
+// out before getting access to the rest of the portal. The form data is
+// stored as JSON to stay flexible — the question schema evolves
+// (regulations change, new product categories get added) and we don't
+// want to migrate the table every time. Critical structured fields
+// (status, timestamps, reviewer) stay as columns for indexability.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const supplierOnboardingSubmissions = pgTable(
+  "supplier_onboarding_submissions",
+  {
+    id: serial("id").primaryKey(),
+    supplierId: integer("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "cascade" }),
+    // Full form payload: company info, country, category, every Yes/No
+    // answer, score, comments. The shape is owned by SupplierOnboardingForm.
+    formData: jsonb("form_data").$type<Record<string, unknown>>().notNull().default({}),
+    // Computed at submission time so the admin list can show "Pre-qualified
+    // 18/20" without re-running the score logic.
+    score: integer("score"),
+    scoreMax: integer("score_max"),
+    verdict: text("verdict"), // 'pre-qualified' | 'conditional' | 'not-qualified'
+    // Submission lifecycle.
+    submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+    submittedByClerkId: text("submitted_by_clerk_id"),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewedByClerkId: text("reviewed_by_clerk_id"),
+    reviewerNotes: text("reviewer_notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    supplierIdx: index("supplier_onboarding_submissions_supplier_idx").on(t.supplierId),
+    submittedIdx: index("supplier_onboarding_submissions_submitted_idx").on(t.submittedAt),
+  }),
+);
+export type SupplierOnboardingSubmission = typeof supplierOnboardingSubmissions.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPLIER TAXONOMY TERMS — shared, append-only catalog of custom
+// manufacturing capabilities + materials added by suppliers during
+// onboarding. The MultiSelect for both fields shows the curated
+// constants (MANUFACTURING_TYPES, SUPPLIER_MATERIALS) UNIONed with
+// every row in this table for the corresponding `kind`. When a new
+// supplier types a custom entry the addSupplierTaxonomyTerm action
+// upserts it here so the next supplier sees it as a normal option.
+//
+// kind: 'manufacturing' | 'material'
+// value: the user-facing text. Unique per kind (case-insensitive).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const supplierTaxonomyTerms = pgTable(
+  "supplier_taxonomy_terms",
+  {
+    id: serial("id").primaryKey(),
+    kind: text("kind").notNull(),
+    value: text("value").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    kindIdx: index("supplier_taxonomy_terms_kind_idx").on(t.kind),
+    // Postgres unique on (kind, lower(value)) — declared as a regular
+    // unique index on (kind, value) here; the case-insensitive guard
+    // lives in the upsert action which lowercases before comparing.
+    uniqIdx: uniqueIndex("supplier_taxonomy_terms_kind_value_idx").on(
+      t.kind,
+      t.value,
+    ),
+  }),
+);
+export type SupplierTaxonomyTerm = typeof supplierTaxonomyTerms.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPLIER PRODUCT CATALOG (Migration 0034)
+//
+// Each supplier maintains their own catalog of products they offer.
+// Conceptually distinct from `inventory_items` (Lightbase's own parts &
+// assemblies):
+//   • inventory_items   = parts WE order / hold in inventory.
+//   • supplier_products = parts the VENDOR sells. A vendor may list
+//     thousands; we only ever order a subset.
+//
+// Both Lightbase admins (via the Supplier Inventory tab) AND the supplier
+// themselves (via their portal) can create + edit rows here. The
+// `created_by_role` column is audit-only — it does NOT restrict edits.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const supplierProducts = pgTable(
+  "supplier_products",
+  {
+    id: serial("id").primaryKey(),
+    supplierId: integer("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    productCode: text("product_code"),
+    description: text("description"),
+    category: text("category"),
+    notes: text("notes"),
+    thumbnailUrl: text("thumbnail_url"),
+    thumbnailPathname: text("thumbnail_pathname"),
+    archived: boolean("archived").notNull().default(false),
+    // 'lightbase' (a team member added it on behalf of the supplier) or
+    // 'supplier' (the vendor added it via their portal). Audit-only.
+    createdByRole: text("created_by_role").notNull().default("lightbase"),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    supplierIdx: index("supplier_products_supplier_idx").on(t.supplierId),
+    archivedIdx: index("supplier_products_archived_idx").on(t.archived),
+    nameIdx: index("supplier_products_name_idx").on(t.name),
+  }),
+);
+export type SupplierProduct = typeof supplierProducts.$inferSelect;
+
+// Six fixed attachment categories — locked to an enum so the UI always
+// has predictable tab labels and we can index by category cheaply.
+export const supplierProductAttachmentCategory = pgEnum(
+  "supplier_product_attachment_category",
+  [
+    "spec_datasheet",            // Specifications & Datasheet
+    "ies_file",                  // IES Photometric Files
+    "drawing",                   // Drawings (CAD / PDF)
+    "quote_pricing",             // Quotes & Pricing
+    "contract_nda",              // Contracts & NDAs
+    "certification_compliance",  // Certifications & Compliance
+    "test_report_qc",            // Test Reports & QC
+    "photo_media",               // Photos & Media
+    "other_file",                // Other Files (with comment)
+  ],
+);
+
+export const supplierProductAttachments = pgTable(
+  "supplier_product_attachments",
+  {
+    id: serial("id").primaryKey(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => supplierProducts.id, { onDelete: "cascade" }),
+    category: supplierProductAttachmentCategory("category").notNull(),
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    blobPathname: text("blob_pathname"),
+    contentType: text("content_type"),
+    size: bigint("size", { mode: "number" }).notNull().default(0),
+    notes: text("notes"),
+    uploadedByRole: text("uploaded_by_role").notNull().default("lightbase"),
+    uploadedByClerkId: text("uploaded_by_clerk_id"),
+    // Explicit submission timestamp surfaced on every UI card — required
+    // per the brief ("everything should be dated by submission date and
+    // time"). Distinct from createdAt only by name; same semantics.
+    uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    productIdx: index("supplier_product_attachments_product_idx").on(t.productId),
+    categoryIdx: index("supplier_product_attachments_category_idx").on(t.category),
+    uploadedIdx: index("supplier_product_attachments_uploaded_idx").on(t.uploadedAt),
+  }),
+);
+export type SupplierProductAttachment = typeof supplierProductAttachments.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPETITORS
@@ -644,7 +875,29 @@ export const suppliersRelations = relations(suppliers, ({ many }) => ({
   projectEntries: many(supplierProjectEntries),
   comments: many(supplierComments),
   attachments: many(supplierAttachments),
+  products: many(supplierProducts),
 }));
+
+export const supplierProductsRelations = relations(
+  supplierProducts,
+  ({ one, many }) => ({
+    supplier: one(suppliers, {
+      fields: [supplierProducts.supplierId],
+      references: [suppliers.id],
+    }),
+    attachments: many(supplierProductAttachments),
+  }),
+);
+
+export const supplierProductAttachmentsRelations = relations(
+  supplierProductAttachments,
+  ({ one }) => ({
+    product: one(supplierProducts, {
+      fields: [supplierProductAttachments.productId],
+      references: [supplierProducts.id],
+    }),
+  }),
+);
 
 export const supplierProjectEntriesRelations = relations(
   supplierProjectEntries,
@@ -2191,6 +2444,28 @@ export const inventoryItems = pgTable(
     }),
     notes: text("notes"),
     archived: boolean("archived").notNull().default(false),
+    // Migration 0033 — IFC import + assembly hierarchy
+    // 'part' (default) or 'assembly'. An assembly groups parts via the
+    // parent_assembly_id FK on each child part.
+    kind: text("kind").notNull().default("part"),
+    parentAssemblyId: integer("parent_assembly_id"),
+    // Physical properties pulled from the IFC file.
+    weightG: numeric("weight_g", { precision: 14, scale: 4 }),
+    surfaceAreaMm2: numeric("surface_area_mm2", { precision: 16, scale: 4 }),
+    volumeMm3: numeric("volume_mm3", { precision: 16, scale: 4 }),
+    material: text("material"),
+    densityGCm3: numeric("density_g_cm3", { precision: 10, scale: 4 }),
+    // Isometric render captured by the client-side IFC renderer.
+    thumbnailUrl: text("thumbnail_url"),
+    thumbnailPathname: text("thumbnail_pathname"),
+    // Optional: keep the source IFC blob around for re-rendering / audit.
+    ifcSourceUrl: text("ifc_source_url"),
+    ifcSourceName: text("ifc_source_name"),
+    // Lifecycle counters. Bumped by the RFQ / PO actions so the
+    // inventory view shows "X on standby · Y confirmed" without an
+    // expensive join on every list.
+    pendingQty: integer("pending_qty").notNull().default(0),
+    confirmedQty: integer("confirmed_qty").notNull().default(0),
     createdByClerkId: text("created_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -2199,6 +2474,8 @@ export const inventoryItems = pgTable(
     codeIdx: uniqueIndex("inventory_items_code_idx").on(t.code),
     categoryIdx: index("inventory_items_category_idx").on(t.category),
     archivedIdx: index("inventory_items_archived_idx").on(t.archived),
+    kindIdx: index("inventory_items_kind_idx").on(t.kind),
+    parentIdx: index("inventory_items_parent_idx").on(t.parentAssemblyId),
   }),
 );
 export type InventoryItem = typeof inventoryItems.$inferSelect;

@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
-import { asc, inArray, sql } from "drizzle-orm";
+import { asc, desc, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { clients, supplierContacts, suppliers, userProfiles } from "@/db/schema";
+import { clients, crmAccounts, supplierContacts, suppliers, userProfiles } from "@/db/schema";
 import {
   getOrCreateProfile,
   isAdmin,
@@ -104,11 +104,38 @@ export default async function AdminPage() {
     contacts: contactsBySupplier[s.id] ?? [],
   }));
 
+  // CRM accounts surfaced as the "Clients" tab inside a client tenant's
+  // admin view (Lightbase's own customers, NOT the CADuniQ tenant table).
+  // Top 50 by most-recently updated — for the full list the admin clicks
+  // through to /crm/accounts. CADuniQ admins don't see this pill since
+  // their Clients tab is the multi-tenant directory.
+  const crmAccountRows = !caduniq
+    ? await db
+        .select({
+          id: crmAccounts.id,
+          name: crmAccounts.name,
+          website: crmAccounts.website,
+          industry: crmAccounts.industry,
+          tier: crmAccounts.tier,
+          country: crmAccounts.country,
+          healthScore: crmAccounts.healthScore,
+          updatedAt: crmAccounts.updatedAt,
+        })
+        .from(crmAccounts)
+        .orderBy(desc(crmAccounts.updatedAt))
+        .limit(50)
+    : [];
+  const crmAccountTotal = !caduniq
+    ? (await db.select({ n: sql<number>`COUNT(*)::int` }).from(crmAccounts))[0]?.n ?? 0
+    : 0;
+
   return (
     <AdminPanel
       users={scopedUsers}
       suppliers={scopedSuppliersWithContacts}
       clients={clientRows}
+      crmAccounts={crmAccountRows}
+      crmAccountTotal={Number(crmAccountTotal)}
       isCaduniq={caduniq}
       ownClientId={ownClientId}
       adminEmails={[...ADMIN_EMAILS]}

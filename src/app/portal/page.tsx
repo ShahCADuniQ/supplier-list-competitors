@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { eq, sql, desc, and, or } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  clients,
   purchaseOrders,
   rfqRecipients,
   rfqs,
@@ -17,7 +18,14 @@ import {
 import { CLIENT_CONFIG } from "@/lib/client-config";
 import { ensureSupplierColumns } from "@/app/suppliers/_ensure-schema";
 import { ensureOrdersSchema } from "@/app/suppliers/_ensure-orders-schema";
+import { ensureOnboardingSchema } from "@/app/suppliers/_ensure-onboarding-schema";
+import { listSupplierTaxonomyTerms } from "@/app/suppliers/onboarding-actions";
+import { supplierOnboardingSubmissions } from "@/db/schema";
 import PortalView from "./PortalView";
+import SupplierOnboardingForm, {
+  type OnboardingPrefill,
+  type ShopSummary,
+} from "./SupplierOnboardingForm";
 
 // Clerk-authenticated supplier dashboard. Renders the same UX as the
 // magic-link /vendor/home/[token] page but identified by the signed-in
@@ -41,6 +49,7 @@ export default async function PortalPage() {
 
   await ensureSupplierColumns();
   await ensureOrdersSchema();
+  await ensureOnboardingSchema();
 
   // Find the supplier record matching this user's email. We try both the
   // suppliers.email column AND every supplier_contacts.email — many real
@@ -151,6 +160,130 @@ export default async function PortalPage() {
       ),
     )
     .orderBy(desc(purchaseOrders.createdAt));
+
+  // ── ONBOARDING GATE ────────────────────────────────────────────────
+  // Until the supplier's row is `approved`, the portal renders ONLY the
+  // onboarding form / awaiting-review screen — no catalogue, no orders,
+  // no chat. Admins viewing this page in QA-preview bypass the gate (so
+  // they can verify what the supplier sees once approved).
+  if (
+    !isAdmin(profile) &&
+    supplier.onboardingStatus !== "approved"
+  ) {
+    // Pull the most recent submission to pre-fill the form for resubmits
+    // after a rejection (or for an in-progress save the supplier left).
+    const [latestSubmission] = await db
+      .select()
+      .from(supplierOnboardingSubmissions)
+      .where(eq(supplierOnboardingSubmissions.supplierId, supplier.id))
+      .orderBy(desc(supplierOnboardingSubmissions.submittedAt))
+      .limit(1);
+
+    if (supplier.onboardingStatus === "submitted") {
+      return (
+        <div style={{ padding: 32, maxWidth: 720, margin: "0 auto", fontFamily: "system-ui" }}>
+          <div style={{
+            padding: 22,
+            borderRadius: 14,
+            background: "linear-gradient(135deg, rgba(8,145,178,0.12), rgba(124,58,237,0.08))",
+            border: "1px solid var(--lb-border)",
+            marginBottom: 16,
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.4, textTransform: "uppercase", color: "var(--lb-text-3)" }}>
+              {CLIENT_CONFIG.name} · Onboarding
+            </div>
+            <h1 style={{ fontSize: "clamp(22px, 2.6vw, 28px)", fontWeight: 800, margin: "6px 0 4px", letterSpacing: "-0.02em" }}>
+              Thanks, {supplier.name} — we're reviewing your submission.
+            </h1>
+            <p style={{ fontSize: 13.5, color: "var(--lb-text-2)", marginTop: 10 }}>
+              Your checklist and company info are with the {CLIENT_CONFIG.name} team.
+              You'll get an email at <strong>{supplier.email ?? "your registered address"}</strong> as
+              soon as you're approved — usually within one business day.
+            </p>
+            {latestSubmission?.submittedAt && (
+              <p style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 10 }}>
+                Submitted {new Date(latestSubmission.submittedAt).toLocaleString()}.
+              </p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // status === 'pending' OR 'rejected' → render the compliance form.
+    // Step 2 only takes compliance answers + notes, so the prefill blob
+    // we look up here is narrow on purpose. Source precedence:
+    //   1. Auto-saved draft on the supplier row (if they bailed mid-flow)
+    //   2. Most recent SUBMITTED blob (resubmit-after-rejection flow)
+    // The draft wins so a supplier who edited after a previous
+    // rejection doesn't lose their newer answers.
+    const draftBlob = (supplier.onboardingDraft ?? {}) as OnboardingPrefill;
+    const submissionBlob = (latestSubmission?.formData ?? {}) as OnboardingPrefill;
+    const prefillFromSubmission: OnboardingPrefill =
+      supplier.onboardingDraft &&
+      Object.keys(draftBlob as Record<string, unknown>).length > 0
+        ? draftBlob
+        : submissionBlob;
+
+    // Read-only shop summary for step 2 (toggleable to an editor by the
+    // supplier). Every field comes straight off the suppliers row
+    // (written by claimSupplier at step 1). `invitingClientName` is
+    // resolved from suppliers.clientId so the supplier sees who they
+    // applied to and can retarget if needed before submit.
+    let invitingClientName: string | null = null;
+    if (supplier.clientId) {
+      const [c] = await db
+        .select({ name: clients.name })
+        .from(clients)
+        .where(eq(clients.id, supplier.clientId))
+        .limit(1);
+      invitingClientName = c?.name ?? null;
+    }
+
+    const shopSummary: ShopSummary = {
+      companyName: supplier.name,
+      contactName: supplier.contactName ?? null,
+      email: supplier.email ?? null,
+      phone: supplier.phone ?? null,
+      website: supplier.website ?? null,
+      category: supplier.category ?? null,
+      subCategory: supplier.subCategory ?? null,
+      origin: supplier.origin ?? null,
+      products: supplier.products ?? null,
+      manufacturingTypes: Array.isArray(supplier.manufacturingTypes)
+        ? (supplier.manufacturingTypes as string[])
+        : [],
+      materials: Array.isArray(supplier.materials)
+        ? (supplier.materials as string[])
+        : [],
+      isDistributor: Boolean(supplier.isDistributor),
+      invitingClientName,
+    };
+
+    // Shared taxonomy terms (custom manufacturing + material entries
+    // added by past suppliers) so the inline editor's MultiSelect
+    // renders the same UNION the step-1 wizard does.
+    const taxonomy = await listSupplierTaxonomyTerms();
+
+    return (
+      <div style={{ padding: 32, background: "var(--lb-bg)", minHeight: "100vh" }}>
+        <SupplierOnboardingForm
+          clientName={CLIENT_CONFIG.name}
+          supplierId={supplier.id}
+          supplierName={supplier.name}
+          shopSummary={shopSummary}
+          prefill={prefillFromSubmission}
+          rejectionReason={
+            supplier.onboardingStatus === "rejected"
+              ? supplier.onboardingReviewerNotes ?? null
+              : null
+          }
+          customManufacturing={taxonomy.manufacturing}
+          customMaterials={taxonomy.material}
+        />
+      </div>
+    );
+  }
 
   return (
     <PortalView

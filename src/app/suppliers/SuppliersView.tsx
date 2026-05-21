@@ -23,6 +23,11 @@ import {
 } from "./actions";
 import type { SupplierContact } from "@/db/schema";
 import SupplierChat from "./SupplierChat";
+// Per-supplier product catalog. Previously rendered behind a top-level
+// "Supplier Inventory" sub-tab in InventoryAndManufacturing; now lives
+// inside each supplier's detail panel so the catalog is always one
+// click away from anywhere the supplier shows up.
+import { SupplierCatalogView } from "./SupplierInventoryTab";
 import IncotermSelect from "./IncotermSelect";
 import {
   aiGenerateSupplier,
@@ -263,6 +268,25 @@ function formatSize(b: number) {
   return (b / 1048576).toFixed(2) + " MB";
 }
 
+// Submission timestamp (date + time) shown on every attachment row. Older
+// rows only carry the day in `date`; newer rows get the full `createdAt`
+// timestamp. Fall back gracefully when only one is present.
+function formatAttachmentTimestamp(
+  createdAt: Date | string | null | undefined,
+  dateOnly: string | null | undefined,
+): string {
+  if (createdAt) {
+    const d = typeof createdAt === "string" ? new Date(createdAt) : createdAt;
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleString(undefined, {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      });
+    }
+  }
+  return dateOnly ?? "—";
+}
+
 function safeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "file";
 }
@@ -299,7 +323,7 @@ export default function SuppliersView({
   const [pageNum, setPageNum] = useState(1);
 
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<"details" | "contacts" | "kpis" | "projects" | "comments" | "attachments" | "chat">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "contacts" | "kpis" | "projects" | "comments" | "attachments" | "chat" | "inventory">("details");
   const [currentDrawerOpen, setCurrentDrawerOpen] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1119,6 +1143,11 @@ export default function SuppliersView({
                 ["kpis", "📊 Performance"],
                 ["projects", `📋 Projects (${active.projectEntries.length})`],
                 ["comments", `🗒 Comments (${active.comments.length})`],
+                // Inventory lives inside the supplier panel (was a top-level
+                // tab before). Placed just before Attachments to match the
+                // request and so the supplier-scoped catalog is one click
+                // away whenever someone opens this supplier.
+                ["inventory", "📦 Inventory"],
                 ["attachments", `📎 Attachments (${active.attachments.length})`],
               ].map(([k, label]) => (
                 <div key={k} className={`panel-tab ${activeTab === k ? "active" : ""}`} onClick={() => setActiveTab(k as typeof activeTab)}>
@@ -1178,6 +1207,16 @@ export default function SuppliersView({
                   setNewComment={setNewComment}
                   onAdd={handleAddComment}
                   onDelete={(id) => runAction(() => deleteSupplierComment(id), "Comment deleted")}
+                />
+              )}
+              {activeTab === "inventory" && (
+                // The catalog view auto-fetches products for this supplier
+                // on mount. showHeader=false because the panel already has
+                // its own header chrome above.
+                <SupplierCatalogView
+                  supplierId={active.id}
+                  canEdit={canEdit}
+                  showHeader={false}
                 />
               )}
               {activeTab === "attachments" && (
@@ -2051,7 +2090,10 @@ function AttachmentsTab({
                             <div className="file-name">{a.name}</div>
                             <div className="file-meta">
                               <span>{formatSize(a.size)}</span>
-                              <span>{a.date ?? ""}</span>
+                              {/* Full submission timestamp (date + time) — */}
+                              {/* the legacy `date` column was day-only, so prefer */}
+                              {/* the `createdAt` timestamp when present. */}
+                              <span>Uploaded {formatAttachmentTimestamp(a.createdAt, a.date)}</span>
                               {a.uploader && <span>by {a.uploader}</span>}
                             </div>
                           </div>

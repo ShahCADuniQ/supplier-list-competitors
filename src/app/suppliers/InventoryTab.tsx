@@ -39,16 +39,37 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Cross-card navigation: when the user clicks a child-part card inside
+  // the assembly detail drawer, we fire a window event so this top-level
+  // component can pop open the new id. Avoids prop-drilling across the
+  // drawer / table.
+  useEffect(() => {
+    function open(e: Event) {
+      const detail = (e as CustomEvent<{ id: number }>).detail;
+      if (detail?.id) setOpenId(detail.id);
+    }
+    window.addEventListener("lb:open-inventory", open);
+    return () => window.removeEventListener("lb:open-inventory", open);
+  }, []);
+
+  // View toggle — "parts" or "assemblies". Parts excludes assemblies +
+  // assemblies excludes parts. Both sections show standalone parts that
+  // don't have a parent.
+  const [view, setView] = useState<"assemblies" | "parts">("parts");
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = items ?? [];
-    if (!q) return list;
-    return list.filter((i) =>
-      `${i.code} ${i.name ?? ""} ${i.description ?? ""} ${i.category ?? ""}`
+    const byKind = list.filter((i) => i.kind === (view === "assemblies" ? "assembly" : "part"));
+    if (!q) return byKind;
+    return byKind.filter((i) =>
+      `${i.code} ${i.name ?? ""} ${i.description ?? ""} ${i.category ?? ""} ${i.material ?? ""}`
         .toLowerCase()
         .includes(q),
     );
-  }, [items, search]);
+  }, [items, search, view]);
+  const partsCount = (items ?? []).filter((i) => i.kind !== "assembly").length;
+  const assembliesCount = (items ?? []).filter((i) => i.kind === "assembly").length;
 
   return (
     <div style={{ padding: 24, background: "var(--lb-bg)", minHeight: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -86,20 +107,58 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
         </div>
       )}
 
-      <input
-        type="search"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder={`Search ${items?.length ?? 0} parts by Lightbase Ref., name, description, category…`}
-        style={{
-          padding: "10px 14px",
-          borderRadius: 999,
-          background: "var(--lb-bg-elev)",
-          border: "1px solid var(--lb-border)",
-          color: "var(--lb-text)",
-          fontSize: 13,
-        }}
-      />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 999, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)" }}>
+          <button
+            type="button"
+            onClick={() => setView("parts")}
+            style={{
+              padding: "6px 14px",
+              borderRadius: 999,
+              background: view === "parts" ? "var(--lb-accent)" : "transparent",
+              color: view === "parts" ? "var(--lb-accent-fg)" : "var(--lb-text-2)",
+              border: 0,
+              fontSize: 12.5,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            🔧 Parts ({partsCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("assemblies")}
+            style={{
+              padding: "6px 14px",
+              borderRadius: 999,
+              background: view === "assemblies" ? "var(--lb-accent)" : "transparent",
+              color: view === "assemblies" ? "var(--lb-accent-fg)" : "var(--lb-text-2)",
+              border: 0,
+              fontSize: 12.5,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            🧩 Assemblies ({assembliesCount})
+          </button>
+        </div>
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={`Search by Lightbase Ref., name, material, category…`}
+          style={{
+            flex: 1,
+            minWidth: 220,
+            padding: "10px 14px",
+            borderRadius: 999,
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+            color: "var(--lb-text)",
+            fontSize: 13,
+          }}
+        />
+      </div>
 
       <section
         style={{
@@ -123,12 +182,12 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr>
+                  <Th />
                   <Th>Lightbase Ref.</Th>
                   <Th>Name</Th>
-                  <Th>Category</Th>
-                  <Th>Unit</Th>
-                  <Th style={{ textAlign: "right" }}>RFQs</Th>
-                  <Th style={{ textAlign: "right" }}>POs</Th>
+                  <Th>Material</Th>
+                  <Th style={{ textAlign: "right" }}>Qty status</Th>
+                  <Th style={{ textAlign: "right" }}>RFQs / POs</Th>
                   <Th>Last activity</Th>
                   <Th />
                 </tr>
@@ -140,6 +199,20 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
                     style={{ borderTop: "1px solid var(--lb-border)", cursor: "pointer" }}
                     onClick={() => setOpenId(it.id)}
                   >
+                    <Td style={{ padding: "8px 10px", width: 60 }}>
+                      {it.thumbnailUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={it.thumbnailUrl}
+                          alt={it.name ?? it.code}
+                          style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, border: "1px solid var(--lb-border)", display: "block" }}
+                        />
+                      ) : (
+                        <div style={{ width: 44, height: 44, borderRadius: 6, background: "var(--lb-bg)", border: "1px dashed var(--lb-border)", display: "grid", placeItems: "center", color: "var(--lb-text-3)", fontSize: 16 }}>
+                          {it.kind === "assembly" ? "🧩" : "🔧"}
+                        </div>
+                      )}
+                    </Td>
                     <Td>
                       <code
                         style={{
@@ -159,15 +232,25 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
                       <div style={{ fontWeight: 600 }}>{it.name ?? "—"}</div>
                       {it.description && (
                         <div style={{ fontSize: 11, color: "var(--lb-text-3)", marginTop: 2 }}>
-                          {it.description.slice(0, 80)}
-                          {it.description.length > 80 ? "…" : ""}
+                          {it.description.slice(0, 60)}
+                          {it.description.length > 60 ? "…" : ""}
                         </div>
                       )}
                     </Td>
-                    <Td style={{ color: "var(--lb-text-2)" }}>{it.category ?? "—"}</Td>
-                    <Td style={{ color: "var(--lb-text-3)" }}>{it.unit}</Td>
-                    <Td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{it.rfqCount}</Td>
-                    <Td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{it.poCount}</Td>
+                    <Td style={{ color: "var(--lb-text-2)", fontSize: 12 }}>{it.material ?? "—"}</Td>
+                    <Td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 11.5 }}>
+                      <div>
+                        <span style={{ color: "#ca8a04", fontWeight: 700 }}>{it.pendingQty}</span>
+                        <span style={{ color: "var(--lb-text-3)" }}> on standby</span>
+                      </div>
+                      <div>
+                        <span style={{ color: "#16a34a", fontWeight: 700 }}>{it.confirmedQty}</span>
+                        <span style={{ color: "var(--lb-text-3)" }}> confirmed</span>
+                      </div>
+                    </Td>
+                    <Td style={{ textAlign: "right", color: "var(--lb-text-3)", fontVariantNumeric: "tabular-nums" }}>
+                      {it.rfqCount} / {it.poCount}
+                    </Td>
                     <Td style={{ color: "var(--lb-text-3)", fontSize: 11.5 }}>
                       {it.lastActivityAt ? new Date(it.lastActivityAt).toLocaleDateString() : "—"}
                     </Td>
@@ -282,22 +365,45 @@ function InventoryDetailDrawer({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="panel-head">
+          {data?.item.thumbnailUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={data.item.thumbnailUrl}
+              alt={data.item.name ?? data.item.code}
+              style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "1px solid var(--lb-border)" }}
+            />
+          )}
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
             {data && (
               <>
-                <code
-                  style={{
-                    alignSelf: "flex-start",
-                    background: "rgba(8,145,178,0.15)",
-                    color: "#0891b2",
-                    padding: "3px 10px",
-                    borderRadius: 6,
-                    fontSize: 12,
-                    fontWeight: 800,
-                  }}
-                >
-                  {data.item.code}
-                </code>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <code
+                    style={{
+                      background: "rgba(8,145,178,0.15)",
+                      color: "#0891b2",
+                      padding: "3px 10px",
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {data.item.code}
+                  </code>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: 0.5,
+                      textTransform: "uppercase",
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      background: data.item.kind === "assembly" ? "rgba(124,58,237,0.18)" : "rgba(8,145,178,0.18)",
+                      color: data.item.kind === "assembly" ? "#a78bfa" : "#0891b2",
+                    }}
+                  >
+                    {data.item.kind === "assembly" ? "🧩 Assembly" : "🔧 Part"}
+                  </span>
+                </div>
                 <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>
                   {data.item.name ?? data.item.code}
                 </h2>
@@ -369,6 +475,86 @@ function InventoryDetailDrawer({
                   </div>
                 )}
               </section>
+
+              {/* IFC-extracted physical properties + qty status. */}
+              <section style={panelStyle}>
+                <h3 style={panelH3}>Physical properties (from IFC)</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginTop: 8 }}>
+                  <Stat label="Weight" value={data.item.weightG != null ? `${Number(data.item.weightG).toFixed(2)} g` : "—"} />
+                  <Stat label="Surface area" value={data.item.surfaceAreaMm2 != null ? `${Number(data.item.surfaceAreaMm2).toFixed(2)} mm²` : "—"} />
+                  <Stat label="Volume" value={data.item.volumeMm3 != null ? `${Number(data.item.volumeMm3).toFixed(2)} mm³` : "—"} />
+                  <Stat label="Material" value={data.item.material ?? "—"} />
+                  <Stat label="Density" value={data.item.densityGCm3 != null ? `${Number(data.item.densityGCm3).toFixed(3)} g/cm³` : "—"} />
+                </div>
+                <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(202,138,4,0.08)", border: "1px solid rgba(202,138,4,0.35)", fontSize: 12 }}>
+                  <strong style={{ color: "#ca8a04" }}>{data.item.pendingQty}</strong>
+                  <span style={{ color: "var(--lb-text-2)" }}> on standby</span>
+                  <span style={{ color: "var(--lb-text-3)" }}> · </span>
+                  <strong style={{ color: "#16a34a" }}>{data.item.confirmedQty}</strong>
+                  <span style={{ color: "var(--lb-text-2)" }}> confirmed</span>
+                  <div style={{ fontSize: 10.5, color: "var(--lb-text-3)", marginTop: 4 }}>
+                    Standby = total qty requested via open RFQs / quotes. Confirmed = total qty on POs that have been sent.
+                  </div>
+                </div>
+                {data.item.ifcSourceUrl && (
+                  <div style={{ marginTop: 8, fontSize: 11.5 }}>
+                    <a href={data.item.ifcSourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--lb-accent)" }}>
+                      📐 Download source IFC{data.item.ifcSourceName ? ` · ${data.item.ifcSourceName}` : ""}
+                    </a>
+                  </div>
+                )}
+              </section>
+
+              {/* Child parts — only on assemblies. Rendered as clickable cards. */}
+              {data.item.kind === "assembly" && (
+                <section style={panelStyle}>
+                  <h3 style={panelH3}>Linked parts ({data.children.length})</h3>
+                  {data.children.length === 0 ? (
+                    <Empty>This assembly has no linked parts yet.</Empty>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginTop: 8 }}>
+                      {data.children.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          // Drilling INTO a child swaps the drawer's open id —
+                          // close current and re-open with the child.
+                          onClick={() => { onClose(); setTimeout(() => onChanged(), 0); window.dispatchEvent(new CustomEvent("lb:open-inventory", { detail: { id: c.id } })); }}
+                          style={{
+                            padding: 10,
+                            borderRadius: 10,
+                            background: "var(--lb-bg)",
+                            border: "1px solid var(--lb-border)",
+                            color: "var(--lb-text)",
+                            textAlign: "left",
+                            cursor: "pointer",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 6,
+                          }}
+                        >
+                          {c.thumbnailUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={c.thumbnailUrl} alt={c.name ?? c.code} style={{ width: "100%", aspectRatio: "1/1", objectFit: "cover", borderRadius: 6, background: "var(--lb-bg-elev)" }} />
+                          ) : (
+                            <div style={{ width: "100%", aspectRatio: "1/1", borderRadius: 6, background: "var(--lb-bg-elev)", display: "grid", placeItems: "center", color: "var(--lb-text-3)", fontSize: 28 }}>🔧</div>
+                          )}
+                          <code style={{ fontSize: 10.5, color: "#0891b2", background: "rgba(8,145,178,0.15)", padding: "1px 6px", borderRadius: 4, fontWeight: 700, alignSelf: "flex-start" }}>
+                            {c.code}
+                          </code>
+                          <div style={{ fontSize: 12, fontWeight: 700 }}>{c.name ?? "—"}</div>
+                          {c.material && (
+                            <div style={{ fontSize: 10.5, color: "var(--lb-text-3)" }}>{c.material}</div>
+                          )}
+                          <div style={{ fontSize: 10.5, color: "var(--lb-text-3)" }}>
+                            <strong style={{ color: "#ca8a04" }}>{c.pendingQty}</strong> standby · <strong style={{ color: "#16a34a" }}>{c.confirmedQty}</strong> confirmed
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
 
               {/* Quote history — per supplier per RFQ */}
               <section style={panelStyle}>
@@ -554,6 +740,15 @@ function FieldRow({ label, children, wide }: { label: string; children: React.Re
     <div style={{ gridColumn: wide ? "1 / -1" : undefined }}>
       <div style={{ fontSize: 10, fontWeight: 800, color: "var(--lb-text-3)", letterSpacing: 0.4, textTransform: "uppercase" }}>{label}</div>
       <div style={{ marginTop: 2, fontSize: 13, color: "var(--lb-text)" }}>{children}</div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ padding: 10, borderRadius: 8, background: "var(--lb-bg)", border: "1px solid var(--lb-border)" }}>
+      <div style={{ fontSize: 10, fontWeight: 800, color: "var(--lb-text-3)", letterSpacing: 0.4, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ marginTop: 4, fontSize: 13.5, fontWeight: 700, color: "var(--lb-text)", fontVariantNumeric: "tabular-nums" }}>{value}</div>
     </div>
   );
 }

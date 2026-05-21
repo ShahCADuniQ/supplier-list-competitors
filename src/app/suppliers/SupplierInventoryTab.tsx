@@ -1,0 +1,1238 @@
+"use client";
+
+// Supplier Inventory tab — each supplier's product catalog (distinct from
+// Lightbase's own inventory_items). Three views in one component:
+//   1. List of suppliers that have at least one product in their catalog.
+//   2. A picked supplier's catalog as list OR card grid.
+//   3. A picked product's detail drawer with 6 categorised attachment tabs.
+//
+// Every attachment row shows submission date + time per the brief.
+
+import { useEffect, useMemo, useState } from "react";
+import { upload } from "@vercel/blob/client";
+import {
+  type SupplierProductWithAttachments,
+  type SupplierWithProductCount,
+  addSupplierProductAttachment,
+  createSupplierProduct,
+  deleteSupplierProduct,
+  deleteSupplierProductAttachment,
+  listSupplierProducts,
+  listSuppliersWithCatalog,
+  updateSupplierProduct,
+  updateSupplierProductAttachment,
+} from "./supplier-inventory-actions";
+import {
+  SUPPLIER_CATEGORIES,
+  SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES,
+  shortCategoryLabel,
+  type SupplierProductAttachmentCategory,
+} from "./supplier-inventory-constants";
+import type { SupplierProductAttachment } from "@/db/schema";
+
+const CARD_STYLE: React.CSSProperties = {
+  borderRadius: 10,
+  border: "1px solid var(--lb-border)",
+  background: "var(--lb-bg-elev)",
+  padding: 14,
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  cursor: "pointer",
+  transition: "border-color 160ms ease, transform 160ms ease",
+};
+const INPUT_STYLE: React.CSSProperties = {
+  background: "var(--lb-bg)",
+  border: "1px solid var(--lb-border)",
+  borderRadius: 6,
+  padding: "6px 10px",
+  fontSize: 13,
+  color: "var(--lb-text-1)",
+  outline: "none",
+  width: "100%",
+};
+const PILL_BTN = (active: boolean): React.CSSProperties => ({
+  padding: "4px 12px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: active ? 600 : 500,
+  border: "1px solid var(--lb-border)",
+  background: active ? "var(--lb-accent)" : "var(--lb-bg-elev)",
+  color: active ? "var(--lb-accent-fg)" : "var(--lb-text-2)",
+  cursor: "pointer",
+});
+const MINI_BTN: React.CSSProperties = {
+  padding: "4px 10px",
+  fontSize: 12,
+  fontWeight: 500,
+  borderRadius: 6,
+  border: "1px solid var(--lb-border)",
+  background: "var(--lb-bg-elev)",
+  color: "var(--lb-text-1)",
+  cursor: "pointer",
+};
+const PRIMARY_BTN: React.CSSProperties = {
+  padding: "6px 14px",
+  fontSize: 13,
+  fontWeight: 600,
+  borderRadius: 8,
+  border: "1px solid var(--lb-accent)",
+  background: "var(--lb-accent)",
+  color: "var(--lb-accent-fg)",
+  cursor: "pointer",
+};
+
+// Format an absolute submission timestamp — e.g. "May 19, 2026 · 14:32".
+// Used on every attachment row as the brief requires.
+function fmtStamp(d: Date | string | null | undefined): string {
+  if (!d) return "—";
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+function fmtSize(bytes: number | null | undefined): string {
+  if (!bytes || bytes < 1024) return `${bytes ?? 0} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function SupplierInventoryTab({ canEdit }: { canEdit: boolean }) {
+  const [suppliers, setSuppliers] = useState<SupplierWithProductCount[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [openSupplierId, setOpenSupplierId] = useState<number | null>(null);
+
+  function reload() {
+    listSuppliersWithCatalog()
+      .then(setSuppliers)
+      .catch((e) => setErr(e instanceof Error ? e.message : "Load failed"));
+  }
+  useEffect(() => {
+    if (suppliers === null) reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = suppliers ?? [];
+    if (!q) return list;
+    return list.filter((s) =>
+      `${s.name} ${s.category ?? ""}`.toLowerCase().includes(q),
+    );
+  }, [suppliers, search]);
+
+  if (openSupplierId != null) {
+    return (
+      <SupplierCatalogView
+        supplierId={openSupplierId}
+        canEdit={canEdit}
+        onBack={() => { setOpenSupplierId(null); reload(); }}
+      />
+    );
+  }
+
+  return (
+    <div style={{ padding: 24, background: "var(--lb-bg)", minHeight: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
+      <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ fontSize: "clamp(22px, 2.6vw, 28px)", fontWeight: 800, letterSpacing: "-0.02em", margin: 0 }}>
+            Supplier Inventory
+          </h1>
+          <p style={{ fontSize: 13, color: "var(--lb-text-3)", margin: "4px 0 0" }}>
+            Each supplier&apos;s own product catalog. Click a supplier to manage their products, datasheets, quotes, contracts, certifications, QC reports, and media — every file timestamped at upload.
+          </p>
+        </div>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search suppliers…"
+          style={{ ...INPUT_STYLE, width: 260 }}
+        />
+      </header>
+
+      {err && (
+        <div style={{ padding: 10, background: "rgba(220,38,38,0.1)", border: "1px solid rgba(220,38,38,0.4)", borderRadius: 8, color: "#dc2626", fontSize: 13 }}>
+          {err}
+        </div>
+      )}
+
+      {suppliers === null ? (
+        <div style={{ color: "var(--lb-text-3)", fontSize: 13 }}>Loading suppliers…</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ padding: 32, textAlign: "center", color: "var(--lb-text-3)", fontSize: 13, border: "1px dashed var(--lb-border)", borderRadius: 10 }}>
+          No suppliers have products in their catalog yet.
+          {canEdit && " Open the Suppliers tab, pick a vendor, then come back here to add their first product."}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+          {filtered.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setOpenSupplierId(s.id)}
+              style={{ ...CARD_STYLE, textAlign: "left", border: "1px solid var(--lb-border)" }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--lb-accent)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--lb-border)"; }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {s.logoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={s.logoUrl} alt={s.name} style={{ width: 36, height: 36, objectFit: "contain", borderRadius: 6, background: "var(--lb-bg)", border: "1px solid var(--lb-border)" }} />
+                ) : (
+                  <div style={{ width: 36, height: 36, borderRadius: 6, background: "var(--lb-bg)", border: "1px dashed var(--lb-border)", display: "grid", placeItems: "center", color: "var(--lb-text-3)", fontSize: 14 }}>
+                    {s.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: "var(--lb-text-1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {s.name}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "var(--lb-text-3)" }}>{s.category ?? "—"}</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, fontSize: 12, color: "var(--lb-text-2)" }}>
+                <span>{s.productCount} product{s.productCount === 1 ? "" : "s"}</span>
+                <span>·</span>
+                <span>{s.attachmentCount} file{s.attachmentCount === 1 ? "" : "s"}</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--lb-text-3)" }}>
+                Last activity: {fmtStamp(s.lastUploadAt)}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// One supplier's catalog — list / card toggle + add-product flow.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Exported so the supplier-facing portal can drop the same catalog UI
+// into PortalView with no duplication. `onBack` is optional — the portal
+// has no "all suppliers" navigation, so the button hides when not passed.
+export function SupplierCatalogView({
+  supplierId,
+  canEdit,
+  onBack,
+  showHeader = true,
+}: {
+  supplierId: number;
+  canEdit: boolean;
+  onBack?: () => void;
+  // The Supplier Inventory tab renders its own page header; the portal
+  // wraps the catalog in a Panel which already has its own. Set false to
+  // hide the catalog's internal h1 + intro text.
+  showHeader?: boolean;
+}) {
+  const [products, setProducts] = useState<SupplierProductWithAttachments[] | null>(null);
+  const [supplierName, setSupplierName] = useState<string>("");
+  const [err, setErr] = useState<string | null>(null);
+  const [view, setView] = useState<"card" | "list">("card");
+  const [search, setSearch] = useState("");
+  const [openProductId, setOpenProductId] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  function reload() {
+    listSupplierProducts({ supplierId })
+      .then((rows) => {
+        setProducts(rows);
+        if (rows.length > 0) setSupplierName(rows[0].supplierName);
+      })
+      .catch((e) => setErr(e instanceof Error ? e.message : "Load failed"));
+  }
+  useEffect(() => {
+    if (products === null) reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = products ?? [];
+    if (!q) return list;
+    return list.filter((p) =>
+      `${p.name} ${p.productCode ?? ""} ${p.category ?? ""} ${p.description ?? ""}`
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [products, search]);
+
+  const openProduct = openProductId != null
+    ? (products ?? []).find((p) => p.id === openProductId) ?? null
+    : null;
+
+  return (
+    <div style={{
+      padding: showHeader ? 24 : 0,
+      background: showHeader ? "var(--lb-bg)" : "transparent",
+      minHeight: showHeader ? "100%" : undefined,
+      display: "flex",
+      flexDirection: "column",
+      gap: 14,
+    }}>
+      <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          {onBack && (
+            <button type="button" onClick={onBack} style={{ ...MINI_BTN, marginBottom: 8 }}>← All suppliers</button>
+          )}
+          {showHeader && (
+            <>
+              <h1 style={{ fontSize: "clamp(20px, 2.3vw, 26px)", fontWeight: 800, letterSpacing: "-0.02em", margin: 0 }}>
+                {supplierName || "Supplier"} — Catalog
+              </h1>
+              <p style={{ fontSize: 13, color: "var(--lb-text-3)", margin: "4px 0 0" }}>
+                Products this supplier offers. Drop datasheets, quotes, contracts, certifications, QC reports, or photos under any product — each file is timestamped at upload.
+              </p>
+            </>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search products…"
+            style={{ ...INPUT_STYLE, width: 220 }}
+          />
+          <div style={{ display: "flex", gap: 4, padding: 3, background: "var(--lb-bg-elev)", border: "1px solid var(--lb-border)", borderRadius: 999 }}>
+            <button type="button" onClick={() => setView("card")} style={PILL_BTN(view === "card")}>Cards</button>
+            <button type="button" onClick={() => setView("list")} style={PILL_BTN(view === "list")}>List</button>
+          </div>
+          {canEdit && (
+            <button type="button" onClick={() => setCreating(true)} style={PRIMARY_BTN}>+ New product</button>
+          )}
+        </div>
+      </header>
+
+      {err && (
+        <div style={{ padding: 10, background: "rgba(220,38,38,0.1)", border: "1px solid rgba(220,38,38,0.4)", borderRadius: 8, color: "#dc2626", fontSize: 13 }}>
+          {err}
+        </div>
+      )}
+
+      {products === null ? (
+        <div style={{ color: "var(--lb-text-3)", fontSize: 13 }}>Loading catalog…</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ padding: 32, textAlign: "center", color: "var(--lb-text-3)", fontSize: 13, border: "1px dashed var(--lb-border)", borderRadius: 10 }}>
+          {search ? "No products match your search." : "No products in this catalog yet. Click \"+ New product\" to add one."}
+        </div>
+      ) : view === "card" ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+          {filtered.map((p) => <ProductCard key={p.id} product={p} onOpen={() => setOpenProductId(p.id)} />)}
+        </div>
+      ) : (
+        <ProductListTable products={filtered} onOpen={(id) => setOpenProductId(id)} />
+      )}
+
+      {creating && (
+        <NewProductDialog
+          supplierId={supplierId}
+          onClose={() => setCreating(false)}
+          onCreated={() => { setCreating(false); reload(); }}
+        />
+      )}
+      {openProduct && (
+        <ProductDrawer
+          product={openProduct}
+          canEdit={canEdit}
+          onClose={() => setOpenProductId(null)}
+          onChanged={reload}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Card view of one product. Shows thumbnail + per-category attachment counts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProductCard({ product, onOpen }: {
+  product: SupplierProductWithAttachments;
+  onOpen: () => void;
+}) {
+  // Card cover preference:
+  //   1. Explicit cover the supplier picked (product.thumbnailUrl).
+  //   2. First image-typed attachment from any category — usually a Photo
+  //      but falls through to drawings/IES renderings/etc. so even before
+  //      the supplier sets a cover the card has something to show.
+  //   3. Generic 📦 placeholder.
+  const coverFromAttachments = product.attachments.find((a) =>
+    isImage(a.contentType, a.name),
+  );
+  const coverUrl = product.thumbnailUrl ?? coverFromAttachments?.url ?? null;
+  const photoCount = product.attachmentCountByCategory.photo_media ?? 0;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      style={{ ...CARD_STYLE, textAlign: "left" }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--lb-accent)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--lb-border)"; }}
+    >
+      <div style={{ position: "relative", aspectRatio: "4/3", width: "100%", borderRadius: 6, overflow: "hidden", background: "var(--lb-bg)", border: "1px solid var(--lb-border)", display: "grid", placeItems: "center" }}>
+        {coverUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={coverUrl} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : (
+          <span style={{ color: "var(--lb-text-3)", fontSize: 24 }}>📦</span>
+        )}
+        {photoCount > 1 && (
+          <span style={{
+            position: "absolute",
+            top: 6,
+            right: 6,
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontSize: 11,
+            fontWeight: 700,
+            background: "rgba(0,0,0,0.6)",
+            color: "white",
+            backdropFilter: "blur(4px)",
+          }}>
+            {photoCount} photos
+          </span>
+        )}
+      </div>
+      {/* Card heading shows the PRODUCT CODE prominently (per the brief — */}
+      {/* "it should only show product code"). The internal product name +  */}
+      {/* category are still surfaced in the drawer, just not on the card. */}
+      <div>
+        <div style={{
+          fontWeight: 700,
+          fontSize: 15,
+          color: "var(--lb-text-1)",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          letterSpacing: "-0.01em",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}>
+          {product.productCode || "—"}
+        </div>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES.map((c) => {
+          const n = product.attachmentCountByCategory[c.key];
+          return (
+            <span key={c.key} style={{
+              fontSize: 10.5,
+              padding: "2px 7px",
+              borderRadius: 999,
+              background: n > 0 ? "rgba(8,145,178,0.15)" : "var(--lb-bg)",
+              color: n > 0 ? "#0891b2" : "var(--lb-text-3)",
+              border: `1px solid ${n > 0 ? "rgba(8,145,178,0.3)" : "var(--lb-border)"}`,
+              fontWeight: 600,
+            }}>
+              {shortLabel(c.key)} · {n}
+            </span>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 10.5, color: "var(--lb-text-3)" }}>
+        Added {fmtStamp(product.createdAt)}
+      </div>
+    </button>
+  );
+}
+const shortLabel = shortCategoryLabel;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// List view of products — denser than cards, surfaces the same per-category
+// counts as columns.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProductListTable({ products, onOpen }: {
+  products: SupplierProductWithAttachments[];
+  onOpen: (id: number) => void;
+}) {
+  return (
+    <div style={{ overflowX: "auto", border: "1px solid var(--lb-border)", borderRadius: 10, background: "var(--lb-bg-elev)" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--lb-border)", background: "var(--lb-bg)" }}>
+            <th style={th(60)}>Img</th>
+            <th style={th()}>Product code</th>
+            <th style={th(150)}>Category</th>
+            {SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES.map((c) => (
+              <th key={c.key} style={th(70, "center")} title={c.label}>{shortLabel(c.key)}</th>
+            ))}
+            <th style={th(150)}>Added</th>
+          </tr>
+        </thead>
+        <tbody>
+          {products.map((p) => (
+            <tr
+              key={p.id}
+              onClick={() => onOpen(p.id)}
+              style={{ borderTop: "1px solid var(--lb-border)", cursor: "pointer" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = "rgba(8,145,178,0.04)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = "transparent"; }}
+            >
+              <td style={td()}>
+                {(() => {
+                  const fallback = p.attachments.find((a) => isImage(a.contentType, a.name));
+                  const url = p.thumbnailUrl ?? fallback?.url ?? null;
+                  return url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={url} alt={p.name} style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 5, border: "1px solid var(--lb-border)" }} />
+                  ) : (
+                    <div style={{ width: 36, height: 36, borderRadius: 5, background: "var(--lb-bg)", border: "1px dashed var(--lb-border)", display: "grid", placeItems: "center", color: "var(--lb-text-3)" }}>📦</div>
+                  );
+                })()}
+              </td>
+              <td style={td()}>
+                {/* Product code is the primary identifier in the list view */}
+                {/* (matches the card heading). Internal name + description */}
+                {/* live in the drawer — surfacing them here was noisy. */}
+                <code style={{
+                  fontWeight: 700,
+                  fontSize: 13,
+                  background: "rgba(8,145,178,0.12)",
+                  color: "#0891b2",
+                  padding: "2px 8px",
+                  borderRadius: 5,
+                }}>
+                  {p.productCode || "—"}
+                </code>
+              </td>
+              <td style={td()}>{p.category ?? "—"}</td>
+              {SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES.map((c) => {
+                const n = p.attachmentCountByCategory[c.key];
+                return (
+                  <td key={c.key} style={{ ...td(), textAlign: "center" }}>
+                    <span style={{
+                      display: "inline-block",
+                      minWidth: 22,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: n > 0 ? "rgba(8,145,178,0.15)" : "var(--lb-bg)",
+                      color: n > 0 ? "#0891b2" : "var(--lb-text-3)",
+                      fontWeight: 600,
+                      fontSize: 11.5,
+                    }}>{n}</span>
+                  </td>
+                );
+              })}
+              <td style={td()}>{fmtStamp(p.createdAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function th(width?: number, align: "left" | "center" | "right" = "left"): React.CSSProperties {
+  return {
+    padding: "8px 10px",
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: "var(--lb-text-3)",
+    textTransform: "uppercase",
+    letterSpacing: "0.02em",
+    textAlign: align,
+    width,
+  };
+}
+function td(): React.CSSProperties {
+  return { padding: "8px 10px", color: "var(--lb-text-2)", verticalAlign: "middle" };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// New product dialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+function NewProductDialog({ supplierId, onClose, onCreated }: {
+  supplierId: number;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [productCode, setProductCode] = useState("");
+  const [category, setCategory] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit() {
+    if (!name.trim()) { setErr("Name is required"); return; }
+    setBusy(true); setErr(null);
+    try {
+      await createSupplierProduct({
+        supplierId,
+        name,
+        productCode: productCode || undefined,
+        category: category || undefined,
+        description: description || undefined,
+      });
+      onCreated();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Create failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ModalShell title="New product" onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <Field label="Name *">
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. AF21D12H80G LED Module" style={INPUT_STYLE} autoFocus />
+        </Field>
+        <Field label="Product code">
+          <input value={productCode} onChange={(e) => setProductCode(e.target.value)} placeholder="e.g. AF21-D12-H80G" style={INPUT_STYLE} />
+        </Field>
+        <Field label="Category">
+          <select value={category} onChange={(e) => setCategory(e.target.value)} style={INPUT_STYLE}>
+            <option value="">— select a category —</option>
+            {SUPPLIER_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Description">
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short internal description (not shown on the card)." style={{ ...INPUT_STYLE, minHeight: 70, resize: "vertical" }} />
+        </Field>
+        {err && <div style={{ color: "#dc2626", fontSize: 12.5 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={MINI_BTN}>Cancel</button>
+          <button type="button" onClick={submit} disabled={busy} style={{ ...PRIMARY_BTN, opacity: busy ? 0.6 : 1 }}>
+            {busy ? "Creating…" : "Create"}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Product drawer — 6 tabs, one per attachment category. Each tab lists the
+// attachments with submission timestamp + size and an upload button.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProductDrawer({ product, canEdit, onClose, onChanged }: {
+  product: SupplierProductWithAttachments;
+  canEdit: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [tab, setTab] = useState<SupplierProductAttachmentCategory>("spec_datasheet");
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const grouped = useMemo(() => {
+    const out = Object.fromEntries(
+      SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES.map((c) => [c.key, [] as SupplierProductAttachment[]]),
+    ) as Record<SupplierProductAttachmentCategory, SupplierProductAttachment[]>;
+    for (const a of product.attachments) {
+      const key = a.category as SupplierProductAttachmentCategory;
+      if (out[key]) out[key].push(a);
+    }
+    return out;
+  }, [product.attachments]);
+
+  async function onDelete() {
+    if (!confirm(`Delete "${product.name}" and every attached file? This can't be undone.`)) return;
+    setBusy(true); setErr(null);
+    try {
+      await deleteSupplierProduct({ id: product.id });
+      onChanged();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Delete failed");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <DrawerShell title={product.name} subtitle={product.supplierName} onClose={onClose}>
+      {/* product meta + edit/delete */}
+      <ProductMetaBlock
+        product={product}
+        editing={editing && canEdit}
+        onToggleEdit={() => setEditing((v) => !v)}
+        onSaved={() => { setEditing(false); onChanged(); }}
+        onDelete={onDelete}
+        canEdit={canEdit}
+        busy={busy}
+      />
+      {err && <div style={{ color: "#dc2626", fontSize: 12.5, padding: "4px 16px" }}>{err}</div>}
+
+      {/* Vertical category rail on the left, panel on the right. Each */}
+      {/* button stretches full-width so even long labels stay legible — no */}
+      {/* horizontal scroll. The drawer itself scrolls vertically when */}
+      {/* either column overflows. */}
+      <div style={{ display: "flex", gap: 0, alignItems: "flex-start" }}>
+        <nav
+          role="tablist"
+          aria-label="Attachment categories"
+          style={{
+            width: 200,
+            flexShrink: 0,
+            borderRight: "1px solid var(--lb-border)",
+            background: "var(--lb-bg-elev)",
+            padding: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            position: "sticky",
+            top: 64, // sit just below the sticky drawer header
+            alignSelf: "flex-start",
+          }}
+        >
+          {SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES.map((c) => {
+            const n = grouped[c.key].length;
+            const active = tab === c.key;
+            return (
+              <button
+                key={c.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(c.key)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "8px 10px",
+                  fontSize: 12.5,
+                  fontWeight: active ? 700 : 500,
+                  borderRadius: 6,
+                  border: active ? "1px solid var(--lb-accent)" : "1px solid transparent",
+                  background: active ? "rgba(8,145,178,0.12)" : "transparent",
+                  color: active ? "var(--lb-accent)" : "var(--lb-text-2)",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  transition: "background 140ms ease, color 140ms ease",
+                }}
+              >
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {c.label}
+                </span>
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  minWidth: 22,
+                  padding: "1px 7px",
+                  borderRadius: 999,
+                  background: n > 0
+                    ? (active ? "var(--lb-accent)" : "rgba(8,145,178,0.18)")
+                    : "var(--lb-bg)",
+                  color: n > 0 ? (active ? "var(--lb-accent-fg)" : "#0891b2") : "var(--lb-text-3)",
+                  textAlign: "center",
+                }}>
+                  {n}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+        <div style={{ flex: 1, minWidth: 0, padding: 16 }}>
+          <CategoryPanel
+            productId={product.id}
+            productThumbnailUrl={product.thumbnailUrl}
+            category={tab}
+            attachments={grouped[tab]}
+            canEdit={canEdit}
+            onChanged={onChanged}
+          />
+        </div>
+      </div>
+    </DrawerShell>
+  );
+}
+
+function ProductMetaBlock({ product, editing, onToggleEdit, onSaved, onDelete, canEdit, busy }: {
+  product: SupplierProductWithAttachments;
+  editing: boolean;
+  onToggleEdit: () => void;
+  onSaved: () => void;
+  onDelete: () => void;
+  canEdit: boolean;
+  busy: boolean;
+}) {
+  const [name, setName] = useState(product.name);
+  const [productCode, setProductCode] = useState(product.productCode ?? "");
+  const [category, setCategory] = useState(product.category ?? "");
+  const [description, setDescription] = useState(product.description ?? "");
+  const [notes, setNotes] = useState(product.notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(product.name);
+    setProductCode(product.productCode ?? "");
+    setCategory(product.category ?? "");
+    setDescription(product.description ?? "");
+    setNotes(product.notes ?? "");
+  }, [product.id, product.name, product.productCode, product.category, product.description, product.notes]);
+
+  async function save() {
+    setSaving(true); setErr(null);
+    try {
+      await updateSupplierProduct({
+        id: product.id,
+        name, productCode: productCode || null, category: category || null,
+        description: description || null, notes: notes || null,
+      });
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally { setSaving(false); }
+  }
+
+  if (!editing) {
+    return (
+      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8, borderBottom: "1px solid var(--lb-border)" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {product.productCode && (
+                <code style={{ background: "rgba(8,145,178,0.15)", color: "#0891b2", padding: "2px 8px", borderRadius: 5, fontSize: 11.5, fontWeight: 700 }}>
+                  {product.productCode}
+                </code>
+              )}
+              {product.category && (
+                <span style={{ fontSize: 11.5, color: "var(--lb-text-3)" }}>{product.category}</span>
+              )}
+            </div>
+            {product.description && (
+              <p style={{ fontSize: 13, color: "var(--lb-text-2)", margin: "6px 0 0", lineHeight: 1.5 }}>{product.description}</p>
+            )}
+          </div>
+          {canEdit && (
+            <div style={{ display: "flex", gap: 6 }}>
+              <button type="button" onClick={onToggleEdit} style={MINI_BTN}>Edit</button>
+              <button type="button" onClick={onDelete} disabled={busy} style={{ ...MINI_BTN, color: "#dc2626", borderColor: "rgba(220,38,38,0.4)" }}>Delete</button>
+            </div>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--lb-text-3)" }}>
+          Added {fmtStamp(product.createdAt)}
+          {product.createdByRole === "supplier" && <span> by supplier</span>}
+          {product.updatedAt && new Date(product.updatedAt).getTime() !== new Date(product.createdAt).getTime() && (
+            <span> · last updated {fmtStamp(product.updatedAt)}</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8, borderBottom: "1px solid var(--lb-border)" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <Field label="Name *">
+          <input value={name} onChange={(e) => setName(e.target.value)} style={INPUT_STYLE} />
+        </Field>
+        <Field label="Product code">
+          <input value={productCode} onChange={(e) => setProductCode(e.target.value)} style={INPUT_STYLE} />
+        </Field>
+        <Field label="Category">
+          <select value={category} onChange={(e) => setCategory(e.target.value)} style={INPUT_STYLE}>
+            <option value="">— none —</option>
+            {SUPPLIER_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <Field label="Description">
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} style={{ ...INPUT_STYLE, minHeight: 60, resize: "vertical" }} />
+      </Field>
+      <Field label="Notes (internal)">
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...INPUT_STYLE, minHeight: 50, resize: "vertical" }} />
+      </Field>
+      {err && <div style={{ color: "#dc2626", fontSize: 12.5 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button type="button" onClick={onToggleEdit} style={MINI_BTN}>Cancel</button>
+        <button type="button" onClick={save} disabled={saving} style={{ ...PRIMARY_BTN, opacity: saving ? 0.6 : 1 }}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CategoryPanel({ productId, productThumbnailUrl, category, attachments, canEdit, onChanged }: {
+  productId: number;
+  productThumbnailUrl: string | null;
+  category: SupplierProductAttachmentCategory;
+  attachments: SupplierProductAttachment[];
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  // Pending comment typed BEFORE the file is picked — applies to the next
+  // batch of files dropped in. Cleared once uploads finish. Per the brief,
+  // images and "other files" need comments; here we let any category carry
+  // an optional comment so the field is consistent across the six tabs.
+  const [comment, setComment] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function onPickFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploading(true); setErr(null);
+    const noteForBatch = comment.trim() || undefined;
+    try {
+      for (const file of Array.from(files)) {
+        const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 120);
+        const pathname = `suppliers/${productId}/${category}/${crypto.randomUUID()}-${safe}`;
+        const up = await upload(pathname, file, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: file.type || undefined,
+        });
+        await addSupplierProductAttachment({
+          productId,
+          category,
+          name: file.name,
+          url: up.url,
+          blobPathname: up.pathname,
+          contentType: file.type || undefined,
+          size: file.size,
+          notes: noteForBatch,
+        });
+      }
+      setComment("");
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Upload failed");
+    } finally { setUploading(false); }
+  }
+
+  async function onDelete(id: number) {
+    if (!confirm("Delete this file? This can't be undone.")) return;
+    try {
+      await deleteSupplierProductAttachment({ id });
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {canEdit && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Optional comment for the next upload — applies to every file in this batch (e.g. revision, project, notes)"
+            disabled={uploading}
+            style={{ ...INPUT_STYLE, minHeight: 50, resize: "vertical" }}
+          />
+          <label style={{
+            padding: 16,
+            border: "1.5px dashed var(--lb-border)",
+            borderRadius: 8,
+            background: "var(--lb-bg)",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: uploading ? "wait" : "pointer",
+            color: "var(--lb-text-2)",
+            fontSize: 13,
+          }}>
+            <input
+              type="file"
+              multiple
+              disabled={uploading}
+              onChange={(e) => onPickFiles(e.currentTarget.files)}
+              style={{ display: "none" }}
+            />
+            {uploading ? "Uploading…" : "📎 Drop files or click to upload"}
+          </label>
+        </div>
+      )}
+      {err && <div style={{ color: "#dc2626", fontSize: 12.5 }}>{err}</div>}
+
+      {attachments.length === 0 ? (
+        <div style={{ padding: 24, textAlign: "center", color: "var(--lb-text-3)", fontSize: 13, border: "1px dashed var(--lb-border)", borderRadius: 8 }}>
+          No files in this category yet.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {attachments.map((a) => (
+            <AttachmentRow
+              key={a.id}
+              attachment={a}
+              canEdit={canEdit}
+              productId={productId}
+              isCover={productThumbnailUrl != null && productThumbnailUrl === a.url}
+              onChanged={onChanged}
+              onDelete={() => onDelete(a.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Single attachment row — supports inline edit of the comment AND of the
+// file name. Image attachments show a larger thumbnail and a "Set as
+// cover" / "Cover" indicator that drives the product card's hero image.
+function AttachmentRow({ attachment, canEdit, productId, isCover, onChanged, onDelete }: {
+  attachment: SupplierProductAttachment;
+  canEdit: boolean;
+  productId: number;
+  isCover: boolean;
+  onChanged: () => void;
+  onDelete: () => void;
+}) {
+  const a = attachment;
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(a.name);
+  const [notes, setNotes] = useState(a.notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const [settingCover, setSettingCover] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const isImg = isImage(a.contentType, a.name);
+
+  async function setAsCover() {
+    setSettingCover(true); setErr(null);
+    try {
+      await updateSupplierProduct({
+        id: productId,
+        thumbnailUrl: a.url,
+        thumbnailPathname: a.blobPathname ?? null,
+      });
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to set cover");
+    } finally { setSettingCover(false); }
+  }
+
+  useEffect(() => {
+    setName(a.name);
+    setNotes(a.notes ?? "");
+  }, [a.id, a.name, a.notes]);
+
+  async function save() {
+    setSaving(true); setErr(null);
+    try {
+      await updateSupplierProductAttachment({
+        id: a.id,
+        name: name !== a.name ? name : undefined,
+        notes: (notes || null) !== (a.notes ?? null) ? notes : undefined,
+      });
+      setEditing(false);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{
+      display: "flex",
+      gap: 12,
+      alignItems: "flex-start",
+      padding: 12,
+      border: "1px solid var(--lb-border)",
+      borderRadius: 8,
+      background: "var(--lb-bg-elev)",
+    }}>
+      {isImg ? (
+        // Larger preview for product photos — click through to full size.
+        <a href={a.url} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0, display: "block", position: "relative" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={a.url}
+            alt={a.name}
+            style={{
+              width: 96,
+              height: 96,
+              objectFit: "cover",
+              borderRadius: 6,
+              border: isCover ? "2px solid var(--lb-accent)" : "1px solid var(--lb-border)",
+              display: "block",
+            }}
+          />
+          {isCover && (
+            <span style={{
+              position: "absolute",
+              top: 4,
+              left: 4,
+              padding: "2px 7px",
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.3,
+              textTransform: "uppercase",
+              borderRadius: 4,
+              background: "var(--lb-accent)",
+              color: "var(--lb-accent-fg)",
+              pointerEvents: "none",
+            }}>
+              Cover
+            </span>
+          )}
+        </a>
+      ) : (
+        <div style={{
+          width: 48, height: 48, borderRadius: 5, background: "var(--lb-bg)",
+          display: "grid", placeItems: "center", border: "1px solid var(--lb-border)",
+          flexShrink: 0, fontSize: 18,
+        }}>
+          {fileIcon(a.name)}
+        </div>
+      )}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+        {editing ? (
+          <>
+            <Field label="File name">
+              <input value={name} onChange={(e) => setName(e.target.value)} style={INPUT_STYLE} />
+            </Field>
+            <Field label="Comment">
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Notes, revision, project, anything that helps the buyer understand this file."
+                style={{ ...INPUT_STYLE, minHeight: 60, resize: "vertical" }}
+              />
+            </Field>
+            {err && <div style={{ color: "#dc2626", fontSize: 12 }}>{err}</div>}
+            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 2 }}>
+              <button type="button" onClick={() => { setEditing(false); setName(a.name); setNotes(a.notes ?? ""); setErr(null); }} style={MINI_BTN}>Cancel</button>
+              <button type="button" onClick={save} disabled={saving} style={{ ...PRIMARY_BTN, padding: "4px 12px", fontSize: 12, opacity: saving ? 0.6 : 1 }}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <a href={a.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--lb-text-1)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
+              {a.name}
+            </a>
+            <div style={{ fontSize: 11, color: "var(--lb-text-3)" }}>
+              Uploaded {fmtStamp(a.uploadedAt)}
+              {a.uploadedByRole === "supplier" && <span> by supplier</span>}
+              <span> · {fmtSize(a.size)}</span>
+            </div>
+            {a.notes && (
+              <div style={{
+                fontSize: 12.5,
+                color: "var(--lb-text-2)",
+                background: "var(--lb-bg)",
+                border: "1px solid var(--lb-border)",
+                borderLeft: "3px solid var(--lb-accent)",
+                borderRadius: 4,
+                padding: "6px 10px",
+                marginTop: 4,
+                whiteSpace: "pre-wrap",
+              }}>
+                {a.notes}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      {canEdit && !editing && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {isImg && !isCover && (
+            <button
+              type="button"
+              onClick={setAsCover}
+              disabled={settingCover}
+              title="Use this photo as the product card cover"
+              style={{ ...MINI_BTN, color: "var(--lb-accent)", borderColor: "var(--lb-accent)", opacity: settingCover ? 0.6 : 1 }}
+            >
+              {settingCover ? "Setting…" : "Set as cover"}
+            </button>
+          )}
+          <button type="button" onClick={() => setEditing(true)} style={MINI_BTN}>Edit</button>
+          <button type="button" onClick={onDelete} style={{ ...MINI_BTN, color: "#dc2626", borderColor: "rgba(220,38,38,0.4)" }}>Delete</button>
+          {err && <div style={{ color: "#dc2626", fontSize: 11 }}>{err}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+function isImage(contentType: string | null, name: string): boolean {
+  if (contentType?.startsWith("image/")) return true;
+  return /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(name);
+}
+function fileIcon(name: string): string {
+  if (/\.pdf$/i.test(name)) return "📄";
+  if (/\.(xlsx?|csv|tsv)$/i.test(name)) return "📊";
+  if (/\.(docx?|rtf)$/i.test(name)) return "📝";
+  if (/\.(zip|rar|7z)$/i.test(name)) return "🗜️";
+  return "📎";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shells
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ModalShell({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div role="dialog" aria-modal="true" style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100,
+      display: "grid", placeItems: "center", padding: 16,
+    }} onClick={onClose}>
+      <div style={{
+        background: "var(--lb-bg)",
+        border: "1px solid var(--lb-border)",
+        borderRadius: 12,
+        width: "100%",
+        maxWidth: 560,
+        boxShadow: "0 12px 48px rgba(0,0,0,0.4)",
+      }} onClick={(e) => e.stopPropagation()}>
+        <header style={{ padding: "12px 16px", borderBottom: "1px solid var(--lb-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>{title}</h3>
+          <button type="button" onClick={onClose} style={{ ...MINI_BTN, padding: "2px 8px" }}>✕</button>
+        </header>
+        <div style={{ padding: 16 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function DrawerShell({ title, subtitle, children, onClose }: { title: string; subtitle?: string; children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div role="dialog" aria-modal="true" style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100,
+      display: "flex", justifyContent: "flex-end",
+    }} onClick={onClose}>
+      <div style={{
+        background: "var(--lb-bg)",
+        borderLeft: "1px solid var(--lb-border)",
+        width: "100%",
+        maxWidth: 720,
+        boxShadow: "-12px 0 48px rgba(0,0,0,0.4)",
+        display: "flex",
+        flexDirection: "column",
+        overflowY: "auto",
+      }} onClick={(e) => e.stopPropagation()}>
+        <header style={{ padding: "14px 16px", borderBottom: "1px solid var(--lb-border)", display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "sticky", top: 0, background: "var(--lb-bg)", zIndex: 1 }}>
+          <div>
+            <h3 style={{ fontSize: 17, fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>{title}</h3>
+            {subtitle && <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>{subtitle}</div>}
+          </div>
+          <button type="button" onClick={onClose} style={{ ...MINI_BTN, padding: "4px 10px" }}>✕</button>
+        </header>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--lb-text-3)", textTransform: "uppercase", letterSpacing: "0.02em" }}>{label}</span>
+      {children}
+    </label>
+  );
+}

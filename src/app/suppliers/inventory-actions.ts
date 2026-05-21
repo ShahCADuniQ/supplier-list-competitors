@@ -91,6 +91,27 @@ export async function resolveOrCreateInventoryItem(input: {
   // If true, allow creating an item with a user-provided code that doesn't
   // exist yet. Defaults to false (strict-resolve mode).
   createIfMissing?: boolean;
+  // Optional IFC-extracted properties — populated on first creation only.
+  // For an existing part we leave these untouched so a re-parse doesn't
+  // clobber manually-edited values.
+  kind?: "part" | "assembly";
+  parentAssemblyId?: number | null;
+  weightG?: number | null;
+  surfaceAreaMm2?: number | null;
+  volumeMm3?: number | null;
+  material?: string | null;
+  densityGCm3?: number | null;
+  thumbnailUrl?: string;
+  thumbnailPathname?: string;
+  ifcSourceUrl?: string;
+  ifcSourceName?: string;
+  // When true (set by the IFC AutoFill flow) and `code` is blank, look
+  // for an existing inventory row that matches the part/assembly's
+  // signature (name + material + volume) before minting a new code. This
+  // is how re-importing a project that shares parts with prior projects
+  // keeps the inventory de-duplicated — the new RFQ gets linked to the
+  // EXISTING part instead of spawning a fresh LB-NNNNNN.
+  matchExistingBySignature?: boolean;
 }): Promise<ResolveResult> {
   const profile = await requireSupplierEditor();
   await ensureOrdersSchema();
@@ -117,10 +138,100 @@ export async function resolveOrCreateInventoryItem(input: {
         name: input.name?.trim() || trimmed,
         description: input.description?.trim() || null,
         category: input.category?.trim() || null,
+        kind: input.kind ?? "part",
+        parentAssemblyId: input.parentAssemblyId ?? null,
+        weightG: input.weightG != null ? String(input.weightG) : null,
+        surfaceAreaMm2: input.surfaceAreaMm2 != null ? String(input.surfaceAreaMm2) : null,
+        volumeMm3: input.volumeMm3 != null ? String(input.volumeMm3) : null,
+        material: input.material?.trim() || null,
+        densityGCm3: input.densityGCm3 != null ? String(input.densityGCm3) : null,
+        thumbnailUrl: input.thumbnailUrl ?? null,
+        thumbnailPathname: input.thumbnailPathname ?? null,
+        ifcSourceUrl: input.ifcSourceUrl ?? null,
+        ifcSourceName: input.ifcSourceName ?? null,
         createdByClerkId: profile.clerkUserId,
       })
       .returning({ id: inventoryItems.id, code: inventoryItems.code });
     return { id: created.id, code: created.code, isNew: true };
+  }
+
+  // SIGNATURE MATCH — when the caller flagged matchExistingBySignature
+  // (IFC AutoFill path), try to find an existing inventory row that
+  // already represents this exact part/assembly. We never want to spawn
+  // a duplicate LB-NNNNNN for the same screw / bracket / beam just
+  // because the user re-uploaded a new project that uses it.
+  //
+  // Match rules:
+  //   • Same kind (part-vs-assembly).
+  //   • Same name (case-insensitive).
+  //   • Same material (case-insensitive; treats null = null as a match).
+  //   • For parts only: volume within ±1% — guards against two distinct
+  //     parts that happen to share a name (e.g. "Bracket" of different sizes).
+  if (input.matchExistingBySignature && input.name?.trim()) {
+    const wantName = input.name.trim().toLowerCase();
+    const wantMat = (input.material ?? "").trim().toLowerCase();
+    const wantKind = input.kind ?? "part";
+    const candidates = await db
+      .select()
+      .from(inventoryItems)
+      .where(
+        sql`LOWER(${inventoryItems.name}) = ${wantName}
+          AND ${inventoryItems.kind} = ${wantKind}
+          AND ${inventoryItems.archived} = false`,
+      )
+      .limit(20);
+    // Some SolidWorks IFC exports ship the geometry + part name but ZERO
+    // psets / material associations (CFG-template files with placeholder
+    // dimensions). When the incoming line has no material AND no volume,
+    // trust the name alone — otherwise the part-number match would fail
+    // and we'd spawn a duplicate inventory row for the same screw / lens
+    // already populated from a prior, pset-rich upload.
+    const newHasMetadata = !!wantMat || input.volumeMm3 != null;
+    for (const c of candidates) {
+      if (newHasMetadata) {
+        const cMat = (c.material ?? "").trim().toLowerCase();
+        if (cMat !== wantMat) continue;
+        // Volume sanity check for parts. Assemblies don't have meaningful
+        // volume so we skip the check there.
+        if (wantKind === "part" && input.volumeMm3 != null && c.volumeMm3 != null) {
+          const cV = Number(c.volumeMm3);
+          const dV = input.volumeMm3;
+          if (cV > 0 && Math.abs(cV - dV) / cV > 0.01) continue;
+        }
+      }
+      // Match! Reuse the existing inventory row — return isNew=false so
+      // the caller knows it linked rather than created.
+      //
+      // Backfill any field that's null on the existing row but populated
+      // on the new input. This is how a second upload (the one that
+      // actually managed to render its isometric PNG) fills in the
+      // thumbnail / IFC source URL that a previous upload left empty.
+      // We DO NOT overwrite already-populated values — a human may have
+      // typed a description or material in the inventory editor.
+      const backfill: Partial<typeof inventoryItems.$inferInsert> = {};
+      if (!c.thumbnailUrl && input.thumbnailUrl) {
+        backfill.thumbnailUrl = input.thumbnailUrl;
+        backfill.thumbnailPathname = input.thumbnailPathname ?? null;
+      }
+      if (!c.ifcSourceUrl && input.ifcSourceUrl) {
+        backfill.ifcSourceUrl = input.ifcSourceUrl;
+        backfill.ifcSourceName = input.ifcSourceName ?? null;
+      }
+      if (!c.description && input.description?.trim()) {
+        backfill.description = input.description.trim();
+      }
+      if (!c.material && input.material?.trim()) {
+        backfill.material = input.material.trim();
+      }
+      if (c.weightG == null && input.weightG != null) backfill.weightG = String(input.weightG);
+      if (c.surfaceAreaMm2 == null && input.surfaceAreaMm2 != null) backfill.surfaceAreaMm2 = String(input.surfaceAreaMm2);
+      if (c.volumeMm3 == null && input.volumeMm3 != null) backfill.volumeMm3 = String(input.volumeMm3);
+      if (c.densityGCm3 == null && input.densityGCm3 != null) backfill.densityGCm3 = String(input.densityGCm3);
+      if (Object.keys(backfill).length > 0) {
+        await db.update(inventoryItems).set(backfill).where(eq(inventoryItems.id, c.id));
+      }
+      return { id: c.id, code: c.code, isNew: false };
+    }
   }
 
   // No code provided — auto-generate. Loop on unique-constraint failures
@@ -135,6 +246,17 @@ export async function resolveOrCreateInventoryItem(input: {
           name: input.name?.trim() || code,
           description: input.description?.trim() || null,
           category: input.category?.trim() || null,
+          kind: input.kind ?? "part",
+          parentAssemblyId: input.parentAssemblyId ?? null,
+          weightG: input.weightG != null ? String(input.weightG) : null,
+          surfaceAreaMm2: input.surfaceAreaMm2 != null ? String(input.surfaceAreaMm2) : null,
+          volumeMm3: input.volumeMm3 != null ? String(input.volumeMm3) : null,
+          material: input.material?.trim() || null,
+          densityGCm3: input.densityGCm3 != null ? String(input.densityGCm3) : null,
+          thumbnailUrl: input.thumbnailUrl ?? null,
+          thumbnailPathname: input.thumbnailPathname ?? null,
+          ifcSourceUrl: input.ifcSourceUrl ?? null,
+          ifcSourceName: input.ifcSourceName ?? null,
           createdByClerkId: profile.clerkUserId,
         })
         .returning({ id: inventoryItems.id, code: inventoryItems.code });
@@ -216,6 +338,9 @@ export async function listInventoryItems(): Promise<InventoryItemWithStats[]> {
 
 export type InventoryItemHistory = {
   item: InventoryItem;
+  // For an assembly: every child part with its own thumbnail + qty counts.
+  // For a part: empty array.
+  children: InventoryItemWithStats[];
   // RFQs that included this part, with the line + every quote line received.
   rfqs: Array<{
     rfq: Rfq;
@@ -282,8 +407,58 @@ export async function getInventoryItemHistory(itemId: number): Promise<Inventory
     .where(eq(purchaseOrderLines.inventoryItemId, itemId))
     .orderBy(desc(purchaseOrders.createdAt));
 
+  // For assemblies: pull every child part with its own rfq/po counts so
+  // the detail view can render them as cards.
+  let children: InventoryItemWithStats[] = [];
+  if (item.kind === "assembly") {
+    const childRows = await db
+      .select()
+      .from(inventoryItems)
+      .where(eq(inventoryItems.parentAssemblyId, itemId))
+      .orderBy(desc(inventoryItems.createdAt));
+    if (childRows.length > 0) {
+      const childIds = childRows.map((c) => c.id);
+      const cRfqCounts = await db
+        .select({
+          id: rfqItems.inventoryItemId,
+          n: sql<number>`COUNT(*)::int`,
+          lastAt: sql<Date | null>`MAX(${rfqs.createdAt})`,
+        })
+        .from(rfqItems)
+        .innerJoin(rfqs, eq(rfqs.id, rfqItems.rfqId))
+        .where(inArray(rfqItems.inventoryItemId, childIds))
+        .groupBy(rfqItems.inventoryItemId);
+      const cPoCounts = await db
+        .select({
+          id: purchaseOrderLines.inventoryItemId,
+          n: sql<number>`COUNT(*)::int`,
+          lastAt: sql<Date | null>`MAX(${purchaseOrders.createdAt})`,
+        })
+        .from(purchaseOrderLines)
+        .innerJoin(purchaseOrders, eq(purchaseOrders.id, purchaseOrderLines.poId))
+        .where(inArray(purchaseOrderLines.inventoryItemId, childIds))
+        .groupBy(purchaseOrderLines.inventoryItemId);
+      const cRfqMap = new Map(cRfqCounts.map((r) => [r.id ?? -1, r]));
+      const cPoMap = new Map(cPoCounts.map((r) => [r.id ?? -1, r]));
+      children = childRows.map((c) => {
+        const r = cRfqMap.get(c.id);
+        const p = cPoMap.get(c.id);
+        const lastR = r?.lastAt ? new Date(r.lastAt) : null;
+        const lastP = p?.lastAt ? new Date(p.lastAt) : null;
+        const lastActivityAt = lastP && lastR ? (lastP > lastR ? lastP : lastR) : (lastP ?? lastR ?? null);
+        return {
+          ...c,
+          rfqCount: Number(r?.n ?? 0),
+          poCount: Number(p?.n ?? 0),
+          lastActivityAt,
+        };
+      });
+    }
+  }
+
   return {
     item,
+    children,
     rfqs: rfqHits.map((r) => ({
       rfq: r.rfq,
       line: r.line,
@@ -332,6 +507,47 @@ export async function archiveInventoryItem(input: {
     .set({ archived: input.archived, updatedAt: new Date() })
     .where(eq(inventoryItems.id, input.itemId));
   revalidatePath("/suppliers");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QTY LIFECYCLE
+//
+// Two counters: pending_qty (RFQ-stage demand) + confirmed_qty (PO-sent).
+// Inventory view shows both so the buyer can see e.g. "12 on standby · 8
+// confirmed" for a part across every open RFQ.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function bumpInventoryPendingQty(input: {
+  inventoryItemId: number;
+  delta: number;
+}): Promise<void> {
+  // No requireSupplierEditor — called internally from createRfq, which has
+  // already authed. Skip the round-trip.
+  await ensureOrdersSchema();
+  await db
+    .update(inventoryItems)
+    .set({
+      pendingQty: sql`GREATEST(0, ${inventoryItems.pendingQty} + ${input.delta})`,
+      updatedAt: new Date(),
+    })
+    .where(eq(inventoryItems.id, input.inventoryItemId));
+}
+
+// Flips qty from "pending" to "confirmed" when a PO is sent. Subtracts
+// `qty` from pending_qty (clamped at 0) and adds it to confirmed_qty.
+export async function confirmInventoryQty(input: {
+  inventoryItemId: number;
+  qty: number;
+}): Promise<void> {
+  await ensureOrdersSchema();
+  await db
+    .update(inventoryItems)
+    .set({
+      pendingQty: sql`GREATEST(0, ${inventoryItems.pendingQty} - ${input.qty})`,
+      confirmedQty: sql`${inventoryItems.confirmedQty} + ${input.qty}`,
+      updatedAt: new Date(),
+    })
+    .where(eq(inventoryItems.id, input.inventoryItemId));
 }
 
 // Used by createRfq.ts to validate codes the buyer typed before insertion.

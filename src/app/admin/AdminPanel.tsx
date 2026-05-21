@@ -174,10 +174,26 @@ export type AdminClientRow = {
   updatedAt: Date;
 };
 
+// Minimal slice of crm_accounts surfaced in the admin "Clients" tab for
+// non-CADuniQ tenants (Lightbase admins see their own CRM accounts here;
+// CADuniQ admins keep the multi-tenant directory under the same tab key).
+type AdminCrmAccountRow = {
+  id: number;
+  name: string;
+  website: string | null;
+  industry: string | null;
+  tier: string;
+  country: string | null;
+  healthScore: number;
+  updatedAt: Date;
+};
+
 type Props = {
   users: UserProfile[];
   suppliers: AdminSupplierRow[];
   clients: AdminClientRow[];
+  crmAccounts: AdminCrmAccountRow[];
+  crmAccountTotal: number;
   isCaduniq: boolean;
   ownClientId: number | null;
   adminEmails: string[];
@@ -193,6 +209,8 @@ export default function AdminPanel({
   users,
   suppliers,
   clients,
+  crmAccounts,
+  crmAccountTotal,
   isCaduniq,
   ownClientId,
   adminEmails,
@@ -221,7 +239,7 @@ export default function AdminPanel({
   //   • Employees  — every non-admin user_profiles row (your team)
   //   • Suppliers  — every suppliers row (external, vendor-portal accounts)
   const [segment, setSegment] = useState<
-    "all" | "admins" | "employees" | "suppliers" | "clients"
+    "all" | "admins" | "employees" | "suppliers" | "clients" | "crm-clients"
   >(isCaduniq ? "clients" : "all");
   // When the CADuniQ admin clicks into a client from the Clients segment,
   // we scope the other tabs (employees / suppliers) to that one client.
@@ -465,6 +483,16 @@ export default function AdminPanel({
               active={segment === "suppliers"}
               onClick={() => setSegment("suppliers")}
             />
+            {/* CRM-linked Clients tab for non-CADuniQ tenants — surfaces */}
+            {/* THIS tenant's own customers (crm_accounts), distinct from */}
+            {/* the CADuniQ multi-tenant Clients directory above. */}
+            {!isCaduniq && (
+              <SegmentPill
+                label={`Clients (${crmAccountTotal})`}
+                active={segment === "crm-clients"}
+                onClick={() => setSegment("crm-clients")}
+              />
+            )}
           </>
         )}
         {isCaduniq && (
@@ -486,6 +514,11 @@ export default function AdminPanel({
             setSegment("all");
             setFilter("all");
           }}
+        />
+      ) : segment === "crm-clients" ? (
+        <CrmClientsSegment
+          accounts={crmAccounts}
+          totalCount={crmAccountTotal}
         />
       ) : segment === "suppliers" ? (
         <SuppliersSegment
@@ -835,6 +868,186 @@ function SuppliersSegment({
       isCaduniq={isCaduniq}
       appBaseUrl={appBaseUrl}
     />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CrmClientsSegment — non-CADuniQ tenants' "Clients" tab. Surfaces THIS
+// tenant's own CRM accounts (Lightbase's customers) with health, tier,
+// and a deep link to the full /crm/accounts module. The admin panel
+// shows a top-50 snapshot so the team can glance at who's in their CRM
+// without leaving the admin; the "Open full CRM" link takes them to the
+// real CRM workspace for filtering, editing, opportunities, etc.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CrmClientsSegment({
+  accounts,
+  totalCount,
+}: {
+  accounts: AdminCrmAccountRow[];
+  totalCount: number;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return accounts;
+    return accounts.filter((a) =>
+      `${a.name} ${a.industry ?? ""} ${a.country ?? ""} ${a.website ?? ""}`
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [accounts, query]);
+
+  const tierStyle = (tier: string): React.CSSProperties => ({
+    padding: "2px 9px",
+    fontSize: 10.5,
+    fontWeight: 700,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    borderRadius: 999,
+    border: "1px solid",
+    ...(tier === "strategic"
+      ? { borderColor: "#7c3aed", color: "#7c3aed", background: "rgba(124,58,237,0.08)" }
+      : tier === "key"
+        ? { borderColor: "#0891b2", color: "#0891b2", background: "rgba(8,145,178,0.08)" }
+        : tier === "active"
+          ? { borderColor: "#16a34a", color: "#16a34a", background: "rgba(22,163,74,0.08)" }
+          : tier === "lead"
+            ? { borderColor: "#ca8a04", color: "#ca8a04", background: "rgba(202,138,4,0.08)" }
+            : { borderColor: "var(--lb-border)", color: "var(--lb-text-3)" }),
+  });
+
+  function healthColor(score: number): string {
+    if (score >= 75) return "#16a34a";
+    if (score >= 50) return "#ca8a04";
+    return "#dc2626";
+  }
+
+  return (
+    <section style={{
+      background: "var(--lb-bg-elev)",
+      border: "1px solid var(--lb-border)",
+      borderRadius: 14,
+      padding: 16,
+      display: "flex",
+      flexDirection: "column",
+      gap: 12,
+    }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h2 style={{ fontSize: 17, fontWeight: 800, margin: 0 }}>Clients</h2>
+          <p style={{ fontSize: 13, color: "var(--lb-text-3)", margin: "4px 0 0", maxWidth: 720 }}>
+            Your customer accounts from the CRM module. This is a snapshot of the most
+            recently updated {accounts.length} of {totalCount.toLocaleString()} total accounts —
+            use the link below to manage pipelines, contacts, opportunities, and tickets.
+          </p>
+        </div>
+        <a
+          href="/crm/accounts"
+          style={{
+            padding: "8px 14px",
+            fontSize: 12.5,
+            fontWeight: 700,
+            borderRadius: 999,
+            background: "var(--lb-accent)",
+            color: "var(--lb-accent-fg)",
+            border: "1px solid var(--lb-accent)",
+            textDecoration: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Open full CRM →
+        </a>
+      </header>
+
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Filter the snapshot…"
+        style={{
+          padding: "8px 12px",
+          fontSize: 13,
+          borderRadius: 8,
+          background: "var(--lb-bg)",
+          color: "var(--lb-text)",
+          border: "1px solid var(--lb-border)",
+          outline: "none",
+        }}
+      />
+
+      {accounts.length === 0 ? (
+        <div style={{
+          padding: 28,
+          textAlign: "center",
+          color: "var(--lb-text-3)",
+          fontSize: 13,
+          border: "1px dashed var(--lb-border)",
+          borderRadius: 10,
+        }}>
+          No clients in your CRM yet. <a href="/crm/accounts" style={{ color: "var(--lb-accent)" }}>Add your first account in the CRM →</a>
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto", border: "1px solid var(--lb-border)", borderRadius: 10, background: "var(--lb-bg)" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--lb-border)", background: "var(--lb-bg-elev)" }}>
+                <th style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "var(--lb-text-3)", textTransform: "uppercase", letterSpacing: 0.5 }}>Client</th>
+                <th style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "var(--lb-text-3)", textTransform: "uppercase", letterSpacing: 0.5 }}>Industry</th>
+                <th style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "var(--lb-text-3)", textTransform: "uppercase", letterSpacing: 0.5 }}>Country</th>
+                <th style={{ textAlign: "left", padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "var(--lb-text-3)", textTransform: "uppercase", letterSpacing: 0.5 }}>Tier</th>
+                <th style={{ textAlign: "right", padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "var(--lb-text-3)", textTransform: "uppercase", letterSpacing: 0.5 }}>Health</th>
+                <th style={{ width: 60 }} aria-hidden />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((a) => (
+                <tr key={a.id} style={{ borderTop: "1px solid var(--lb-border)" }}>
+                  <td style={{ padding: "10px 12px" }}>
+                    <a href={`/crm/accounts/${a.id}`} style={{ color: "var(--lb-text)", fontWeight: 600, textDecoration: "none" }}>
+                      {a.name}
+                    </a>
+                    {a.website && (
+                      <div style={{ fontSize: 11, color: "var(--lb-text-3)", marginTop: 2 }}>
+                        <a href={a.website.startsWith("http") ? a.website : `https://${a.website}`} target="_blank" rel="noopener noreferrer" style={{ color: "var(--lb-text-3)" }}>
+                          {a.website.replace(/^https?:\/\//, "")}
+                        </a>
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ padding: "10px 12px", color: "var(--lb-text-2)" }}>{a.industry ?? "—"}</td>
+                  <td style={{ padding: "10px 12px", color: "var(--lb-text-2)" }}>{a.country ?? "—"}</td>
+                  <td style={{ padding: "10px 12px" }}>
+                    <span style={tierStyle(a.tier)}>{a.tier}</span>
+                  </td>
+                  <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                    <span style={{
+                      display: "inline-block",
+                      minWidth: 36,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      color: healthColor(a.healthScore),
+                      border: `1px solid ${healthColor(a.healthScore)}`,
+                    }}>
+                      {a.healthScore}
+                    </span>
+                  </td>
+                  <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                    <a href={`/crm/accounts/${a.id}`} aria-label={`Open ${a.name} in CRM`} style={{ color: "var(--lb-accent)", textDecoration: "none", fontSize: 14 }}>→</a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{ fontSize: 11.5, color: "var(--lb-text-3)" }}>
+        Showing {filtered.length} of {totalCount.toLocaleString()} client{totalCount === 1 ? "" : "s"}. Full search, pipeline, opportunities, and tickets live in the
+        {" "}<a href="/crm/accounts" style={{ color: "var(--lb-accent)" }}>CRM workspace</a>.
+      </div>
+    </section>
   );
 }
 

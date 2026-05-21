@@ -37,7 +37,7 @@ import {
   type SupplierQuoteAttachment,
   type SupplierQuoteLine,
 } from "@/db/schema";
-import { getOrCreateProfile, requireSupplierEditor } from "@/lib/permissions";
+import { getOrCreateProfile, requireSupplierAccess, requireSupplierEditor } from "@/lib/permissions";
 import { ensureOrdersSchema } from "./_ensure-orders-schema";
 import { ensureSupplierColumns } from "./_ensure-schema";
 
@@ -228,6 +228,34 @@ export type RfqItemInput = {
   // Pending attachments staged in the wizard before save. Inserted into
   // rfq_item_attachments after the item itself is created.
   attachments?: RfqItemAttachmentInput[];
+  // IFC-extracted physical properties (forwarded to inventory_items on
+  // first creation; ignored when the line links to an existing part).
+  weightG?: number | null;
+  surfaceAreaMm2?: number | null;
+  volumeMm3?: number | null;
+  material?: string | null;
+  densityGCm3?: number | null;
+  // When the line came from an IFC parse, the renderer's PNG + the source
+  // IFC file URL so the inventory part inherits both.
+  thumbnailUrl?: string;
+  thumbnailPathname?: string;
+  ifcSourceUrl?: string;
+  ifcSourceName?: string;
+  // True when this line is part of an assembly being staged in the same
+  // RFQ wizard. The server will link the part to the assembly's inventory
+  // row (created from a special "assembly" line item or the parent IFC).
+  assemblyLightbaseRef?: string;
+  // The IFC-parsed assembly name (e.g. "LBLX-10000-WXXXX-HXXXX-L0192-SA-FM-SEMI").
+  // Used as the inventory row's NAME for the parent assembly — the project
+  // name field on the RFQ is a free-form buyer label and shouldn't dictate
+  // the inventory identity. Same value on every line that shares an assembly.
+  ifcAssemblyName?: string;
+  // Whole-assembly isometric PNG. Set the same value on every line that
+  // shares an assembly so the server can attach it to the assembly's
+  // inventory row. Distinct from `thumbnailUrl` which is the THIS-PART
+  // isometric used for the part's own inventory card.
+  assemblyThumbnailUrl?: string;
+  assemblyThumbnailPathname?: string;
 };
 
 export async function createRfq(input: {
@@ -242,7 +270,16 @@ export async function createRfq(input: {
   quoteDeadline?: string | null;
   notes?: string;
   items: RfqItemInput[];
-}): Promise<{ rfqId: number; rfqNumber: string }> {
+}): Promise<{
+  rfqId: number;
+  rfqNumber: string;
+  // For the IFC AutoFill flow: how many inventory rows were reused
+  // (matched against an existing part / assembly via signature) vs
+  // freshly minted on this RFQ. Surfaced in the toast so the user knows
+  // "you linked to 3 existing parts and created 2 new ones".
+  inventoryReused: number;
+  inventoryCreated: number;
+}> {
   const profile = await requireSupplierEditor();
   await ensureOrdersSchema();
   if (!input.projectNum.trim())
@@ -272,18 +309,119 @@ export async function createRfq(input: {
 
   // Lazy import so the inventory module's imports don't pull into every
   // place rfq-actions is required.
-  const { resolveOrCreateInventoryItem } = await import("./inventory-actions");
+  const { resolveOrCreateInventoryItem, bumpInventoryPendingQty } = await import("./inventory-actions");
+
+  // Running counters surfaced in the response.
+  let inventoryReused = 0;
+  let inventoryCreated = 0;
+
+  // First pass — if any item is flagged as part of an assembly, resolve
+  // the assembly inventory row up-front so child parts can reference its
+  // ID. We collect them keyed by assembly Lightbase Ref.
+  //
+  // For IFC-derived assemblies the temp ref looks like `LB-ASSY-<rand>`
+  // — strictly creating that code would spawn a new assembly every
+  // upload. Instead we use signature matching (assembly name) to dedupe
+  // against existing assemblies in inventory.
+  const assemblyIdByRef = new Map<string, number>();
+  // Collect a name → first sample of IFC properties so the signature
+  // match can use the assembly's name as the match key.
+  const assemblyMetaByRef = new Map<
+    string,
+    { name?: string; thumbnailUrl?: string; thumbnailPathname?: string; ifcSourceUrl?: string; ifcSourceName?: string }
+  >();
+  for (const it of input.items) {
+    const ref = it.assemblyLightbaseRef?.trim();
+    if (!ref || assemblyMetaByRef.has(ref)) continue;
+    // Pull the FIRST line that references this assembly to get the
+    // assembly's name. Priority:
+    //   1. ifcAssemblyName from the IFC parser (canonical, e.g. "…SA-FM-SEMI")
+    //   2. projectName the buyer typed
+    //   3. The raw ref as a last resort
+    // The IFC name is the stable identity — re-uploading the same IFC must
+    // resolve to the SAME inventory assembly row, not a fresh one per
+    // upload (`LB-ASSY-<timestamp>`).
+    assemblyMetaByRef.set(ref, {
+      name:
+        it.ifcAssemblyName?.trim() ||
+        input.projectName?.trim() ||
+        ref,
+      // Prefer the dedicated whole-assembly PNG when present (set by the
+      // IFC AutoFill flow); fall back to the part's thumbnail otherwise
+      // (Excel / PDF flow doesn't render anything assembly-specific).
+      thumbnailUrl: it.assemblyThumbnailUrl ?? it.thumbnailUrl,
+      thumbnailPathname: it.assemblyThumbnailPathname ?? it.thumbnailPathname,
+      ifcSourceUrl: it.ifcSourceUrl,
+      ifcSourceName: it.ifcSourceName,
+    });
+  }
+  for (const [ref, meta] of assemblyMetaByRef) {
+    const isIfcTempRef = ref.startsWith("LB-ASSY-");
+    const asm = await resolveOrCreateInventoryItem({
+      // For IFC temp refs, pass NO code → triggers signature match (by
+      // name) → falls back to mint. For manually-typed refs, pass the
+      // code through strictly.
+      code: isIfcTempRef ? undefined : ref,
+      kind: "assembly",
+      name: meta.name,
+      thumbnailUrl: meta.thumbnailUrl,
+      thumbnailPathname: meta.thumbnailPathname,
+      ifcSourceUrl: meta.ifcSourceUrl,
+      ifcSourceName: meta.ifcSourceName,
+      matchExistingBySignature: isIfcTempRef,
+      createIfMissing: true,
+    });
+    if (asm.isNew) inventoryCreated += 1;
+    else inventoryReused += 1;
+    assemblyIdByRef.set(ref, asm.id);
+  }
 
   for (let i = 0; i < input.items.length; i++) {
     const it = input.items[i];
+    // The IFC AutoFill flow stuffs the PART NUMBER into productCode and
+    // populates IFC fields. Lines from that path get fuzzy-match dedup so
+    // the SAME bracket / beam / screw across two projects collapses into
+    // one inventory row. Plain Excel / PDF lines (no IFC fields) keep the
+    // exact existing behaviour.
+    const fromIfc =
+      !it.lightbaseRef &&
+      (it.weightG != null || it.volumeMm3 != null || it.material != null);
+    // For IFC lines we use the PART NUMBER (productCode) as the signature
+    // name — that's the stable identifier across uploads, not the verbose
+    // description.
+    const sigName = fromIfc ? (it.productCode?.trim() || it.description) : it.description;
     // Resolve / create the inventory part for this line. Empty Lightbase
     // Ref. → mint a new code AND create the part; typed-in code → strict
     // lookup (throws on unknown code unless overridden).
     const inv = await resolveOrCreateInventoryItem({
       code: it.lightbaseRef,
-      name: it.description,
+      name: sigName,
       description: it.specifications,
+      // IFC fields are forwarded on first creation only — resolveOrCreate
+      // doesn't update existing rows, so re-uploading an IFC for a part
+      // already in inventory leaves the original metadata alone.
+      kind: "part",
+      parentAssemblyId: it.assemblyLightbaseRef
+        ? assemblyIdByRef.get(it.assemblyLightbaseRef.trim()) ?? null
+        : null,
+      weightG: it.weightG ?? null,
+      surfaceAreaMm2: it.surfaceAreaMm2 ?? null,
+      volumeMm3: it.volumeMm3 ?? null,
+      material: it.material ?? null,
+      densityGCm3: it.densityGCm3 ?? null,
+      thumbnailUrl: it.thumbnailUrl,
+      thumbnailPathname: it.thumbnailPathname,
+      ifcSourceUrl: it.ifcSourceUrl,
+      ifcSourceName: it.ifcSourceName,
+      matchExistingBySignature: fromIfc,
     });
+    if (inv.isNew) inventoryCreated += 1;
+    else inventoryReused += 1;
+
+    // Bump pending qty on the inventory part — the RFQ stage is "demand",
+    // not yet "confirmed order". sendPo() flips this to confirmed_qty.
+    const totalQty = Math.max(1, it.qty | 0) + Math.max(0, it.securityStock ?? 0);
+    await bumpInventoryPendingQty({ inventoryItemId: inv.id, delta: totalQty });
     const [itemRow] = await db
       .insert(rfqItems)
       .values({
@@ -322,7 +460,7 @@ export async function createRfq(input: {
   }
 
   revalidatePath("/suppliers");
-  return { rfqId: row.id, rfqNumber };
+  return { rfqId: row.id, rfqNumber, inventoryReused, inventoryCreated };
 }
 
 export async function deleteRfq(rfqId: number): Promise<void> {
@@ -569,7 +707,10 @@ export async function setSupplierLogo(input: {
   name: string;
   blobPathname: string;
 }): Promise<void> {
-  await requireSupplierEditor();
+  // Supplier-self gate: a vendor signed into their portal can update
+  // their own letterhead. Admins can still set it on the supplier's
+  // behalf via the standard suppliers tab.
+  await requireSupplierAccess(input.supplierId);
   const [prev] = await db
     .select({ url: suppliers.logoUrl })
     .from(suppliers)
@@ -592,7 +733,7 @@ export async function setSupplierLogo(input: {
 }
 
 export async function clearSupplierLogo(supplierId: number): Promise<void> {
-  await requireSupplierEditor();
+  await requireSupplierAccess(supplierId);
   const [prev] = await db
     .select({ url: suppliers.logoUrl })
     .from(suppliers)
@@ -1236,10 +1377,37 @@ export async function sendPo(poId: number): Promise<void> {
     .where(eq(purchaseOrders.id, poId))
     .limit(1);
   if (!po) throw new Error("PO not found");
+
+  // Only confirm qty on the first send — re-sending the same PO shouldn't
+  // double-bump the inventory counter.
+  const alreadySent = po.status !== "draft" && po.sentAt != null;
+
   await db
     .update(purchaseOrders)
     .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
     .where(eq(purchaseOrders.id, poId));
+
+  if (!alreadySent) {
+    // Flip every linked part from pending_qty → confirmed_qty.
+    const lines = await db
+      .select({
+        qty: purchaseOrderLines.qty,
+        inventoryItemId: purchaseOrderLines.inventoryItemId,
+      })
+      .from(purchaseOrderLines)
+      .where(eq(purchaseOrderLines.poId, poId));
+    const { confirmInventoryQty } = await import("./inventory-actions");
+    for (const ln of lines) {
+      if (!ln.inventoryItemId || ln.qty <= 0) continue;
+      try {
+        await confirmInventoryQty({ inventoryItemId: ln.inventoryItemId, qty: ln.qty });
+      } catch (e) {
+        // Non-fatal: PO still sends; counter discrepancy can be reconciled
+        // manually from the inventory tab.
+        console.warn("[rfq] confirmInventoryQty failed:", e);
+      }
+    }
+  }
   await notifyTeam({
     kind: "po.issued",
     title: `PO ${po.poNumber} sent to ${po.supplierName}`,

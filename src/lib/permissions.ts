@@ -1,7 +1,44 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
-import { eq, sql } from "drizzle-orm";
+import { cookies } from "next/headers";
+import { and, eq, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { userProfiles, type UserProfile } from "@/db/schema";
+import {
+  suppliers,
+  supplierContacts,
+  userProfiles,
+  type UserProfile,
+} from "@/db/schema";
+
+// Cookie name shared with /sign-up?role=X — see comment there for the
+// full reasoning. We read it on first sign-in to persist the user's
+// role choice across Clerk's OAuth redirect chain, then clear it so it
+// can't pollute later sessions.
+const SIGNUP_ROLE_COOKIE = "cdq_signup_role";
+
+// Returns "engineering" | "supplier" | "retailer" if the cookie is set
+// to a recognised role, or null otherwise. Best-effort: any failure is
+// silently ignored so a malformed cookie never blocks sign-in.
+async function readSignupRoleCookie(): Promise<
+  "engineering" | "supplier" | "retailer" | null
+> {
+  try {
+    const jar = await cookies();
+    const v = jar.get(SIGNUP_ROLE_COOKIE)?.value;
+    if (v === "engineering" || v === "supplier" || v === "retailer") return v;
+  } catch {
+    /* cookies() can throw in non-request contexts; treat as absent. */
+  }
+  return null;
+}
+
+async function clearSignupRoleCookie(): Promise<void> {
+  try {
+    const jar = await cookies();
+    jar.delete(SIGNUP_ROLE_COOKIE);
+  } catch {
+    /* ignore */
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SELF-HEALING SCHEMA — migration 0022 added three module gates
@@ -36,6 +73,23 @@ export function ensureUserProfileColumns(): Promise<void> {
       await db.execute(
         sql`CREATE INDEX IF NOT EXISTS "user_profiles_is_supplier_idx" ON "user_profiles" ("is_supplier")`,
       );
+      // Retailer / buyer flag — set when the user signed up via the
+      // /get-started → "I buy finished products" path. The app shell
+      // routes them to /retailer (analogous to /portal for suppliers)
+      // and hides every internal module from them.
+      await db.execute(
+        sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "is_retailer" boolean NOT NULL DEFAULT false`,
+      );
+      await db.execute(
+        sql`CREATE INDEX IF NOT EXISTS "user_profiles_is_retailer_idx" ON "user_profiles" ("is_retailer")`,
+      );
+      // Resume hint for users who bailed mid-onboarding. NULL until they
+      // first visit /onboarding?role=X. The home page reads this to send
+      // unfinished signups back to the right wizard instead of dumping
+      // them on the "Awaiting access" screen.
+      await db.execute(
+        sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "pending_signup_role" text`,
+      );
       // Migration 0027 — multi-tenant + job role + PO source PDF
       await db.execute(sql`CREATE TABLE IF NOT EXISTS "clients" (
         "id" serial PRIMARY KEY,
@@ -48,6 +102,30 @@ export function ensureUserProfileColumns(): Promise<void> {
       )`);
       await db.execute(
         sql`CREATE UNIQUE INDEX IF NOT EXISTS "clients_name_idx" ON "clients" ("name")`,
+      );
+      // Per-client module gates. Drives the CADuniQ HQ dashboard's
+      // per-tenant module toggles. Defaults true so existing rows stay
+      // operational; CADuniQ admins disable specific modules per client.
+      await db.execute(
+        sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "can_use_suppliers" boolean NOT NULL DEFAULT true`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "can_use_competitors" boolean NOT NULL DEFAULT true`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "can_use_handbook" boolean NOT NULL DEFAULT true`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "can_use_engineering" boolean NOT NULL DEFAULT true`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "can_use_design_engineering" boolean NOT NULL DEFAULT true`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "can_use_crm" boolean NOT NULL DEFAULT true`,
+      );
+      await db.execute(
+        sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "can_use_oee" boolean NOT NULL DEFAULT true`,
       );
       await db.execute(
         sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "job_role" text`,
@@ -194,13 +272,42 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
     .where(eq(userProfiles.clerkUserId, userId))
     .limit(1);
 
-  if (existing.length) return existing[0];
+  if (existing.length) {
+    // Returning user. If we picked up a role-hint cookie from a
+    // /sign-up?role=X visit they made earlier but never recorded on the
+    // profile (e.g. they signed up via Google OAuth and the redirect
+    // chain dropped the URL param), persist it now so /onboarding +
+    // the home page can route them to the correct wizard.
+    const profile = existing[0];
+    const roleHint = await readSignupRoleCookie();
+    if (roleHint && !profile.pendingSignupRole) {
+      try {
+        await db
+          .update(userProfiles)
+          .set({ pendingSignupRole: roleHint, updatedAt: new Date() })
+          .where(eq(userProfiles.clerkUserId, userId));
+        profile.pendingSignupRole = roleHint;
+      } catch (e) {
+        console.warn("[permissions] failed to persist role-hint cookie:", e);
+      }
+      await clearSignupRoleCookie();
+    } else if (roleHint && profile.pendingSignupRole) {
+      // Already persisted; cookie is stale, drop it.
+      await clearSignupRoleCookie();
+    }
+    return profile;
+  }
 
   // First request after this Clerk user signed in — pull the email from Clerk.
   const user = await currentUser();
   const email = user?.emailAddresses?.[0]?.emailAddress?.toLowerCase() ?? "";
   const displayName =
     [user?.firstName, user?.lastName].filter(Boolean).join(" ") || null;
+
+  // Did they come from /sign-up?role=X? If so, persist the role hint on
+  // the brand-new profile so the home page can resume them on the right
+  // wizard if they ever sign out and back in.
+  const roleHintFromCookie = await readSignupRoleCookie();
 
   const isAdmin = isSeededAdminEmail(email);
   // Suppliers are external — never auto-admin. A supplier email being on
@@ -225,6 +332,11 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
       };
       if (displayName && !existingByEmail.displayName) {
         updates.displayName = displayName;
+      }
+      // Carry the role hint forward if this row is being adopted from
+      // an older anonymous insert that didn't have one.
+      if (roleHintFromCookie && !existingByEmail.pendingSignupRole) {
+        updates.pendingSignupRole = roleHintFromCookie;
       }
       // If this email is a seeded admin but the row was created in a less-
       // privileged state (pending/member from an earlier life), bring it up
@@ -260,6 +372,7 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
         .set(updates)
         .where(eq(userProfiles.email, email))
         .returning();
+      if (roleHintFromCookie) await clearSignupRoleCookie();
       return adopted ?? existingByEmail;
     }
   }
@@ -275,6 +388,9 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
       // table, so they're known.
       role: isAdmin ? "admin" : isSupplier ? "member" : "pending",
       isSupplier,
+      // If the user came from /sign-up?role=X, pre-stamp the role hint
+      // so subsequent sign-ins resume on the right wizard.
+      pendingSignupRole: roleHintFromCookie,
       canViewSuppliers: isAdmin,
       canViewCompetitors: isAdmin,
       canViewHandbook: isAdmin,
@@ -293,6 +409,7 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
     .onConflictDoNothing({ target: userProfiles.clerkUserId })
     .returning();
 
+  if (roleHintFromCookie) await clearSignupRoleCookie();
   if (created) return created;
 
   // Race-condition fallback: another request created it first.
@@ -315,6 +432,22 @@ export function isSupplierUser(
   return Boolean(profile.isSupplier);
 }
 
+/**
+ * Retailer users — public-signup buyers who chose "I buy finished products"
+ * on /get-started. They see ONLY the retailer portal (/retailer); every
+ * internal app section stays hidden from them. Mutually exclusive with
+ * supplier in practice (the sign-up wizard picks one), but the gate
+ * checks both flags so a misconfigured row doesn't accidentally grant
+ * elevated access.
+ */
+export function isRetailerUser(
+  profile: UserProfile | null | undefined,
+): boolean {
+  if (!profile) return false;
+  if (profile.role === "admin") return false;
+  return Boolean(profile.isRetailer);
+}
+
 // CADuniQ staff = anyone on the CADuniQ admin allowlist (the @caduniq.com
 // domain + the named seeded admins). CADuniQ users are cross-tenant —
 // they can browse every client's admin page. Client-side admins (e.g.
@@ -323,7 +456,17 @@ export function isCaduniqUser(
   profile: UserProfile | null | undefined,
 ): boolean {
   if (!profile) return false;
-  return isSeededAdminEmail(profile.email);
+  // CADuniQ staff = ONLY the @caduniq.com domain. Named admins from
+  // ADMIN_EMAILS (e.g. hshah@lightbase.ca) are seeded as client-tenant
+  // admins, not as cross-tenant CADuniQ staff — they should see only
+  // their own tenant in the admin panel. Bug fix: previously delegated
+  // to isSeededAdminEmail which conflated the two roles.
+  const email = profile.email?.toLowerCase();
+  if (!email) return false;
+  const at = email.lastIndexOf("@");
+  if (at === -1) return false;
+  const domain = email.slice(at + 1);
+  return ADMIN_EMAIL_DOMAINS.some((d) => d.toLowerCase() === domain);
 }
 
 export function isAdmin(profile: UserProfile | null | undefined): boolean {
@@ -401,6 +544,52 @@ export async function requireSupplierEditor(): Promise<UserProfile> {
     throw new Error("Unauthorized: cannot edit suppliers");
   }
   return profile;
+}
+
+/**
+ * Permission gate for mutating a SPECIFIC supplier's data (logo, contacts,
+ * product catalog, attachments — anything keyed to one supplier row). Two
+ * paths qualify:
+ *
+ *   1. Lightbase editor — `canViewSuppliers && canEdit`. Returns role
+ *      "lightbase" so calling code can stamp audit fields accordingly.
+ *   2. Supplier-self — the signed-in user is flagged `isSupplier` and
+ *      their Clerk email matches the supplier row (or any of its
+ *      supplier_contacts entries). Returns role "supplier".
+ *
+ * Throws Unauthorized otherwise. Use this for endpoints the SUPPLIER
+ * legitimately needs to call from the portal (logo upload, product
+ * catalog, attachments) so the same call works for admins QA-ing on
+ * their behalf AND for the supplier on their own.
+ */
+export async function requireSupplierAccess(supplierId: number): Promise<{
+  profile: UserProfile;
+  role: "lightbase" | "supplier";
+}> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (canViewSuppliers(profile) && canEdit(profile)) {
+    return { profile, role: "lightbase" };
+  }
+  if (isSupplierUser(profile) && profile.email) {
+    const emailLc = profile.email.toLowerCase();
+    const [match] = await db
+      .select({ id: suppliers.id })
+      .from(suppliers)
+      .leftJoin(supplierContacts, eq(supplierContacts.supplierId, suppliers.id))
+      .where(
+        and(
+          eq(suppliers.id, supplierId),
+          or(
+            sql`LOWER(${suppliers.email}) = ${emailLc}`,
+            sql`LOWER(${supplierContacts.email}) = ${emailLc}`,
+          ),
+        ),
+      )
+      .limit(1);
+    if (match) return { profile, role: "supplier" };
+  }
+  throw new Error("Unauthorized: cannot edit this supplier");
 }
 
 /** Throw if the current user can't view + edit competitors. */

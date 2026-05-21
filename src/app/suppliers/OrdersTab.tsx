@@ -11,7 +11,7 @@
 // routing yet (keeps the tab self-contained inside the ERP wrapper).
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Supplier, SupplierContact } from "@/db/schema";
 import { upload } from "@vercel/blob/client";
@@ -31,6 +31,8 @@ import {
   type RfqListRow,
 } from "./rfq-actions";
 import { parseRfqItemsFromUpload } from "./rfq-extract-actions";
+import { parseIfcUpload } from "./ifc-actions";
+import { renderIfcMultipart } from "./ifc-render";
 import {
   COMPARE_WEIGHTS,
   CURRENCY_OPTIONS,
@@ -450,16 +452,188 @@ function CreateView({
   // or PDF) and Claude extracts project info + line items into the form.
   const [extracting, setExtracting] = useState(false);
   const [extractMsg, setExtractMsg] = useState<string | null>(null);
+  // Progress bar — phase + percentage + the human-readable status line.
+  // null while idle; populated for the whole upload → parse → render → upload
+  // pipeline so the user always sees how far along they are.
+  const [progress, setProgress] = useState<{
+    phase: "uploading" | "parsing" | "rendering" | "uploading-thumb";
+    pct: number;
+    message: string;
+  } | null>(null);
+  // AbortController shared across the entire AutoFill pipeline. The user
+  // can hit Cancel mid-upload / mid-parse / mid-render and we'll bail at
+  // the next checkpoint.
+  const cancelTokenRef = useRef<AbortController | null>(null);
+  function cancelAutoFill() {
+    cancelTokenRef.current?.abort();
+    setProgress(null);
+    setExtracting(false);
+    setExtractMsg("Cancelled.");
+  }
   async function handleAutoFill(file: File) {
+    // Fresh cancel token per run; the previous one (if any) is replaced
+    // here so cancelAutoFill() always aborts the LATEST run.
+    cancelTokenRef.current = new AbortController();
     setExtracting(true);
     setExtractMsg(null);
+    setProgress({ phase: "uploading", pct: 0, message: "Starting upload…" });
     try {
+      const isIfc = /\.ifc$/i.test(file.name);
       const pathname = `ai-temp/rfq-extract/${crypto.randomUUID()}-${safeAiName(file.name)}`;
+      // Browsers don't agree on an IFC MIME — Chrome sends "" or
+      // "application/octet-stream" via the file picker. Pin the upload to
+      // octet-stream so the blob route's allowed-list always matches.
       const blob = await upload(pathname, file, {
         access: "public",
         handleUploadUrl: "/api/blob/upload",
-        contentType: file.type || undefined,
+        contentType: isIfc ? "application/octet-stream" : (file.type || undefined),
+        onUploadProgress: (e) => {
+          // Source-file upload counts as the first 30% of the overall
+          // progress bar — the IFC parse + render still ahead of us.
+          if (cancelTokenRef.current?.signal.aborted) return;
+          setProgress({
+            phase: "uploading",
+            pct: Math.round((e.percentage ?? 0) * 0.3),
+            message: `Uploading ${file.name}…`,
+          });
+        },
       });
+
+      if (cancelTokenRef.current?.signal.aborted) throw new Error("Cancelled");
+
+      if (isIfc) {
+        // IFC path — parse the bill of parts server-side, then render the
+        // isometric thumbnail client-side: ONE whole-assembly PNG plus
+        // one per-part PNG so every inventory card has its own picture.
+        setProgress({ phase: "parsing", pct: 30, message: "Parsing IFC… (server-side, ~5-20s)" });
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const parsed = await parseIfcUpload({ url: blob.url, fileName: file.name });
+        if (cancelTokenRef.current?.signal.aborted) throw new Error("Cancelled");
+
+        // Render WHOLE-assembly + per-part isometric PNGs in one model
+        // load. Each group keyed by partNumber (or "__assembly__" for the
+        // overview) → Blob. Failures inside renderIfcMultipart for a
+        // single group are non-fatal — the card just won't have a thumb.
+        const ASSEMBLY_KEY = "__assembly__";
+        const renderGroups = [
+          { key: ASSEMBLY_KEY }, // whole IFC
+          ...parsed.parts.map((p) => ({
+            key: p.partNumber,
+            expressIds: p.expressIds,
+          })),
+        ];
+        const pngBlobs = new Map<string, Blob>();
+        try {
+          setProgress({ phase: "rendering", pct: 40, message: `Rendering isometric views (1/${renderGroups.length})…` });
+          const blobs = await renderIfcMultipart({
+            bytes,
+            size: 800,
+            groups: renderGroups,
+            onProgress: (key, done, total) => {
+              if (cancelTokenRef.current?.signal.aborted) return;
+              setProgress({
+                phase: "rendering",
+                pct: 40 + Math.round((done / total) * 30),
+                message: `Rendering isometric views (${done}/${total})…`,
+              });
+            },
+          });
+          for (const [k, v] of blobs) pngBlobs.set(k, v);
+        } catch (e) {
+          if (cancelTokenRef.current?.signal.aborted) throw e;
+          console.warn("[ifc] render failed:", e);
+        }
+        if (cancelTokenRef.current?.signal.aborted) throw new Error("Cancelled");
+
+        // Upload each rendered PNG. Use Promise.all so 13 uploads run in
+        // parallel (Vercel Blob handles concurrent uploads fine).
+        setProgress({ phase: "uploading-thumb", pct: 75, message: `Uploading ${pngBlobs.size} isometric thumbnail${pngBlobs.size === 1 ? "" : "s"}…` });
+        const uploadedThumbs = new Map<string, { url: string; pathname: string }>();
+        await Promise.all(
+          Array.from(pngBlobs.entries()).map(async ([key, pngBlob]) => {
+            try {
+              const thumbPath = `ai-temp/ifc-thumbs/${crypto.randomUUID()}.png`;
+              const up = await upload(thumbPath, pngBlob, {
+                access: "public",
+                handleUploadUrl: "/api/blob/upload",
+                contentType: "image/png",
+              });
+              uploadedThumbs.set(key, { url: up.url, pathname: up.pathname });
+            } catch (e) {
+              console.warn(`[ifc] thumb upload failed for "${key}":`, e);
+            }
+          }),
+        );
+        if (cancelTokenRef.current?.signal.aborted) throw new Error("Cancelled");
+
+        const assemblyThumb = uploadedThumbs.get(ASSEMBLY_KEY);
+        const assemblyThumbUrl = assemblyThumb?.url;
+        const assemblyThumbPath = assemblyThumb?.pathname;
+
+        // If the file is an assembly, mint an inventory code for it now
+        // (client-side via a placeholder ref). The server uses the same
+        // ref to link parts under it. The server then dedupes by IFC
+        // assembly name so re-uploading the SAME file goes to the SAME
+        // inventory row instead of creating fresh assemblies each time.
+        const assemblyRef = parsed.isAssembly
+          ? `LB-ASSY-${Date.now().toString(36).toUpperCase()}`
+          : undefined;
+
+        const newItems: RfqItemInput[] = parsed.parts.map((p) => {
+          const partThumb = uploadedThumbs.get(p.partNumber);
+          // Fall back to the whole-assembly PNG if the part-specific render
+          // failed — better a generic picture than no picture at all.
+          const thumbUrl = partThumb?.url ?? assemblyThumbUrl;
+          const thumbPath = partThumb?.pathname ?? assemblyThumbPath;
+          return {
+            productCode: p.partNumber,
+            description: p.description?.trim() || p.partNumber,
+            qty: Math.max(1, p.qty),
+            securityStock: Math.max(0, Math.round(p.qty * 0.25)),
+            specifications: undefined,
+            lightbaseRef: undefined,
+            weightG: p.weightG,
+            surfaceAreaMm2: p.surfaceAreaMm2,
+            volumeMm3: p.volumeMm3,
+            material: p.material,
+            densityGCm3: p.densityGCm3,
+            // Per-part thumbnail for THIS line's inventory card.
+            thumbnailUrl: thumbUrl,
+            thumbnailPathname: thumbPath,
+            ifcSourceUrl: blob.url,
+            ifcSourceName: file.name,
+            assemblyLightbaseRef: assemblyRef,
+            ifcAssemblyName: parsed.assemblyName ?? undefined,
+            // Whole-assembly thumbnail — same on every line so the server
+            // can attach it to the parent assembly's inventory row.
+            assemblyThumbnailUrl: assemblyThumbUrl,
+            assemblyThumbnailPathname: assemblyThumbPath,
+            // Attach the per-part render to the line's Product Photos so
+            // the printed RFQ shows a picture of THIS screw / lens /
+            // bracket — not the whole assembly on every row.
+            attachments: thumbUrl
+              ? [{
+                  kind: "photo",
+                  name: `${p.partNumber} (isometric)`,
+                  url: thumbUrl,
+                  blobPathname: thumbPath,
+                  contentType: "image/png",
+                }]
+              : undefined,
+          };
+        });
+
+        if (newItems.length > 0) setItems(newItems);
+        if (!projectName.trim() && parsed.assemblyName) setProjectName(parsed.assemblyName);
+        const summary = parsed.isAssembly
+          ? `assembly "${parsed.assemblyName ?? "unnamed"}" with ${newItems.length} unique part${newItems.length === 1 ? "" : "s"}`
+          : `${newItems.length} part${newItems.length === 1 ? "" : "s"}`;
+        const warn = parsed.warnings.length > 0 ? ` · ⚠ ${parsed.warnings.join(" / ")}` : "";
+        setExtractMsg(`✓ IFC parsed: ${summary}${warn}. Review and edit below before saving.`);
+        return;
+      }
+
+      // Excel / PDF path — original AI extractor.
       const parsed = await parseRfqItemsFromUpload({ url: blob.url, fileName: file.name });
       // Merge into the form — only overwrite blank fields so the user's
       // typing isn't clobbered.
@@ -475,11 +649,17 @@ function CreateView({
         `✓ Auto-filled ${parsed.items.length} line item${parsed.items.length === 1 ? "" : "s"}. Review and edit below before saving.`,
       );
     } catch (err) {
-      setExtractMsg(
-        `Auto-fill failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      // Cancellation is normal — surface it quietly, don't shout "failed".
+      if (cancelTokenRef.current?.signal.aborted || (err instanceof Error && err.message === "Cancelled")) {
+        setExtractMsg("Cancelled.");
+      } else {
+        setExtractMsg(
+          `Auto-fill failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     } finally {
       setExtracting(false);
+      setProgress(null);
     }
   }
 
@@ -552,6 +732,14 @@ function CreateView({
           try { await navigator.clipboard.writeText(lastUrl); } catch {}
           ping(`RFQ created · ${invitedSuppliers} supplier${invitedSuppliers === 1 ? "" : "s"} (${invitedEmails} email${invitedEmails === 1 ? "" : "s"}) invited · last link copied`);
         }
+        // Inventory dedup summary — only show when the RFQ linked to any
+        // existing parts so the user knows the IFC didn't spawn dupes.
+        if (r.inventoryReused > 0) {
+          ping(
+            `📦 Inventory: linked to ${r.inventoryReused} existing part${r.inventoryReused === 1 ? "" : "s"}` +
+            (r.inventoryCreated > 0 ? ` · ${r.inventoryCreated} new` : ""),
+          );
+        }
         onCreated(r.rfqId);
       } catch (e) {
         // Surface the actual server-action error in both the form banner
@@ -581,7 +769,7 @@ function CreateView({
         <h3 style={panelH3}>
           ⚡ Auto-fill from upload
           <span style={{ fontSize: 11, color: "var(--lb-text-3)", fontWeight: 500, marginLeft: 8 }}>
-            (drop an existing RFQ Excel or PDF — AI extracts the line items)
+            (drop an Excel / PDF — AI extracts items · or drop a .ifc — parser extracts parts, qty, weight, surface area, volume, material + renders isometric view)
           </span>
         </h3>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -594,10 +782,10 @@ function CreateView({
               border: "1px solid #7c3aed",
             }}
           >
-            {extracting ? "Reading file… (~10-30s)" : "📂 Choose Excel / PDF"}
+            {extracting ? "Working…" : "📂 Choose Excel / PDF / IFC"}
             <input
               type="file"
-              accept=".xlsx,.xls,.csv,application/pdf"
+              accept=".xlsx,.xls,.csv,application/pdf,.ifc"
               style={{ display: "none" }}
               disabled={extracting}
               onChange={(e) => {
@@ -607,12 +795,66 @@ function CreateView({
               }}
             />
           </label>
-          {extractMsg && (
+          {extracting && (
+            <button
+              type="button"
+              onClick={cancelAutoFill}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 999,
+                background: "transparent",
+                color: "#dc2626",
+                border: "1px solid rgba(220,38,38,0.5)",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              ✕ Cancel
+            </button>
+          )}
+          {extractMsg && !progress && (
             <span style={{ fontSize: 12, color: extractMsg.startsWith("✓") ? "#16a34a" : "#dc2626" }}>
               {extractMsg}
             </span>
           )}
         </div>
+        {progress && (
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12, color: "var(--lb-text-2)" }}>{progress.message}</span>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--lb-text)", fontVariantNumeric: "tabular-nums" }}>
+                {Math.max(0, Math.min(100, Math.round(progress.pct)))}%
+              </span>
+            </div>
+            <div
+              role="progressbar"
+              aria-valuenow={Math.round(progress.pct)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              style={{
+                position: "relative",
+                width: "100%",
+                height: 8,
+                borderRadius: 999,
+                background: "var(--lb-bg)",
+                border: "1px solid var(--lb-border)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: `${Math.max(0, Math.min(100, progress.pct))}%`,
+                  background:
+                    "linear-gradient(90deg, rgba(124,58,237,0.9), rgba(8,145,178,0.9))",
+                  transition: "width 250ms ease-out",
+                }}
+              />
+            </div>
+          </div>
+        )}
       </section>
 
       <section style={panelStyle}>
@@ -733,9 +975,49 @@ function CreateView({
                   )}
                 </div>
               </div>
-              <Field label="Specifications / notes">
-                <input value={it.specifications ?? ""} onChange={(e) => updateLine(i, { specifications: e.target.value })} placeholder="any extra spec text…" style={inputStyle} />
-              </Field>
+              {/* IFC-extracted physical properties — also editable manually
+                  for parts entered by hand. Auto-populated by the IFC
+                  AutoFill flow; nothing goes into specifications. */}
+              <div style={gridCols(4)}>
+                <Field label="Material">
+                  <input
+                    value={it.material ?? ""}
+                    onChange={(e) => updateLine(i, { material: e.target.value })}
+                    placeholder="e.g. 316 Stainless Steel"
+                    style={inputStyle}
+                  />
+                </Field>
+                <Field label="Weight (g)">
+                  <input
+                    type="number"
+                    step="any"
+                    value={it.weightG ?? ""}
+                    onChange={(e) => updateLine(i, { weightG: e.target.value === "" ? null : Number(e.target.value) })}
+                    placeholder="0.00"
+                    style={inputStyle}
+                  />
+                </Field>
+                <Field label="Surface area (mm²)">
+                  <input
+                    type="number"
+                    step="any"
+                    value={it.surfaceAreaMm2 ?? ""}
+                    onChange={(e) => updateLine(i, { surfaceAreaMm2: e.target.value === "" ? null : Number(e.target.value) })}
+                    placeholder="0.00"
+                    style={inputStyle}
+                  />
+                </Field>
+                <Field label="Volume (mm³)">
+                  <input
+                    type="number"
+                    step="any"
+                    value={it.volumeMm3 ?? ""}
+                    onChange={(e) => updateLine(i, { volumeMm3: e.target.value === "" ? null : Number(e.target.value) })}
+                    placeholder="0.00"
+                    style={inputStyle}
+                  />
+                </Field>
+              </div>
               <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
                 <LineAttachmentBucket
                   kind="photo"

@@ -6,6 +6,7 @@ import { NO_FOUC_SCRIPT } from "@/lib/theme";
 import {
   getOrCreateProfile,
   isAdmin,
+  isCaduniqUser,
   isSupplierUser,
   canViewSuppliers,
   canViewCompetitors,
@@ -29,7 +30,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: `${CLIENT_CONFIG.name} — Operations · a ${CADUNIQ_PRODUCT_LABEL} product`,
+  title: `${CLIENT_CONFIG.name} Operations · a ${CADUNIQ_PRODUCT_LABEL} product`,
   description: `Internal operations console for ${CLIENT_CONFIG.name}: suppliers, inventory, ${CLIENT_CONFIG.industry}, and competitor intelligence. Property & software of ${CADUNIQ_PRODUCT_LABEL}.`,
 };
 
@@ -60,6 +61,7 @@ export default async function RootLayout({
               email={profile.email}
               role={profile.role}
               isSupplier={isSupplierUser(profile)}
+              isCaduniq={isCaduniqUser(profile)}
               canViewSuppliers={canViewSuppliers(profile)}
               canViewCompetitors={canViewCompetitors(profile)}
               canViewHandbook={canViewHandbook(profile)}

@@ -4,6 +4,7 @@ import { desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   clients,
+  inventoryItems,
   rfqItemAttachments,
   rfqItems,
   rfqRecipients,
@@ -137,6 +138,30 @@ export default async function RfqPage({
     (attachmentsByItem[a.rfqItemId] ?? (attachmentsByItem[a.rfqItemId] = [])).push(a);
   }
 
+  // Pull the IFC-derived physical properties (weight, surface area, volume,
+  // material) for every line that links to an inventory item. The print
+  // template uses these to render the WEIGHT (g) / SURFACE AREA (mm²) /
+  // VOLUME (mm³) columns that match the user's Excel template.
+  const inventoryIds = items
+    .map((it) => it.inventoryItemId)
+    .filter((id): id is number => id != null);
+  const invRows = inventoryIds.length > 0
+    ? await db
+        .select({
+          id: inventoryItems.id,
+          weightG: inventoryItems.weightG,
+          surfaceAreaMm2: inventoryItems.surfaceAreaMm2,
+          volumeMm3: inventoryItems.volumeMm3,
+          material: inventoryItems.material,
+          densityGCm3: inventoryItems.densityGCm3,
+          thumbnailUrl: inventoryItems.thumbnailUrl,
+        })
+        .from(inventoryItems)
+        .where(inArray(inventoryItems.id, inventoryIds))
+    : [];
+  const inventoryByItemId: Record<number, (typeof invRows)[number]> = {};
+  for (const r of invRows) inventoryByItemId[r.id] = r;
+
   // Resolve the client logo (used as letterhead on the printed RFQ).
   // Tenant scoping isn't strict here yet — we pull the first client whose
   // name matches the deployment's CLIENT_CONFIG.name. Falls back to no
@@ -175,6 +200,7 @@ export default async function RfqPage({
           rfq={rfq}
           items={items}
           attachmentsByItem={attachmentsByItem}
+          inventoryByItemId={inventoryByItemId}
           clientLogoUrl={clientRow?.logoUrl ?? null}
           recipients={recipients.map((r) => ({
             ...r,

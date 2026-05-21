@@ -42,3 +42,11 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# BIM model files. IFCs are CAD exports; the matching JSON dumps are
+# produced by scripts/ifc-to-json.mjs from those same models. Neither
+# belongs in source — both are large binaries that push GitHub past
+# its 100 MB-per-file limit. Keep them on disk locally; commit code
+# that processes them, not the models themselves.
+*.ifc
+LBLX-*.json

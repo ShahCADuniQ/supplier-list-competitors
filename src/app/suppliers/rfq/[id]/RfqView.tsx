@@ -21,10 +21,32 @@ function safeFileName(name: string): string {
     .slice(0, 100) || "file";
 }
 
+// Subset of inventory_items used by the print template — passed through
+// from the loader so the WEIGHT / SURFACE AREA / VOLUME columns can pull
+// IFC-derived numbers without an extra round-trip.
+type RfqViewInventory = {
+  id: number;
+  weightG: string | null;
+  surfaceAreaMm2: string | null;
+  volumeMm3: string | null;
+  material: string | null;
+  densityGCm3: string | null;
+  thumbnailUrl: string | null;
+};
+
+function fmtNumber(v: string | number | null, opts?: { fractionDigits?: number }): string {
+  if (v == null || v === "") return "—";
+  const n = typeof v === "number" ? v : parseFloat(v);
+  if (!Number.isFinite(n)) return "—";
+  const d = opts?.fractionDigits ?? 2;
+  return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
 export default function RfqView({
   rfq,
   items,
   attachmentsByItem = {},
+  inventoryByItemId = {},
   clientLogoUrl = null,
   recipients,
   clientName,
@@ -34,6 +56,7 @@ export default function RfqView({
   rfq: Rfq;
   items: RfqItem[];
   attachmentsByItem?: Record<number, RfqItemAttachment[]>;
+  inventoryByItemId?: Record<number, RfqViewInventory>;
   clientLogoUrl?: string | null;
   recipients: Array<RfqRecipient & { portalUrl: string }>;
   clientName: string;
@@ -256,23 +279,28 @@ export default function RfqView({
               <th style={th}>LIGHTBASE REF.</th>
               <th style={th}>CLIENT REF.</th>
               <th style={th}>PRODUCT PHOTO</th>
-              <th style={{ ...th, textAlign: "left" }}>PRODUCT CODE</th>
-              <th style={{ ...th, textAlign: "left" }}>SPECIFICATIONS</th>
+              <th style={{ ...th, textAlign: "left" }}>PART NUMBER</th>
+              <th style={{ ...th, textAlign: "left" }}>DESCRIPTION</th>
               <th style={{ ...th, textAlign: "right" }}>QTY</th>
               <th style={{ ...th, textAlign: "right" }}>SECURITY STOCK</th>
               <th style={{ ...th, textAlign: "right" }}>TOTAL QTY</th>
+              <th style={{ ...th, textAlign: "left" }}>MATERIAL</th>
+              <th style={{ ...th, textAlign: "right" }}>WEIGHT (g)</th>
+              <th style={{ ...th, textAlign: "right" }}>SURFACE AREA (mm²)</th>
+              <th style={{ ...th, textAlign: "right" }}>VOLUME (mm³)</th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ padding: 18, textAlign: "center", color: "#888" }}>
+                <td colSpan={12} style={{ padding: 18, textAlign: "center", color: "#888" }}>
                   No line items.
                 </td>
               </tr>
             ) : (
               items.map((it, rowIdx) => {
                 const atts = attachmentsByItem[it.id] ?? [];
+                const inv = it.inventoryItemId != null ? inventoryByItemId[it.inventoryItemId] : undefined;
                 // Legacy single catalog_attachment_* is treated as a virtual
                 // doc attachment so older RFQs still show their file chip.
                 const legacy = it.catalogAttachmentUrl
@@ -364,6 +392,18 @@ export default function RfqView({
                     <td style={{ ...td, textAlign: "right" }}>{it.securityStock}</td>
                     <td style={{ ...td, textAlign: "right", fontWeight: 700, background: "#f5f5f7" }}>
                       {it.qty + it.securityStock}
+                    </td>
+                    <td style={{ ...td, textAlign: "left", color: "#222", fontSize: 10.5 }}>
+                      {inv?.material ?? "—"}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                      {fmtNumber(inv?.weightG ?? null)}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                      {fmtNumber(inv?.surfaceAreaMm2 ?? null)}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                      {fmtNumber(inv?.volumeMm3 ?? null)}
                     </td>
                   </tr>
                 );

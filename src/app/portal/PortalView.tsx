@@ -18,6 +18,7 @@ import {
 } from "@/app/suppliers/_orders-constants";
 import { SupplierLogoUploader } from "@/app/suppliers/LogoUploader";
 import SupplierChat from "@/app/suppliers/SupplierChat";
+import { SupplierCatalogView } from "@/app/suppliers/SupplierInventoryTab";
 import type { PurchaseOrder, Rfq, RfqRecipient, SupplierQuote } from "@/db/schema";
 
 type Invite = {
@@ -70,6 +71,13 @@ export default function PortalView({
   pos: PoSummary[];
   isAdminPreview: boolean;
 }) {
+  // Three top-level tabs the supplier sees: their product catalogue (their
+  // own listings), incoming order requests (RFQs + awarded POs), and live
+  // chat with the buyer. Defaults to the catalogue so a fresh supplier
+  // with no RFQs yet still lands on something they can interact with.
+  const [tab, setTab] = useState<"catalogue" | "orders" | "chat">(
+    invites.length > 0 || pos.length > 0 ? "orders" : "catalogue",
+  );
   // Project filter + free-text search across both invites and POs. "all" =
   // every project; specific value = restrict to one project number. Search
   // matches RFQ/PO numbers, project names, niches.
@@ -235,121 +243,210 @@ export default function PortalView({
         <Kpi label="Awarded POs" value={String(filteredPos.length)} color="#7c3aed" />
       </section>
 
-      {/* Project filter + search bar */}
-      <section
+      {/* Tab nav — three top-level views the supplier toggles between. */}
+      {/* Catalogue: their own products + categorised attachments. */}
+      {/* Order requests: every RFQ they've been invited to + awarded POs. */}
+      {/* Chat: live conversation with the buyer. */}
+      <nav
+        role="tablist"
+        aria-label="Supplier portal sections"
         style={{
           display: "flex",
-          gap: 8,
-          flexWrap: "wrap",
-          alignItems: "center",
-          padding: 14,
-          borderRadius: 12,
+          gap: 6,
+          padding: 4,
           background: "var(--lb-bg-elev)",
           border: "1px solid var(--lb-border)",
+          borderRadius: 999,
+          alignSelf: "flex-start",
+          flexWrap: "wrap",
         }}
       >
-        <select
-          value={projectFilter}
-          onChange={(e) => setProjectFilter(e.target.value)}
-          style={{
-            padding: "8px 12px",
-            borderRadius: 999,
-            background: "var(--lb-bg)",
-            color: "var(--lb-text)",
-            border: "1px solid var(--lb-border)",
-            fontSize: 12.5,
-            fontWeight: 600,
-            minWidth: 200,
-          }}
-        >
-          <option value="all">All projects ({invites.length + pos.length})</option>
-          {projectOptions.map((p) => (
-            <option key={p.num} value={p.num}>
-              {p.name ? `${p.num} · ${p.name}` : p.num} ({p.count})
-            </option>
-          ))}
-        </select>
-        <input
-          type="search"
-          placeholder="Search project, RFQ #, PO #…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{
-            flex: 1,
-            minWidth: 200,
-            padding: "8px 14px",
-            borderRadius: 999,
-            background: "var(--lb-bg)",
-            color: "var(--lb-text)",
-            border: "1px solid var(--lb-border)",
-            fontSize: 13,
-          }}
-        />
-        {(projectFilter !== "all" || search) && (
-          <button
-            type="button"
-            onClick={() => { setProjectFilter("all"); setSearch(""); }}
-            style={{
-              padding: "8px 14px",
-              borderRadius: 999,
-              background: "transparent",
-              color: "var(--lb-text-2)",
-              border: "1px solid var(--lb-border)",
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Clear filters
-          </button>
-        )}
-        <span style={{ fontSize: 11.5, color: "var(--lb-text-3)" }}>
-          {filteredInvites.length} RFQ · {filteredPos.length} PO
-        </span>
-      </section>
+        {(
+          [
+            { key: "catalogue", label: "Catalogue", count: undefined as number | undefined },
+            { key: "orders", label: "Order requests", count: invites.length + pos.length },
+            { key: "chat", label: "Chat", count: undefined as number | undefined },
+          ] as const
+        ).map((t) => {
+          const isActive = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => setTab(t.key)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: isActive ? 700 : 600,
+                borderRadius: 999,
+                background: isActive ? "var(--lb-accent)" : "transparent",
+                color: isActive ? "var(--lb-accent-fg)" : "var(--lb-text-2)",
+                border: isActive
+                  ? "1px solid var(--lb-accent)"
+                  : "1px solid transparent",
+                cursor: "pointer",
+                transition: "background 160ms ease, color 160ms ease",
+              }}
+            >
+              {t.label}
+              {t.count !== undefined && t.count > 0 && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "1px 7px",
+                    borderRadius: 999,
+                    background: isActive
+                      ? "rgba(255,255,255,0.22)"
+                      : "var(--lb-bg)",
+                    color: isActive ? "var(--lb-accent-fg)" : "var(--lb-text-3)",
+                  }}
+                >
+                  {t.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
 
-      {/* Live chat with the buyer — same component the buyer uses, just
-          with viewerRole="supplier" so they can't rename / create channels.
-          Same underlying data, both parties see updates within seconds. */}
-      <Panel
-        title={`💬 Chat with ${clientName}`}
-        subtitle="Real-time messages between your team and the buyer. Pick a channel on the left or stay in General."
-      >
-        <SupplierChat
-          supplierId={supplier.id}
-          supplierName={supplier.name}
-          viewerRole="supplier"
-          height={480}
-        />
-      </Panel>
-
-      <Panel
-        title={`Active requests (${active.length})`}
-        subtitle="Open these to submit your quote, update prices, or upload supporting documents."
-      >
-        {active.length === 0 ? (
-          <Empty>
-            {projectFilter !== "all" || search
-              ? "No active RFQs match the current filter."
-              : `You have no active RFQs from ${clientName} right now.`}
-          </Empty>
-        ) : (
-          <InviteList invites={active} />
-        )}
-      </Panel>
-
-      {filteredPos.length > 0 && (
+      {tab === "catalogue" && (
         <Panel
-          title={`Purchase orders awarded to you (${filteredPos.length})`}
-          subtitle={`Download as PDF (browser print) or Excel. ${clientName} will reach out with shipping instructions on each one.`}
+          title="My catalog"
+          subtitle={`Add the products you offer to ${clientName}. Drop datasheets, IES files, drawings, quotes, contracts, certifications, QC reports, photos, or any other files under each product — every upload is timestamped and visible to ${clientName}'s buyers.`}
         >
-          <PoList pos={filteredPos} />
+          <SupplierCatalogView
+            supplierId={supplier.id}
+            canEdit
+            showHeader={false}
+          />
         </Panel>
       )}
 
-      {closed.length > 0 && (
-        <Panel title={`Past / closed (${closed.length})`}>
-          <InviteList invites={closed} />
+      {tab === "orders" && (
+        <>
+          {/* Project filter + search bar — scoped to the orders view since */}
+          {/* it only filters RFQs and POs, not the catalogue or chat. */}
+          <section
+            style={{
+              display: "flex",
+              gap: 8,
+              flexWrap: "wrap",
+              alignItems: "center",
+              padding: 14,
+              borderRadius: 12,
+              background: "var(--lb-bg-elev)",
+              border: "1px solid var(--lb-border)",
+            }}
+          >
+            <select
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: "var(--lb-bg)",
+                color: "var(--lb-text)",
+                border: "1px solid var(--lb-border)",
+                fontSize: 12.5,
+                fontWeight: 600,
+                minWidth: 200,
+              }}
+            >
+              <option value="all">All projects ({invites.length + pos.length})</option>
+              {projectOptions.map((p) => (
+                <option key={p.num} value={p.num}>
+                  {p.name ? `${p.num} · ${p.name}` : p.num} ({p.count})
+                </option>
+              ))}
+            </select>
+            <input
+              type="search"
+              placeholder="Search project, RFQ #, PO #…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{
+                flex: 1,
+                minWidth: 200,
+                padding: "8px 14px",
+                borderRadius: 999,
+                background: "var(--lb-bg)",
+                color: "var(--lb-text)",
+                border: "1px solid var(--lb-border)",
+                fontSize: 13,
+              }}
+            />
+            {(projectFilter !== "all" || search) && (
+              <button
+                type="button"
+                onClick={() => { setProjectFilter("all"); setSearch(""); }}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 999,
+                  background: "transparent",
+                  color: "var(--lb-text-2)",
+                  border: "1px solid var(--lb-border)",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Clear filters
+              </button>
+            )}
+            <span style={{ fontSize: 11.5, color: "var(--lb-text-3)" }}>
+              {filteredInvites.length} RFQ · {filteredPos.length} PO
+            </span>
+          </section>
+
+          <Panel
+            title={`Active requests (${active.length})`}
+            subtitle="Open these to submit your quote, update prices, or upload supporting documents."
+          >
+            {active.length === 0 ? (
+              <Empty>
+                {projectFilter !== "all" || search
+                  ? "No active RFQs match the current filter."
+                  : `You have no active RFQs from ${clientName} right now.`}
+              </Empty>
+            ) : (
+              <InviteList invites={active} />
+            )}
+          </Panel>
+
+          {filteredPos.length > 0 && (
+            <Panel
+              title={`Purchase orders awarded to you (${filteredPos.length})`}
+              subtitle={`Download as PDF (browser print) or Excel. ${clientName} will reach out with shipping instructions on each one.`}
+            >
+              <PoList pos={filteredPos} />
+            </Panel>
+          )}
+
+          {closed.length > 0 && (
+            <Panel title={`Past / closed (${closed.length})`}>
+              <InviteList invites={closed} />
+            </Panel>
+          )}
+        </>
+      )}
+
+      {tab === "chat" && (
+        <Panel
+          title={`💬 Chat with ${clientName}`}
+          subtitle="Real-time messages between your team and the buyer. Pick a channel on the left or stay in General."
+        >
+          <SupplierChat
+            supplierId={supplier.id}
+            supplierName={supplier.name}
+            viewerRole="supplier"
+            height={560}
+          />
         </Panel>
       )}
     </div>
