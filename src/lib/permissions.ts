@@ -167,11 +167,33 @@ export function ensureUserProfileColumns(): Promise<void> {
           SET "client_id" = (SELECT id FROM "clients" WHERE name = ${defaultName} LIMIT 1)
           WHERE "client_id" IS NULL
       `);
+      // Backfill clientId for legacy users who pre-date multi-tenancy.
+      // CRITICAL: skip rows where role='pending' — those are users mid-
+      // signup OR users we deliberately unlinked from a deleted tenant
+      // (see deleteClient in caduniq-actions.ts). Auto-linking them to
+      // the default tenant on the next sign-in would silently re-attach
+      // someone we just removed and prevent them from re-registering
+      // under the correct role.
       await db.execute(sql`
         UPDATE "user_profiles"
           SET "client_id" = (SELECT id FROM "clients" WHERE name = ${defaultName} LIMIT 1)
           WHERE "client_id" IS NULL
             AND LOWER(email) NOT LIKE '%@caduniq.com'
+            AND "role" <> 'pending'
+      `);
+      // Invariant repair: role='pending' should never carry an
+      // approvedAt timestamp (pending = not yet approved). Older
+      // deleteClient calls cleared role but left approvedAt set, which
+      // makes the home page treat them as "previously approved" and
+      // routes to AwaitingAccess forever. This one-time clean-up
+      // brings those rows back to a coherent state so the wizard
+      // re-fires on next sign-in.
+      await db.execute(sql`
+        UPDATE "user_profiles"
+          SET "approved_at" = NULL,
+              "approved_by" = NULL
+          WHERE "role" = 'pending'
+            AND "approved_at" IS NOT NULL
       `);
       // Backfill admins so the new gates inherit role-level access.
       await db.execute(sql`

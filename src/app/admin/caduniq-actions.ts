@@ -106,8 +106,9 @@ export async function deleteClient(input: {
 
   // 1. Unlink every user_profiles row on this tenant. The Clerk
   // identities stay — we just drop our local linkage + permission
-  // flags so they end up on the "awaiting access" landing on next
-  // sign-in and can re-register if they want.
+  // flags AND clear approvedAt/approvedBy so the home page's
+  // mid-signup detection re-fires for them and routes back to
+  // /get-started instead of leaving them on AwaitingAccess.
   const unlinked = await db
     .update(userProfiles)
     .set({
@@ -124,6 +125,8 @@ export async function deleteClient(input: {
       canViewCrm: false,
       canViewOee: false,
       canEdit: false,
+      approvedAt: null,
+      approvedBy: null,
       updatedAt: new Date(),
     })
     .where(eq(userProfiles.clientId, input.clientId))
