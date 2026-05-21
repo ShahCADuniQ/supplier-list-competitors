@@ -132,8 +132,9 @@ export async function POST(request: NextRequest) {
         // Lock down which paths are allowed so a hostile client can't write
         // outside the expected scopes. `ai-temp/` is for files uploaded by the
         // AI-generation flow before a supplier/competitor exists; they're
-        // reattached under the proper scope on save.
-        if (!/^(suppliers|competitors|ai-temp|design-engineering)\//.test(pathname)) {
+        // reattached under the proper scope on save. `clients/<id>/logo/`
+        // is for the per-tenant brand mark surfaced on the admin panel.
+        if (!/^(suppliers|competitors|ai-temp|design-engineering|clients)\//.test(pathname)) {
           throw new Error("Invalid upload path");
         }
         // Two valid roles can mint a token:

@@ -618,7 +618,11 @@ export default function AdminPanel({
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <RoleBadge role={u.role} />
+                        <RoleBadge
+                          role={u.role}
+                          isSupplier={u.isSupplier}
+                          isRetailer={u.isRetailer}
+                        />
                         {isPrimary && (
                           <span className="ml-1 text-[10px] text-amber-700 uppercase tracking-wider">
                             seeded
@@ -1441,18 +1445,40 @@ function Stat({
   );
 }
 
-function RoleBadge({ role }: { role: "admin" | "member" | "pending" }) {
+function RoleBadge({
+  role,
+  isSupplier,
+  isRetailer,
+}: {
+  role: "admin" | "member" | "pending";
+  isSupplier?: boolean;
+  isRetailer?: boolean;
+}) {
+  // External-portal roles win the badge — a "pending" supplier or
+  // retailer is functionally a supplier/retailer, not a pending team
+  // member waiting for approval. We surface the external role
+  // explicitly so the admin sees what the user actually is.
+  const effective: "admin" | "member" | "pending" | "supplier" | "retailer" =
+    isSupplier
+      ? "supplier"
+      : isRetailer
+        ? "retailer"
+        : role;
   const cls =
-    role === "admin"
+    effective === "admin"
       ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-      : role === "member"
+      : effective === "member"
         ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
-        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300";
+        : effective === "supplier"
+          ? "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
+          : effective === "retailer"
+            ? "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900/30 dark:text-fuchsia-300"
+            : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300";
   return (
     <span
       className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wide ${cls}`}
     >
-      {role}
+      {effective}
     </span>
   );
 }

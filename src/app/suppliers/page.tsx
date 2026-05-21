@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { desc, asc } from "drizzle-orm";
+import { desc, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   suppliers,
@@ -7,6 +7,7 @@ import {
   supplierProjectEntries,
   supplierComments,
   supplierAttachments,
+  userProfiles,
 } from "@/db/schema";
 import {
   getOrCreateProfile,
@@ -71,5 +72,35 @@ export default async function SuppliersPage() {
     contacts: contactsBySupplier.get(s.id) ?? [],
   }));
 
-  return <InventoryAndManufacturing initialData={initialData} canEdit={canEdit(profile)} />;
+  // "Registered to portal" = a supplier whose email (primary or any
+  // contact email) belongs to a user_profiles row flagged isSupplier.
+  // We compute the set once on the server and pass ids down so the
+  // suppliers tab can show the count + flag rows in the table.
+  const portalEmails = await db
+    .select({ email: userProfiles.email })
+    .from(userProfiles)
+    .where(eq(userProfiles.isSupplier, true));
+  const portalEmailSet = new Set(
+    portalEmails.map((r) => r.email.toLowerCase()),
+  );
+  const registeredSupplierIds: number[] = [];
+  if (portalEmailSet.size > 0) {
+    for (const s of supRows) {
+      if (s.email && portalEmailSet.has(s.email.toLowerCase())) {
+        registeredSupplierIds.push(s.id);
+        continue;
+      }
+      const contacts = contactsBySupplier.get(s.id) ?? [];
+      if (contacts.some((c) => c.email && portalEmailSet.has(c.email.toLowerCase()))) {
+        registeredSupplierIds.push(s.id);
+      }
+    }
+  }
+  return (
+    <InventoryAndManufacturing
+      initialData={initialData}
+      canEdit={canEdit(profile)}
+      registeredSupplierIds={registeredSupplierIds}
+    />
+  );
 }

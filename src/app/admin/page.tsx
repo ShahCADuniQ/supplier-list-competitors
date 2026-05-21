@@ -58,7 +58,14 @@ export default async function AdminPage() {
           EXISTS (
             SELECT 1 FROM user_profiles up
             WHERE up.is_supplier = true
-              AND LOWER(up.email) = LOWER(${suppliers.email})
+              AND (
+                LOWER(up.email) = LOWER(${suppliers.email})
+                OR EXISTS (
+                  SELECT 1 FROM supplier_contacts sc
+                  WHERE sc.supplier_id = ${suppliers.id}
+                    AND LOWER(sc.email) = LOWER(up.email)
+                )
+              )
           )
           OR EXISTS (
             SELECT 1 FROM rfq_recipients r

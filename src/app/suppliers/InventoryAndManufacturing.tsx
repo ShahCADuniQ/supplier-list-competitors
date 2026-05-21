@@ -50,9 +50,15 @@ type TabKey = (typeof SUB_TABS)[number]["key"];
 export default function InventoryAndManufacturing({
   initialData,
   canEdit,
+  registeredSupplierIds = [],
 }: {
   initialData: FullSupplier[];
   canEdit: boolean;
+  // Supplier ids whose email matches a user_profiles row with
+  // is_supplier=true — i.e. the supplier has signed up to the vendor
+  // portal and gone through onboarding. Drives the "Registered
+  // suppliers" pill on the suppliers tab.
+  registeredSupplierIds?: number[];
 }) {
   const [tab, setTab] = useState<TabKey>("onboarding-requests");
 
@@ -109,7 +115,11 @@ export default function InventoryAndManufacturing({
           </div>
         )}
         {tab === "suppliers" && (
-          <SuppliersView initialData={initialData} canEdit={canEdit} />
+          <SuppliersView
+            initialData={initialData}
+            canEdit={canEdit}
+            registeredSupplierIds={registeredSupplierIds}
+          />
         )}
         {tab === "barcodes" && <BarcodeGenerator canEdit={canEdit} />}
         {tab === "inventory" && <InventoryTab canEdit={canEdit} />}

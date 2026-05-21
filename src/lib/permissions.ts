@@ -195,6 +195,37 @@ export function ensureUserProfileColumns(): Promise<void> {
           WHERE "role" = 'pending'
             AND "approved_at" IS NOT NULL
       `);
+      // Backfill clientId for supplier user_profiles rows that are
+      // attached to a suppliers row with clientId set — older
+      // claimSupplier calls didn't write user_profiles.client_id, so
+      // these users had clientId=NULL and didn't show up in their
+      // tenant admin's user list. Match by email since suppliers.email
+      // is the canonical link to the portal-auth flow.
+      await db.execute(sql`
+        UPDATE "user_profiles" up
+          SET "client_id" = s."client_id"
+          FROM "suppliers" s
+          WHERE up."client_id" IS NULL
+            AND up."is_supplier" = true
+            AND LOWER(s."email") = LOWER(up."email")
+            AND s."client_id" IS NOT NULL
+      `);
+      // Same backfill for retailer user_profiles — claimRetailer used
+      // to leave clientId NULL on the user. We re-derive via the
+      // crm_accounts row the retailer self-created at signup
+      // (owner_user_id matches their clerk id; the account's owner is
+      // hosted by the engineering tenant).
+      await db.execute(sql`
+        UPDATE "user_profiles" up
+          SET "client_id" = (
+            SELECT s2."client_id" FROM "suppliers" s2
+            WHERE LOWER(s2."email") = LOWER(up."email")
+              AND s2."client_id" IS NOT NULL
+            LIMIT 1
+          )
+          WHERE up."client_id" IS NULL
+            AND up."is_retailer" = true
+      `);
       // Backfill admins so the new gates inherit role-level access.
       await db.execute(sql`
         UPDATE "user_profiles"

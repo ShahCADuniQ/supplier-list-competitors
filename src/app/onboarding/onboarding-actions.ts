@@ -13,7 +13,7 @@
 // internally and never disclose the matched client's full record.
 
 import { revalidatePath } from "next/cache";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   clients,
@@ -159,56 +159,147 @@ export async function claimSupplier(input: {
   }
   const resolvedClientId: number = profileMatch.clientId;
 
-  // Mark the user as a supplier role on user_profiles.
+  // Mark the user as a supplier role on user_profiles AND scope them
+  // to the engineering tenant they're attaching to. Without the
+  // clientId set, the engineering tenant's /admin user list would
+  // filter the supplier out (the backfill in ensureUserProfileColumns
+  // intentionally skips role='pending' rows, so we have to set it here).
   await db
     .update(userProfiles)
     .set({
       isSupplier: true,
+      clientId: resolvedClientId,
       updatedAt: new Date(),
     })
     .where(eq(userProfiles.clerkUserId, profile.clerkUserId));
 
-  // Create the suppliers row. EVERY shop-side fact is captured here so
-  // the step-2 compliance form doesn't need to re-ask any of it.
   const manufacturingTypes = (input.manufacturingTypes ?? [])
     .map((s) => s.trim())
     .filter(Boolean);
   const materials = (input.materials ?? [])
     .map((s) => s.trim())
     .filter(Boolean);
-  const [row] = await db
-    .insert(suppliers)
-    .values({
-      name: input.companyName.trim(),
-      email: profile.email ?? null,
-      contactName: input.contactName.trim() || null,
-      phone: input.phone?.trim() || null,
-      website: input.website?.trim() || null,
-      category: input.category?.trim() || null,
-      subCategory: input.subCategory?.trim() || null,
-      origin: input.country?.trim() || null,
-      products: input.products?.trim() || null,
-      manufacturingTypes: manufacturingTypes.length > 0 ? manufacturingTypes : undefined,
-      materials: materials.length > 0 ? materials : undefined,
-      isDistributor: Boolean(input.isDistributor),
-      clientId: resolvedClientId,
-      onboardingStatus: "pending",
-    })
-    .returning({ id: suppliers.id });
+
+  // High-confidence auto-link: the engineering tenant may have already
+  // created a supplier row for this company (and started pre-loading
+  // products, attachments, etc.) before the supplier even signed up. If
+  // the signing-in user's Clerk-verified email matches an existing
+  // supplier's primary email OR any of its contact emails IN THE SAME
+  // TENANT, we link to that existing row instead of creating a brand-
+  // new one. That way the supplier walks straight into the catalog the
+  // admin pre-built. Safe to auto-link on email because Clerk has
+  // already verified the user controls that mailbox.
+  //
+  // Lower-confidence matches (name or website similarity, no email
+  // hit) still go through the reviewer's manual merge UI on the
+  // pending queue — those are too easy to spoof to auto-link.
+  const profileEmailLc = profile.email?.toLowerCase() ?? null;
+  let existingSupplierId: number | null = null;
+  if (profileEmailLc) {
+    const matches = await db
+      .selectDistinct({ id: suppliers.id })
+      .from(suppliers)
+      .leftJoin(supplierContacts, eq(supplierContacts.supplierId, suppliers.id))
+      .where(
+        and(
+          eq(suppliers.clientId, resolvedClientId),
+          or(
+            sql`LOWER(${suppliers.email}) = ${profileEmailLc}`,
+            sql`LOWER(${supplierContacts.email}) = ${profileEmailLc}`,
+          ),
+        ),
+      )
+      .limit(1);
+    if (matches.length > 0) existingSupplierId = matches[0].id;
+  }
+
+  let supplierId: number;
+  if (existingSupplierId != null) {
+    // Attach to the existing supplier. Preserve everything the admin
+    // already curated (name, category, sub_category, manufacturing,
+    // materials, products text — all kept). The compliance gate still
+    // re-opens so the supplier completes step 2; the reviewer's
+    // approval then unlocks the portal.
+    supplierId = existingSupplierId;
+    await db
+      .update(suppliers)
+      .set({
+        // Fill any blanks with what the supplier just told us, but
+        // never overwrite a value the admin already curated. We use
+        // COALESCE on the SQL side so the admin's data wins.
+        email: sql`COALESCE(${suppliers.email}, ${profile.email ?? null})`,
+        contactName: sql`COALESCE(${suppliers.contactName}, ${input.contactName.trim() || null})`,
+        phone: sql`COALESCE(${suppliers.phone}, ${input.phone?.trim() || null})`,
+        website: sql`COALESCE(${suppliers.website}, ${input.website?.trim() || null})`,
+        category: sql`COALESCE(${suppliers.category}, ${input.category?.trim() || null})`,
+        subCategory: sql`COALESCE(${suppliers.subCategory}, ${input.subCategory?.trim() || null})`,
+        origin: sql`COALESCE(${suppliers.origin}, ${input.country?.trim() || null})`,
+        products: sql`COALESCE(${suppliers.products}, ${input.products?.trim() || null})`,
+        // Reset the gate to pending so the engineering tenant explicitly
+        // approves the new account holder before they get portal access,
+        // even though the supplier row already existed.
+        onboardingStatus: "pending",
+        onboardingSubmittedAt: null,
+        onboardingReviewedAt: null,
+        onboardingReviewedByClerkId: null,
+        onboardingReviewerNotes: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(suppliers.id, existingSupplierId));
+  } else {
+    const [row] = await db
+      .insert(suppliers)
+      .values({
+        name: input.companyName.trim(),
+        email: profile.email ?? null,
+        contactName: input.contactName.trim() || null,
+        phone: input.phone?.trim() || null,
+        website: input.website?.trim() || null,
+        category: input.category?.trim() || null,
+        subCategory: input.subCategory?.trim() || null,
+        origin: input.country?.trim() || null,
+        products: input.products?.trim() || null,
+        manufacturingTypes: manufacturingTypes.length > 0 ? manufacturingTypes : undefined,
+        materials: materials.length > 0 ? materials : undefined,
+        isDistributor: Boolean(input.isDistributor),
+        clientId: resolvedClientId,
+        onboardingStatus: "pending",
+      })
+      .returning({ id: suppliers.id });
+    supplierId = row.id;
+  }
 
   // Drop a primary contact entry mirroring the supplier email so the
   // portal-auth (which matches by suppliers.email OR supplier_contacts.email)
-  // recognises the signed-in user immediately.
+  // recognises the signed-in user immediately. When auto-linking into an
+  // existing row, only mark this contact primary if no primary exists yet
+  // — don't shove the new user above an admin-curated primary contact.
   if (profile.email) {
+    let isPrimary = true;
+    if (existingSupplierId != null) {
+      const [existingPrimary] = await db
+        .select({ id: supplierContacts.id })
+        .from(supplierContacts)
+        .where(
+          and(
+            eq(supplierContacts.supplierId, supplierId),
+            eq(supplierContacts.isPrimary, true),
+          ),
+        )
+        .limit(1);
+      if (existingPrimary) isPrimary = false;
+    }
     try {
       await db.insert(supplierContacts).values({
-        supplierId: row.id,
+        supplierId,
         email: profile.email,
         name: input.contactName.trim() || null,
-        isPrimary: true,
+        isPrimary,
       });
     } catch { /* tolerate dup */ }
   }
+
+  const row = { id: supplierId };
 
   // Ping the engineering tenant's admin team so they know a new
   // supplier has signed up and started onboarding. The bell only
@@ -297,12 +388,15 @@ export async function claimRetailer(input: {
   }
   const resolvedClientId: number = profileMatch.clientId;
 
-  // Flip the retailer flag on the user_profiles row. Same role bump
-  // pattern as supplier sign-up.
+  // Flip the retailer flag on the user_profiles row AND scope them to
+  // the engineering tenant. Same reasoning as the supplier path —
+  // without clientId set, the engineering tenant's /admin user list
+  // wouldn't surface them.
   await db
     .update(userProfiles)
     .set({
       isRetailer: true,
+      clientId: resolvedClientId,
       updatedAt: new Date(),
     })
     .where(eq(userProfiles.clerkUserId, profile.clerkUserId));

@@ -296,10 +296,18 @@ const PAGE_SIZE = 40;
 export default function SuppliersView({
   initialData,
   canEdit,
+  registeredSupplierIds = [],
 }: {
   initialData: FullSupplier[];
   canEdit: boolean;
+  // Ids of suppliers that have completed portal signup (their email or
+  // a contact email matches a user_profiles row with isSupplier=true).
+  registeredSupplierIds?: number[];
 }) {
+  const registeredIdSet = useMemo(
+    () => new Set<number>(registeredSupplierIds),
+    [registeredSupplierIds],
+  );
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [data, setData] = useState<FullSupplier[]>(initialData);
@@ -321,6 +329,7 @@ export default function SuppliersView({
   const [activeId, setActiveId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"details" | "contacts" | "kpis" | "projects" | "comments" | "attachments" | "chat" | "inventory">("details");
   const [currentDrawerOpen, setCurrentDrawerOpen] = useState(false);
+  const [registeredDrawerOpen, setRegisteredDrawerOpen] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showProjModal, setShowProjModal] = useState(false);
@@ -1010,10 +1019,17 @@ export default function SuppliersView({
             with the starred subset grouped by category, so it doesn't eat
             page real estate. Clicking a supplier inside the drawer closes
             it and opens the existing supplier detail panel. */}
-        <CurrentSuppliersButton
-          suppliers={data}
-          onOpen={() => setCurrentDrawerOpen(true)}
-        />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <CurrentSuppliersButton
+            suppliers={data}
+            onOpen={() => setCurrentDrawerOpen(true)}
+          />
+          <RegisteredSuppliersButton
+            registeredCount={registeredIdSet.size}
+            totalCount={data.length}
+            onOpen={() => setRegisteredDrawerOpen(true)}
+          />
+        </div>
 
         {/* Charts */}
         <div className="chart-row">
@@ -1112,6 +1128,20 @@ export default function SuppliersView({
             setCurrentDrawerOpen(false);
             openPanel(id);
           }}
+          registeredIdSet={registeredIdSet}
+          onAddSupplier={canEdit ? () => setShowAddModal(true) : undefined}
+        />
+      )}
+
+      {registeredDrawerOpen && (
+        <RegisteredSuppliersDrawer
+          suppliers={data}
+          registeredIdSet={registeredIdSet}
+          onClose={() => setRegisteredDrawerOpen(false)}
+          onOpenSupplier={(id) => {
+            setRegisteredDrawerOpen(false);
+            openPanel(id);
+          }}
         />
       )}
 
@@ -1143,7 +1173,7 @@ export default function SuppliersView({
                 // tab before). Placed just before Attachments to match the
                 // request and so the supplier-scoped catalog is one click
                 // away whenever someone opens this supplier.
-                ["inventory", "📦 Inventory"],
+                ["inventory", "📦 Products"],
                 ["attachments", `📎 Attachments (${active.attachments.length})`],
               ].map(([k, label]) => (
                 <div key={k} className={`panel-tab ${activeTab === k ? "active" : ""}`} onClick={() => setActiveTab(k as typeof activeTab)}>
@@ -2495,6 +2525,348 @@ function CurrentSuppliersButton({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// RegisteredSuppliersButton — informational pill mirroring the "Current
+// Suppliers" badge, but counts suppliers whose email matches a
+// user_profiles row with is_supplier=true. The engineering tenant gets a
+// live count of how many of its directory suppliers have actually
+// signed up to the portal and gone through onboarding.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function RegisteredSuppliersButton({
+  registeredCount,
+  totalCount,
+  onOpen,
+}: {
+  registeredCount: number;
+  totalCount: number;
+  onOpen: () => void;
+}) {
+  const hasAny = registeredCount > 0;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      style={{
+        padding: "8px 16px",
+        borderRadius: 999,
+        background: hasAny
+          ? "rgba(8, 145, 178, 0.10)"
+          : "var(--lb-bg-elev)",
+        border: hasAny
+          ? "1px solid rgba(8, 145, 178, 0.5)"
+          : "1px dashed var(--lb-border)",
+        color: "var(--lb-text)",
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        alignSelf: "flex-start",
+        transition: "background 140ms ease, border-color 140ms ease",
+      }}
+      title="Open the registered-suppliers list"
+      onMouseEnter={(e) => {
+        if (hasAny) {
+          e.currentTarget.style.background = "rgba(8, 145, 178, 0.20)";
+          e.currentTarget.style.borderColor = "#0891b2";
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (hasAny) {
+          e.currentTarget.style.background = "rgba(8, 145, 178, 0.10)";
+          e.currentTarget.style.borderColor = "rgba(8, 145, 178, 0.5)";
+        }
+      }}
+    >
+      <span style={{ color: hasAny ? "#0891b2" : "var(--lb-text-3)", fontSize: 14 }}>
+        🔌
+      </span>
+      <span>Registered Suppliers</span>
+      <span
+        style={{
+          fontSize: 11,
+          color: "var(--lb-text-3)",
+          fontWeight: 500,
+        }}
+      >
+        {registeredCount} of {totalCount} signed up to the portal
+      </span>
+      <span
+        style={{
+          fontSize: 11,
+          color: "var(--lb-text-3)",
+          fontWeight: 500,
+          marginLeft: 4,
+        }}
+      >
+        →
+      </span>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RegisteredSuppliersDrawer — the registered-supplier counterpart to
+// CurrentSuppliersDrawer. Lists every supplier with a portal-signed-up
+// user account, grouped by approval status (Registered / Pending),
+// with the same search + colour-coded rows + click-to-open behaviour.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function RegisteredSuppliersDrawer({
+  suppliers: rows,
+  registeredIdSet,
+  onClose,
+  onOpenSupplier,
+}: {
+  suppliers: FullSupplier[];
+  registeredIdSet: Set<number>;
+  onClose: () => void;
+  onOpenSupplier: (id: number) => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  const registered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows
+      .filter((s) => registeredIdSet.has(s.id))
+      .filter((s) => {
+        if (!q) return true;
+        return (
+          s.name.toLowerCase().includes(q) ||
+          (s.category ?? "").toLowerCase().includes(q) ||
+          (s.origin ?? "").toLowerCase().includes(q) ||
+          (s.email ?? "").toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows, registeredIdSet, search]);
+
+  // Group by approval status so the admin can see who needs their
+  // attention vs. who's already approved.
+  const grouped = useMemo(() => {
+    const approved: FullSupplier[] = [];
+    const pending: FullSupplier[] = [];
+    for (const s of registered) {
+      if (s.onboardingStatus === "approved") approved.push(s);
+      else pending.push(s);
+    }
+    return { approved, pending };
+  }, [registered]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  function renderGroup(label: string, list: FullSupplier[], dotColor: string) {
+    if (list.length === 0) return null;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: 0.8,
+            textTransform: "uppercase",
+            color: "var(--lb-text-2)",
+            paddingBottom: 4,
+            borderBottom: "1px solid var(--lb-border)",
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              display: "inline-block",
+              width: 7,
+              height: 7,
+              borderRadius: 999,
+              background: dotColor,
+            }}
+          />
+          <span style={{ flex: 1 }}>{label}</span>
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--lb-text-3)",
+              fontWeight: 600,
+              letterSpacing: 0,
+              textTransform: "none",
+            }}
+          >
+            {list.length}
+          </span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {list.map((s) => {
+            const status = supplierStatusFor(s, registeredIdSet);
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => onOpenSupplier(s.id)}
+                title={`Open supplier details · ${status.label}`}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  background: "var(--lb-bg)",
+                  border: "1px solid var(--lb-border)",
+                  borderLeft: `4px solid ${status.color}`,
+                  color: "var(--lb-text)",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  fontSize: 13,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {s.name}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--lb-text-3)",
+                      display: "flex",
+                      gap: 8,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    {s.category && <span>{s.category}</span>}
+                    {s.origin && <span>{s.origin}</span>}
+                    {s.email && <span>{s.email}</span>}
+                  </div>
+                </div>
+                <span
+                  style={{
+                    fontSize: 10.5,
+                    color: status.color,
+                    fontWeight: 800,
+                    letterSpacing: 0.4,
+                    textTransform: "uppercase",
+                    flexShrink: 0,
+                  }}
+                >
+                  {status.label}
+                </span>
+                <span
+                  style={{
+                    color: "var(--lb-text-3)",
+                    fontSize: 14,
+                    flexShrink: 0,
+                  }}
+                >
+                  →
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="panel-overlay show" onClick={onClose} />
+      <div
+        className="panel show"
+        style={{ width: 560, maxWidth: "97vw" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="panel-head">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+            <span style={{ color: "#0891b2", fontSize: 20 }}>🔌</span>
+            <div>
+              <h2>Registered Suppliers</h2>
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: "var(--lb-text-3)",
+                  marginTop: 2,
+                }}
+              >
+                {registered.length} signed up · {grouped.approved.length} approved · {grouped.pending.length} pending
+              </div>
+            </div>
+          </div>
+          <button
+            className="btn btn-ghost"
+            onClick={onClose}
+            style={{ fontSize: 22 }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div
+          className="panel-body"
+          style={{
+            padding: "16px 22px 28px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 18,
+          }}
+        >
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search registered suppliers…"
+            style={{
+              padding: "9px 14px",
+              borderRadius: 999,
+              border: "1px solid var(--lb-border)",
+              background: "var(--lb-bg)",
+              color: "var(--lb-text)",
+              fontSize: 13,
+              outline: "none",
+            }}
+          />
+          {registered.length === 0 ? (
+            <div
+              style={{
+                padding: "20px 16px",
+                borderRadius: 10,
+                border: "1px dashed var(--lb-border)",
+                textAlign: "center",
+                color: "var(--lb-text-2)",
+                fontSize: 13,
+              }}
+            >
+              {search
+                ? "No registered suppliers match this search."
+                : "No suppliers have signed up to the portal yet. Once a supplier completes /get-started → onboarding, they'll appear here."}
+            </div>
+          ) : (
+            <>
+              {renderGroup("Registered", grouped.approved, "#16a34a")}
+              {renderGroup("Pending approval", grouped.pending, "#eab308")}
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CurrentSuppliersDrawer — slide-in right-hand panel that lists every
 // starred supplier grouped by category. Reuses the existing `.panel-overlay`
 // + `.panel` classes so it matches the supplier detail drawer's geometry
@@ -2507,17 +2879,39 @@ function CurrentSuppliersDrawer({
   suppliers: rows,
   onClose,
   onOpenSupplier,
+  registeredIdSet,
+  onAddSupplier,
 }: {
   suppliers: FullSupplier[];
   onClose: () => void;
   onOpenSupplier: (id: number) => void;
+  // Used to colour-code each row: green = signed-up + approved,
+  // yellow = signed-up but onboarding still in progress, red = no
+  // portal account yet.
+  registeredIdSet: Set<number>;
+  // When provided, surfaces a "+ Add supplier" button at the top of
+  // the drawer that triggers the same modal flow as the page-level
+  // header button.
+  onAddSupplier?: () => void;
 }) {
+  const [search, setSearch] = useState("");
   const starred = useMemo(
-    () =>
-      rows
+    () => {
+      const q = search.trim().toLowerCase();
+      const matches = rows
         .filter((s) => s.isStarred)
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [rows],
+        .filter((s) => {
+          if (!q) return true;
+          return (
+            s.name.toLowerCase().includes(q) ||
+            (s.category ?? "").toLowerCase().includes(q) ||
+            (s.origin ?? "").toLowerCase().includes(q) ||
+            (s.email ?? "").toLowerCase().includes(q)
+          );
+        });
+      return matches.sort((a, b) => a.name.localeCompare(b.name));
+    },
+    [rows, search],
   );
 
   const grouped = useMemo(() => {
@@ -2593,6 +2987,51 @@ function CurrentSuppliersDrawer({
             gap: 18,
           }}
         >
+          {/* Search + quick-add toolbar. Search filters the starred set
+              by name / category / origin / email; the add button bridges
+              to the existing page-level "+ Add Supplier" modal so the
+              admin can create a fresh starred entry without closing the
+              drawer first. */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name, category, country, email…"
+              style={{
+                flex: 1,
+                minWidth: 220,
+                padding: "9px 14px",
+                borderRadius: 999,
+                border: "1px solid var(--lb-border)",
+                background: "var(--lb-bg)",
+                color: "var(--lb-text)",
+                fontSize: 13,
+                outline: "none",
+              }}
+            />
+            {onAddSupplier && (
+              <button
+                type="button"
+                onClick={() => {
+                  onAddSupplier();
+                  onClose();
+                }}
+                className="btn btn-primary"
+                style={{ fontSize: 12.5 }}
+              >
+                + Add supplier
+              </button>
+            )}
+          </div>
+
+          {/* Status legend so the colour dots have meaning at a glance. */}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: "var(--lb-text-3)" }}>
+            <StatusLegendDot color="#16a34a" label="Registered" />
+            <StatusLegendDot color="#eab308" label="Pending approval" />
+            <StatusLegendDot color="#dc2626" label="Not registered" />
+          </div>
+
           {starred.length === 0 ? (
             <div
               style={{
@@ -2604,8 +3043,9 @@ function CurrentSuppliersDrawer({
                 fontSize: 13,
               }}
             >
-              No starred suppliers yet. Close this drawer, then click ☆ on
-              any row in the directory to pin it here.
+              {search
+                ? "No starred suppliers match this search."
+                : "No starred suppliers yet. Close this drawer, then click ☆ on any row in the directory to pin it here."}
             </div>
           ) : (
             grouped.map(([cat, list]) => (
@@ -2663,18 +3103,21 @@ function CurrentSuppliersDrawer({
                     gap: 4,
                   }}
                 >
-                  {list.map((s) => (
+                  {list.map((s) => {
+                    const status = supplierStatusFor(s, registeredIdSet);
+                    return (
                     <button
                       key={s.id}
                       type="button"
                       onClick={() => onOpenSupplier(s.id)}
-                      title="Open supplier details"
+                      title={`Open supplier details · ${status.label}`}
                       style={{
                         width: "100%",
                         padding: "10px 12px",
                         borderRadius: 8,
                         background: "var(--lb-bg)",
                         border: "1px solid var(--lb-border)",
+                        borderLeft: `4px solid ${status.color}`,
                         color: "var(--lb-text)",
                         textAlign: "left",
                         cursor: "pointer",
@@ -2689,10 +3132,12 @@ function CurrentSuppliersDrawer({
                           "rgba(250,204,21,0.06)";
                         e.currentTarget.style.borderColor =
                           "rgba(250, 204, 21, 0.55)";
+                        e.currentTarget.style.borderLeftColor = status.color;
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.background = "var(--lb-bg)";
                         e.currentTarget.style.borderColor = "var(--lb-border)";
+                        e.currentTarget.style.borderLeftColor = status.color;
                       }}
                     >
                       <span
@@ -2743,6 +3188,18 @@ function CurrentSuppliersDrawer({
                       </div>
                       <span
                         style={{
+                          fontSize: 10.5,
+                          color: status.color,
+                          fontWeight: 800,
+                          letterSpacing: 0.4,
+                          textTransform: "uppercase",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {status.label}
+                      </span>
+                      <span
+                        style={{
                           color: "var(--lb-text-3)",
                           fontSize: 14,
                           flexShrink: 0,
@@ -2751,7 +3208,8 @@ function CurrentSuppliersDrawer({
                         →
                       </span>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))
@@ -2759,6 +3217,38 @@ function CurrentSuppliersDrawer({
         </div>
       </div>
     </>
+  );
+}
+
+// Shared status helpers used by both the Current and Registered drawers
+// so the colour mapping stays consistent.
+function supplierStatusFor(
+  s: { id: number; onboardingStatus?: string | null },
+  registeredIdSet: Set<number>,
+): { color: string; label: string } {
+  const registered = registeredIdSet.has(s.id);
+  if (!registered) return { color: "#dc2626", label: "Not registered" };
+  if (s.onboardingStatus === "approved") {
+    return { color: "#16a34a", label: "Registered" };
+  }
+  return { color: "#eab308", label: "Pending" };
+}
+
+function StatusLegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span
+        aria-hidden
+        style={{
+          display: "inline-block",
+          width: 8,
+          height: 8,
+          borderRadius: 999,
+          background: color,
+        }}
+      />
+      {label}
+    </span>
   );
 }
 
