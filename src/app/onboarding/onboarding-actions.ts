@@ -55,6 +55,10 @@ export async function claimEngineeringCompany(input: {
     throw new Error("Your account is already linked to a company. Sign in to continue.");
   }
 
+  // New tenants are created with EVERY module gated off. The CADuniQ
+  // admin enables modules manually from the HQ dashboard after vetting
+  // the signup. The DB column defaults are `true` (existing tenants
+  // keep working), so we override explicitly here.
   const [row] = await db
     .insert(clients)
     .values({
@@ -65,6 +69,13 @@ export async function claimEngineeringCompany(input: {
         input.phone ? `Phone: ${input.phone.trim()}` : null,
         input.website ? `Website: ${input.website.trim()}` : null,
       ].filter(Boolean).join(" · ") || null,
+      canUseSuppliers: false,
+      canUseCompetitors: false,
+      canUseHandbook: false,
+      canUseEngineering: false,
+      canUseDesignEngineering: false,
+      canUseCrm: false,
+      canUseOee: false,
     })
     .returning({ id: clients.id });
 

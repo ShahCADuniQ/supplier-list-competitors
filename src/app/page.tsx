@@ -273,11 +273,46 @@ export default async function Home() {
     );
   }
 
-  const sup = canViewSuppliers(profile);
-  const comp = canViewCompetitors(profile);
-  const handbook = canViewHandbook(profile);
-  const engineering = canViewEngineering(profile);
-  const admin = isAdmin(profile);
+  // Effective access AND's the per-user gate with the tenant-level
+  // canUse* gate set by CADuniQ HQ. New tenants land with every
+  // canUse* = false, so even a fresh admin sees AwaitingAccess until
+  // CADuniQ enables at least one module — this is what makes the
+  // "no auto-access on signup" policy actually work.
+  const [tenantRow] =
+    profile.clientId != null
+      ? await db
+          .select({
+            canUseSuppliers: clients.canUseSuppliers,
+            canUseCompetitors: clients.canUseCompetitors,
+            canUseHandbook: clients.canUseHandbook,
+            canUseEngineering: clients.canUseEngineering,
+            canUseDesignEngineering: clients.canUseDesignEngineering,
+            canUseCrm: clients.canUseCrm,
+            canUseOee: clients.canUseOee,
+          })
+          .from(clients)
+          .where(eq(clients.id, profile.clientId))
+          .limit(1)
+      : [undefined];
+  const tenantHasAnyModule =
+    !tenantRow ||
+    tenantRow.canUseSuppliers ||
+    tenantRow.canUseCompetitors ||
+    tenantRow.canUseHandbook ||
+    tenantRow.canUseEngineering ||
+    tenantRow.canUseDesignEngineering ||
+    tenantRow.canUseCrm ||
+    tenantRow.canUseOee;
+
+  const sup = canViewSuppliers(profile) && (!tenantRow || tenantRow.canUseSuppliers);
+  const comp = canViewCompetitors(profile) && (!tenantRow || tenantRow.canUseCompetitors);
+  const handbook = canViewHandbook(profile) && (!tenantRow || tenantRow.canUseHandbook);
+  const engineering = canViewEngineering(profile) && (!tenantRow || tenantRow.canUseEngineering);
+  // Admins still see the /admin panel (the tenant page is how they
+  // manage users while waiting for module access), but they don't
+  // count as "has access" for the dashboard unless at least one
+  // module is enabled for their tenant.
+  const admin = isAdmin(profile) && tenantHasAnyModule;
 
   // Mid-signup detection. A user who hasn't completed any claim flow
   // (engineering / supplier / retailer) and has never been approved is

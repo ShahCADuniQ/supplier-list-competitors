@@ -23,6 +23,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import {
+  deleteClient,
   setClientModuleAccess,
   type ClientModule,
 } from "@/app/admin/caduniq-actions";
@@ -413,6 +414,7 @@ function CompaniesTab({ clients }: { clients: HQClientRow[] }) {
 }
 
 function ClientCard({ row }: { row: HQClientRow }) {
+  const [confirming, setConfirming] = useState(false);
   return (
     <article
       style={{
@@ -470,7 +472,7 @@ function ClientCard({ row }: { row: HQClientRow }) {
             {row.supplierCount} supplier{row.supplierCount === 1 ? "" : "s"}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Link
             href={`/admin?clientId=${row.id}`}
             style={{
@@ -486,6 +488,22 @@ function ClientCard({ row }: { row: HQClientRow }) {
           >
             Open admin →
           </Link>
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            style={{
+              padding: "7px 14px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              borderRadius: 999,
+              background: "transparent",
+              border: "1px solid rgba(220,38,38,0.4)",
+              color: "#dc2626",
+              cursor: "pointer",
+            }}
+          >
+            🗑 Delete tenant
+          </button>
         </div>
       </header>
 
@@ -507,7 +525,165 @@ function ClientCard({ row }: { row: HQClientRow }) {
           />
         ))}
       </div>
+
+      {confirming && (
+        <DeleteTenantDialog
+          row={row}
+          onClose={() => setConfirming(false)}
+        />
+      )}
     </article>
+  );
+}
+
+function DeleteTenantDialog({
+  row,
+  onClose,
+}: {
+  row: HQClientRow;
+  onClose: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const matches = typed.trim().toLowerCase() === row.name.trim().toLowerCase();
+
+  function submit() {
+    if (!matches || pending) return;
+    setErr(null);
+    startTransition(async () => {
+      try {
+        await deleteClient({ clientId: row.id, confirmName: typed });
+        // Page-level refresh: the parent HQ component re-fetches its
+        // client list from the server on the next render. Easiest is a
+        // hard reload since the data flows top-down.
+        window.location.reload();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Delete failed");
+      }
+    });
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.55)",
+        zIndex: 120,
+        display: "grid",
+        placeItems: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 480,
+          background: "var(--lb-bg-elev)",
+          color: "var(--lb-text)",
+          border: "1px solid var(--lb-border)",
+          borderRadius: 14,
+          padding: 22,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          boxShadow: "var(--lb-shadow-lg)",
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.4, textTransform: "uppercase", color: "#dc2626" }}>
+            Permanent delete
+          </div>
+          <h3 style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 800 }}>
+            Remove {row.name}?
+          </h3>
+        </div>
+        <div style={{ fontSize: 13, color: "var(--lb-text-2)", lineHeight: 1.5 }}>
+          This deletes the tenant and every supplier scoped to it
+          ({row.supplierCount} supplier{row.supplierCount === 1 ? "" : "s"}),
+          and unlinks every user on the tenant
+          ({row.userCount} user{row.userCount === 1 ? "" : "s"}). Their Clerk
+          accounts stay, but they lose access and will need to re-register.
+          This cannot be undone.
+        </div>
+        <label style={{ display: "block" }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--lb-text-3)", textTransform: "uppercase", marginBottom: 4 }}>
+            Type the tenant name to confirm
+          </div>
+          <input
+            type="text"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={row.name}
+            autoFocus
+            style={{
+              width: "100%",
+              padding: "9px 12px",
+              fontSize: 14,
+              border: "1px solid var(--lb-border)",
+              borderRadius: 8,
+              background: "var(--lb-bg)",
+              color: "var(--lb-text)",
+              outline: "none",
+            }}
+          />
+        </label>
+        {err && (
+          <div style={{
+            padding: 10,
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.1)",
+            border: "1px solid rgba(220,38,38,0.4)",
+            color: "#dc2626",
+            fontSize: 12.5,
+          }}>
+            {err}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            style={{
+              padding: "8px 16px",
+              fontSize: 13,
+              fontWeight: 600,
+              borderRadius: 999,
+              background: "transparent",
+              border: "1px solid var(--lb-border)",
+              color: "var(--lb-text-2)",
+              cursor: pending ? "wait" : "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!matches || pending}
+            style={{
+              padding: "8px 18px",
+              fontSize: 13,
+              fontWeight: 700,
+              borderRadius: 999,
+              background: matches ? "#dc2626" : "var(--lb-bg)",
+              border: `1px solid ${matches ? "#dc2626" : "var(--lb-border)"}`,
+              color: matches ? "#fff" : "var(--lb-text-3)",
+              cursor: matches && !pending ? "pointer" : "not-allowed",
+              opacity: pending ? 0.6 : 1,
+            }}
+          >
+            {pending ? "Deleting…" : "Delete permanently"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
