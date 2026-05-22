@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { asc, eq, sql } from "drizzle-orm";
+import { clerkClient } from "@clerk/nextjs/server";
 import { db } from "@/db";
 import {
   clients,
@@ -207,6 +208,23 @@ export async function hardDeleteUser(input: {
   await db
     .delete(userProfiles)
     .where(eq(userProfiles.clerkUserId, input.clerkUserId));
+
+  // Delete the Clerk identity too so the email + password combo is
+  // fully freed. Without this the user can't re-register from scratch
+  // — Clerk would say "email already in use" or hold the old password
+  // hash. Run this AFTER the local cleanup so a Clerk-side failure
+  // doesn't leave us with an orphaned user_profiles row.
+  try {
+    const client = await clerkClient();
+    await client.users.deleteUser(input.clerkUserId);
+  } catch (e) {
+    // The Clerk user might already be gone (a previous delete partial
+    // failure, manual cleanup in the dashboard, etc.). Don't block on
+    // it — the local DB cleanup is what matters for "they can
+    // recreate their account." Log so the operator can clean up
+    // manually if needed.
+    console.warn("[hardDeleteUser] Clerk delete failed:", e);
+  }
 
   revalidatePath("/admin");
   revalidatePath("/");

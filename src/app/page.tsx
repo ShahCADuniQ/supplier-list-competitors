@@ -341,7 +341,23 @@ export default async function Home() {
   // an actual role/flag mutation done by the claim* server actions.
   const hasFinishedAnyClaim = admin || sup || comp || handbook || engineering;
   const wasEverApproved = profile.approvedAt !== null;
-  if (!hasFinishedAnyClaim && profile.role === "pending" && !wasEverApproved) {
+  // A user who has been ATTACHED to a tenant (clientId set) AND has no
+  // pendingSignupRole is past the wizard — they're waiting for the
+  // tenant admin to grant module access. The auto-link path in
+  // /onboarding/page.tsx (engineering signup whose email domain
+  // matched an existing tenant) lands users in exactly this state, as
+  // does an admin manually attaching someone via Set client. Show
+  // AwaitingAccess instead of bouncing them back to /get-started.
+  const isAttachedAwaitingApproval =
+    profile.clientId != null &&
+    !hasFinishedAnyClaim &&
+    profile.pendingSignupRole == null;
+  if (
+    !hasFinishedAnyClaim &&
+    !isAttachedAwaitingApproval &&
+    profile.role === "pending" &&
+    !wasEverApproved
+  ) {
     if (profile.pendingSignupRole) {
       // We know which wizard they started — drop them back into it.
       redirect(`/onboarding?role=${profile.pendingSignupRole}`);
