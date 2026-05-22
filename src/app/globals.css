@@ -402,3 +402,29 @@ html.dark {
 .lb-bar-gradient {
   background: linear-gradient(180deg, var(--lb-chart-bar-top) 0%, var(--lb-chart-bar-bottom) 100%);
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+   Clerk UserProfile overrides
+   ─────────────────────────────────────────────────────────────────────
+   Hide the "Remove email" destructive action that Clerk surfaces under
+   the ⋯ menu next to every email address on the user-profile widget.
+   We expose a complete "Delete account" flow from /admin (hardDeleteUser)
+   that fully removes the Clerk identity + local rows, so the Clerk
+   widget's per-email remove action would only let users orphan
+   themselves from our side without actually deleting their account.
+
+   Clerk renders the ⋯ dropdown inside a body-level portal, so we
+   match on its stable identifiers globally (data-localization-key and
+   the cl-prefixed class names) rather than scoping under
+   .cl-userProfile-root. Each selector targets a different Clerk
+   version / element variant so the rule survives Clerk upgrades. */
+[data-localization-key="userProfile.start.emailAddressesSection.destructiveAction"],
+[data-localization-key="userProfile.emailAddressPage.removeResource.title"],
+[data-localization-key="userProfile.emailAddressPage.removeResource.messageLine1"],
+[data-localization-key="userProfile.emailAddressPage.removeResource.successMessage"],
+[data-localization-key="formButtonPrimary__remove"][data-localization-key*="email"],
+.cl-menuItem[data-localization-key*="emailAddress"][data-color="danger"],
+.cl-formButtonReset[data-localization-key*="emailAddress"],
+.cl-profileSection__emailAddresses .cl-menuItem__danger {
+  display: none !important;
+}

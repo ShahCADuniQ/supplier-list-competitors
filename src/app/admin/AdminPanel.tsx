@@ -1662,12 +1662,12 @@ function AdminSuppliersTable({
 
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Suppliers · Vendor Portal Access</h2>
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Suppliers</h2>
           <p style={{ fontSize: 12, color: "var(--lb-text-3)", margin: "4px 0 0" }}>
-            External vendors (separate from your team). Each supplier has a
-            stable home portal listing every RFQ they've been invited to.
-            Copy the URL to email it. Re-issue if a contact leaves. Revoke
-            to suspend access entirely.
+            External vendors (separate from your team). Suppliers sign in
+            directly via Clerk once approved through the Onboarding
+            Request queue — portal access is automatic from that point on,
+            no per-supplier token to manage.
           </p>
         </div>
       </div>
@@ -1696,22 +1696,18 @@ function AdminSuppliersTable({
               <SupTh>Category</SupTh>
               {isCaduniq && <SupTh>Client</SupTh>}
               <SupTh style={{ textAlign: "right" }}>RFQs invited</SupTh>
-              <SupTh>Portal access</SupTh>
-              <SupTh style={{ textAlign: "right" }}>Actions</SupTh>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={isCaduniq ? 7 : 6} style={{ padding: 24, textAlign: "center", color: "var(--lb-text-3)" }}>
+                <td colSpan={isCaduniq ? 5 : 4} style={{ padding: 24, textAlign: "center", color: "var(--lb-text-3)" }}>
                   No suppliers match.
                 </td>
               </tr>
             ) : (
               filtered.flatMap((s) => {
                 const busy = busyId === s.id;
-                const hasToken = !!s.portalToken;
-                const portalUrl = hasToken ? `${appBaseUrl}/vendor/home/${s.portalToken}` : "";
                 const contacts = s.contacts ?? [];
                 const isExpanded = expandedId === s.id;
                 const mainRow = (
@@ -1789,97 +1785,11 @@ function AdminSuppliersTable({
                     <SupTd style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                       {s.invitedCount}
                     </SupTd>
-                    <SupTd>
-                      {hasToken ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(portalUrl);
-                            ping("Portal URL copied to clipboard");
-                          }}
-                          title={portalUrl}
-                          style={{
-                            padding: "4px 10px",
-                            borderRadius: 6,
-                            background: "rgba(8,145,178,0.15)",
-                            color: "#0891b2",
-                            border: "1px solid rgba(8,145,178,0.4)",
-                            fontSize: 11,
-                            fontWeight: 600,
-                            cursor: "pointer",
-                            maxWidth: 320,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                            textAlign: "left",
-                          }}
-                        >
-                          📋 {portalUrl.replace(/^https?:\/\//, "")}
-                        </button>
-                      ) : (
-                        <span style={{ fontSize: 11, color: "var(--lb-text-3)", fontStyle: "italic" }}>
-                          No portal token yet — click Generate →
-                        </span>
-                      )}
-                    </SupTd>
-                    <SupTd style={{ textAlign: "right" }}>
-                      <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                        {!hasToken && (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => run(
-                              s.id,
-                              "Portal URL generated · copied",
-                              () => ensureSupplierPortalToken({ supplierId: s.id }),
-                              async (res) => { try { await navigator.clipboard.writeText(res.portalUrl); } catch {} },
-                            )}
-                            style={tinyBtn("#16a34a")}
-                          >
-                            + Generate
-                          </button>
-                        )}
-                        {hasToken && (
-                          <>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => run(
-                                s.id,
-                                "New portal URL · old link disabled",
-                                () => reissueSupplierPortalToken({ supplierId: s.id }),
-                                async (res) => { try { await navigator.clipboard.writeText(res.portalUrl); } catch {} },
-                              )}
-                              style={tinyBtn("#7c3aed")}
-                              title="Generate a new portal token; the old URL stops working."
-                            >
-                              ↻ Re-issue
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => {
-                                if (!confirm(`Revoke ${s.name}'s vendor portal access? The URL stops working immediately. You can re-generate one later.`)) return;
-                                run(
-                                  s.id,
-                                  "Portal access revoked",
-                                  () => revokeSupplierPortalToken({ supplierId: s.id }),
-                                );
-                              }}
-                              style={tinyBtn("#dc2626")}
-                              title="Disable the supplier's home portal entirely."
-                            >
-                              🚫 Revoke
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </SupTd>
                   </tr>
                 );
                 const expandedRow = isExpanded ? (
                   <tr key={`x-${s.id}`} style={{ borderBottom: "1px solid var(--lb-border)" }}>
-                    <td colSpan={isCaduniq ? 7 : 6} style={{ padding: "0 10px 12px 30px", background: "var(--lb-bg)" }}>
+                    <td colSpan={isCaduniq ? 5 : 4} style={{ padding: "0 10px 12px 30px", background: "var(--lb-bg)" }}>
                       <SupplierContactsEditor
                         supplierId={s.id}
                         supplierName={s.name}

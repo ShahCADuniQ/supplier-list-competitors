@@ -186,13 +186,40 @@ export default async function OnboardingPage({
         const needsWrite =
           !alreadyOnRightTenant || profile.pendingSignupRole != null;
         if (needsWrite) {
+          // Attach the user to the tenant AND wipe every per-user
+          // permission flag back to defaults. This is critical when
+          // the user_profiles row was ADOPTED (re-signup with a fresh
+          // Clerk identity but the old row's email matched) —
+          // otherwise stale canView_* / canEdit flags from a previous
+          // life on this tenant grant the user access they shouldn't
+          // have yet. The admin opts them back into modules from
+          // /admin once they're satisfied with the new account.
+          //
+          // Existing admins/team members aren't sent through this
+          // path: anyone with role='admin' is caught earlier by the
+          // top-of-file admin redirect, and anyone with active
+          // modules already has hasFinishedAnyClaim=true so the home
+          // page sends them to their dashboard without hitting the
+          // wizard. Only true "awaiting approval" users land here, so
+          // resetting their flags is always safe.
           await db
             .update(userProfiles)
             .set({
               clientId: match.clientId,
               pendingSignupRole: null,
-              // Keep them awaiting approval — admin grants modules.
               role: "pending",
+              canViewSuppliers: false,
+              canViewCompetitors: false,
+              canViewHandbook: false,
+              canViewEngineering: false,
+              canViewDesignEngineering: false,
+              canViewCrm: false,
+              canViewOee: false,
+              canEdit: false,
+              isSupplier: false,
+              isRetailer: false,
+              approvedAt: null,
+              approvedBy: null,
               updatedAt: new Date(),
             })
             .where(eq(userProfiles.clerkUserId, profile.clerkUserId));
