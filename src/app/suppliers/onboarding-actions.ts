@@ -23,8 +23,10 @@ import {
 } from "@/db/schema";
 import { auth } from "@clerk/nextjs/server";
 import {
+  isCaduniqUser,
   requireSupplierAccess,
   requireSupplierEditor,
+  requireSupplierReviewer,
 } from "@/lib/permissions";
 import { ensureOnboardingSchema } from "./_ensure-onboarding-schema";
 import { ensureSupplierColumns } from "./_ensure-schema";
@@ -352,13 +354,14 @@ export async function submitSupplierOnboarding(input: {
   return { submissionId: submission.id };
 }
 
-// APPROVE — admin-only. Flips the status to 'approved' so the supplier
-// portal opens the catalog / orders / chat tabs.
+// APPROVE — any tenant user with canViewSuppliers can review. Flips
+// the status to 'approved' so the supplier portal opens the catalog /
+// orders / chat tabs.
 export async function approveSupplierOnboarding(input: {
   supplierId: number;
   notes?: string;
 }): Promise<void> {
-  const profile = await requireSupplierEditor();
+  const profile = await requireSupplierReviewer();
   await ensureOnboardingSchema();
   const now = new Date();
   await db
@@ -375,14 +378,14 @@ export async function approveSupplierOnboarding(input: {
   revalidatePath("/suppliers");
 }
 
-// REJECT — admin-only. Sends the supplier back to fix things; their
-// portal will show the rejection reason and the form pre-filled for
-// resubmission.
+// REJECT — any tenant user with canViewSuppliers can review. Sends
+// the supplier back to fix things; their portal will show the
+// rejection reason and the form pre-filled for resubmission.
 export async function rejectSupplierOnboarding(input: {
   supplierId: number;
   notes: string;
 }): Promise<void> {
-  const profile = await requireSupplierEditor();
+  const profile = await requireSupplierReviewer();
   await ensureOnboardingSchema();
   if (!input.notes.trim()) throw new Error("Rejection note is required");
   const now = new Date();
@@ -400,9 +403,9 @@ export async function rejectSupplierOnboarding(input: {
   revalidatePath("/suppliers");
 }
 
-// LIST PENDING — admin-only. Surfaces every supplier whose submission
-// is waiting for review (status = 'submitted'). Used by the suppliers
-// tab to show a "Review queue" banner.
+// LIST PENDING — any tenant user with canViewSuppliers. Surfaces every
+// supplier whose submission is waiting for review (status =
+// 'submitted'). Used by the suppliers tab to show the queue.
 export type PendingSupplier = {
   id: number;
   name: string;
@@ -416,8 +419,19 @@ export type PendingSupplier = {
   verdict: string | null;
 };
 export async function listPendingOnboardingSuppliers(): Promise<PendingSupplier[]> {
-  await requireSupplierEditor();
+  const profile = await requireSupplierReviewer();
   await ensureOnboardingSchema();
+  // Tenant scope: CADuniQ staff see every tenant's queue, everyone
+  // else sees only their own tenant's pending suppliers. Prevents the
+  // queue from leaking other tenants' supplier signups.
+  const tenantScopeWhere = isCaduniqUser(profile)
+    ? eq(suppliers.onboardingStatus, "submitted")
+    : and(
+        eq(suppliers.onboardingStatus, "submitted"),
+        profile.clientId != null
+          ? eq(suppliers.clientId, profile.clientId)
+          : sql`false`,
+      );
   const rows = await db
     .select({
       id: suppliers.id,
@@ -429,7 +443,7 @@ export async function listPendingOnboardingSuppliers(): Promise<PendingSupplier[
       submittedAt: suppliers.onboardingSubmittedAt,
     })
     .from(suppliers)
-    .where(eq(suppliers.onboardingStatus, "submitted"))
+    .where(tenantScopeWhere)
     .orderBy(desc(suppliers.onboardingSubmittedAt));
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
@@ -777,7 +791,7 @@ export type SupplierMatchCandidate = {
 export async function listPotentialSupplierMatches(input: {
   supplierId: number;
 }): Promise<SupplierMatchCandidate[]> {
-  await requireSupplierEditor();
+  await requireSupplierReviewer();
   await ensureOnboardingSchema();
 
   // Pending supplier under review.
@@ -924,7 +938,7 @@ export async function searchSupplierDirectoryForMerge(input: {
   pendingSupplierId: number;
   query?: string;
 }): Promise<SupplierDirectoryRow[]> {
-  await requireSupplierEditor();
+  await requireSupplierReviewer();
   await ensureOnboardingSchema();
   const [pending] = await db
     .select({ clientId: suppliers.clientId })
@@ -983,7 +997,7 @@ export async function approveSupplierByMerging(input: {
   targetSupplierId: number;
   reviewerNotes?: string;
 }): Promise<{ targetSupplierId: number }> {
-  const profile = await requireSupplierEditor();
+  const profile = await requireSupplierReviewer();
   await ensureOnboardingSchema();
 
   if (input.pendingSupplierId === input.targetSupplierId) {

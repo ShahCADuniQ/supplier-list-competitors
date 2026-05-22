@@ -63,6 +63,11 @@ export default function InventoryAndManufacturing({
   // suppliers" pill on the suppliers tab.
   registeredSupplierIds?: number[];
 }) {
+  // Every tenant member with supplier-view access (canViewSuppliers
+  // OR role='admin') can approve / reject / merge — the server-side
+  // gate is requireSupplierReviewer, not requireSupplierEditor — so
+  // we surface the Onboarding Request tab to everyone who reaches
+  // this page.
   const [tab, setTab] = useState<TabKey>("onboarding-requests");
 
   return (
@@ -114,7 +119,11 @@ export default function InventoryAndManufacturing({
       <main className="flex-1">
         {tab === "onboarding-requests" && (
           <div style={{ padding: 24, background: "var(--lb-bg)", minHeight: "100%" }}>
-            <OnboardingReviewPanel canEdit={canEdit} />
+            {/* canEdit is forced ON because every tenant member can
+                review (server-side gate is requireSupplierReviewer).
+                The prop name is legacy; it just toggles the action
+                buttons inside the panel. */}
+            <OnboardingReviewPanel canEdit={true} />
           </div>
         )}
         {tab === "suppliers" && (

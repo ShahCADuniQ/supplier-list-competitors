@@ -646,6 +646,20 @@ export async function requireSupplierEditor(): Promise<UserProfile> {
   return profile;
 }
 
+// Permission gate for the supplier onboarding review queue
+// (approve / reject / merge / duplicate-match lookups). Looser than
+// requireSupplierEditor — any tenant user with canViewSuppliers (or
+// admin role) qualifies, regardless of canEdit. The user explicitly
+// wants every Lightbase team member able to action the queue, not
+// just the engineering admins.
+export async function requireSupplierReviewer(): Promise<UserProfile> {
+  const profile = await getOrCreateProfile();
+  if (!profile || !canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: cannot review supplier onboarding");
+  }
+  return profile;
+}
+
 /**
  * Permission gate for mutating a SPECIFIC supplier's data (logo, contacts,
  * product catalog, attachments — anything keyed to one supplier row). Two
