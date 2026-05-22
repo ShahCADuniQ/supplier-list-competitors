@@ -24,7 +24,6 @@ import {
   type ChatMessage,
 } from "@/db/schema";
 import {
-  canEdit,
   canViewSuppliers,
   getOrCreateProfile,
   isSupplierUser,
@@ -52,7 +51,12 @@ async function assertCanChat(supplierId: number): Promise<ChatActor> {
   if (!profile) throw new Error("Unauthorized: please sign in");
   const name = profile.displayName?.trim() || profile.email;
 
-  if (canViewSuppliers(profile) && canEdit(profile)) {
+  // Any tenant team member with supplier-view access is treated as
+  // the "buyer" actor in chat — they can read AND post in any
+  // channel for any supplier they're allowed to see. canEdit is not
+  // required (the user wants every Lightbase team member fully
+  // functional in chat without needing edit permission).
+  if (canViewSuppliers(profile)) {
     return { clerkUserId: profile.clerkUserId, email: profile.email, name, role: "buyer" };
   }
   if (isSupplierUser(profile)) {

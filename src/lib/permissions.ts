@@ -640,7 +640,13 @@ export async function requireAdmin(): Promise<UserProfile> {
 /** Throw if the current user can't view + edit suppliers. */
 export async function requireSupplierEditor(): Promise<UserProfile> {
   const profile = await getOrCreateProfile();
-  if (!profile || !canViewSuppliers(profile) || !canEdit(profile)) {
+  // Loosened: any tenant member with supplier-view access can edit
+  // (create / update / approve / chat / etc.). The canEdit flag is no
+  // longer required — the user wants every team member fully
+  // functional once their admin has accepted them into the company,
+  // and tenant scoping on individual queries keeps cross-tenant data
+  // private.
+  if (!profile || !canViewSuppliers(profile)) {
     throw new Error("Unauthorized: cannot edit suppliers");
   }
   return profile;
@@ -682,7 +688,12 @@ export async function requireSupplierAccess(supplierId: number): Promise<{
 }> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Unauthorized: not signed in");
-  if (canViewSuppliers(profile) && canEdit(profile)) {
+  // Loosened: any tenant member with supplier-view access counts as
+  // the "lightbase" actor. canEdit isn't required anymore — the user
+  // wants every Lightbase team member to be able to act on a supplier
+  // (read reports, chat, upload files, etc.) once they're approved
+  // into the company.
+  if (canViewSuppliers(profile)) {
     return { profile, role: "lightbase" };
   }
   if (isSupplierUser(profile) && profile.email) {
