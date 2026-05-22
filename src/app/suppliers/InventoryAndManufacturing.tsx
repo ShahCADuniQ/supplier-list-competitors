@@ -12,6 +12,7 @@ import StubTab from "./StubTab";
 import OrdersTab from "./OrdersTab";
 import InventoryTab from "./InventoryTab";
 import OnboardingReviewPanel from "./OnboardingReviewPanel";
+import SupplierInventoryOverview from "./SupplierInventoryOverview";
 // SupplierInventoryTab is no longer rendered as its own top-level tab.
 // Its content (SupplierCatalogView) is now embedded inside each
 // supplier's detail panel in SuppliersView, so you click into a
@@ -35,11 +36,13 @@ const SUB_TABS = [
   { key: "onboarding-requests", label: "Onboarding Request" },
   { key: "suppliers", label: "Suppliers" },
   { key: "orders", label: "Orders (RFQ & PO)" },
-  // Supplier Inventory was here; moved into each supplier's detail
-  // panel inside SuppliersView (the "Inventory" tab on the right side
-  // of the panel header).
+  // Per-supplier catalog still lives inside each supplier's detail panel
+  // (the "Products" tab there). This top-level "Supplier Inventory" is
+  // the cross-supplier overview that replaced the old Manufacturing
+  // stub — every part across every supplier in the tenant, with project
+  // / product filters.
   { key: "inventory", label: "Lightbase Inventory" },
-  { key: "manufacturing", label: "Manufacturing" },
+  { key: "supplier-inventory", label: "Supplier Inventory" },
   { key: "boms", label: "BOMs" },
   { key: "quality", label: "Quality" },
   { key: "maintenance", label: "Maintenance" },
@@ -61,6 +64,11 @@ export default function InventoryAndManufacturing({
   registeredSupplierIds?: number[];
 }) {
   const [tab, setTab] = useState<TabKey>("onboarding-requests");
+  // When the user clicks a card on the Supplier Inventory overview, we
+  // bounce them to the Suppliers tab and pre-open the chosen supplier's
+  // detail panel. SuppliersView reads this prop on mount and clears it
+  // via onJumpToSupplierHandled so a second click doesn't re-open.
+  const [jumpToSupplierId, setJumpToSupplierId] = useState<number | null>(null);
 
   return (
     <div className="flex flex-col min-h-full" style={{ background: "var(--lb-bg)" }}>
@@ -119,6 +127,8 @@ export default function InventoryAndManufacturing({
             initialData={initialData}
             canEdit={canEdit}
             registeredSupplierIds={registeredSupplierIds}
+            jumpToSupplierId={jumpToSupplierId}
+            onJumpToSupplierHandled={() => setJumpToSupplierId(null)}
           />
         )}
         {tab === "barcodes" && <BarcodeGenerator canEdit={canEdit} />}
@@ -126,19 +136,12 @@ export default function InventoryAndManufacturing({
         {tab === "orders" && (
           <OrdersTab suppliers={initialData} canEdit={canEdit} />
         )}
-        {tab === "manufacturing" && (
-          <StubTab
-            title="Manufacturing Orders"
-            description="Production orders, work orders, routings, and shop-floor execution."
-            features={[
-              "MO from sales order or stock rule",
-              "Work orders per BOM operation",
-              "Real-time component consumption + finished-good production",
-              "Workcenter capacity + scheduling",
-              "Time tracking + OEE per workcenter",
-              "Subcontracting (outsource a routing to a partner)",
-              "Mobile shop-floor app: scan to start / stop / consume / produce",
-            ]}
+        {tab === "supplier-inventory" && (
+          <SupplierInventoryOverview
+            onJumpToSupplier={(supplierId) => {
+              setJumpToSupplierId(supplierId);
+              setTab("suppliers");
+            }}
           />
         )}
         {tab === "boms" && (

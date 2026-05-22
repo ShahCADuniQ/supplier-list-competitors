@@ -26,6 +26,7 @@ import {
   customCatSlug,
   listCustomSectionIds,
 } from "@/app/suppliers/supplier-attachment-categories";
+import FileViewerModal, { forceDownloadFile } from "@/components/FileViewerModal";
 
 // Canonical sections + custom sections (derived from attachments +
 // transient drafts) are computed inside AboutUsAttachments. The shared
@@ -482,6 +483,8 @@ function AboutUsAttachments({
   initial: OnboardingAttachmentRow[];
 }) {
   const [items, setItems] = useState<OnboardingAttachmentRow[]>(initial);
+  const [previewing, setPreviewing] = useState<OnboardingAttachmentRow | null>(null);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [busyCat, setBusyCat] = useState<string | null>(null);
   const [attErr, setAttErr] = useState<string | null>(null);
   const [draftSections, setDraftSections] = useState<string[]>([]);
@@ -834,23 +837,52 @@ function AboutUsAttachments({
                       </div>
                       <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                         {a.url && (
-                          <a
-                            href={a.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              padding: "4px 10px",
-                              fontSize: 12,
-                              fontWeight: 600,
-                              borderRadius: 999,
-                              color: "var(--lb-text-2)",
-                              background: "var(--lb-bg)",
-                              border: "1px solid var(--lb-border)",
-                              textDecoration: "none",
-                            }}
-                          >
-                            View
-                          </a>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setPreviewing(a)}
+                              style={{
+                                padding: "4px 10px",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                borderRadius: 999,
+                                color: "var(--lb-text-2)",
+                                background: "var(--lb-bg)",
+                                border: "1px solid var(--lb-border)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              Preview
+                            </button>
+                            <button
+                              type="button"
+                              disabled={downloadingId === a.id}
+                              onClick={async () => {
+                                setDownloadingId(a.id);
+                                setAttErr(null);
+                                try {
+                                  await forceDownloadFile(a.url!, a.name);
+                                } catch (e) {
+                                  setAttErr(e instanceof Error ? e.message : "Download failed");
+                                } finally {
+                                  setDownloadingId(null);
+                                }
+                              }}
+                              style={{
+                                padding: "4px 10px",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                borderRadius: 999,
+                                color: "var(--lb-text)",
+                                background: "var(--lb-bg-elev)",
+                                border: "1px solid var(--lb-border)",
+                                cursor: downloadingId === a.id ? "wait" : "pointer",
+                                opacity: downloadingId === a.id ? 0.6 : 1,
+                              }}
+                            >
+                              {downloadingId === a.id ? "…" : "⬇ Download"}
+                            </button>
+                          </>
                         )}
                         <button
                           type="button"
@@ -896,6 +928,15 @@ function AboutUsAttachments({
           + Add section
         </button>
       </div>
+
+      {previewing && previewing.url && (
+        <FileViewerModal
+          url={previewing.url}
+          name={previewing.name}
+          mimeType={previewing.mimeType}
+          onClose={() => setPreviewing(null)}
+        />
+      )}
     </div>
   );
 }

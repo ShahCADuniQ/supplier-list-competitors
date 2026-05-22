@@ -15,6 +15,7 @@ import {
   supplierContacts,
   supplierProducts,
   supplierProductAttachments,
+  supplierProjectEntries,
   type SupplierProduct,
   type SupplierProductAttachment,
 } from "@/db/schema";
@@ -627,4 +628,191 @@ export async function deleteSupplierProductCustomSection(input: {
   revalidatePath("/suppliers");
   revalidatePath("/portal");
   return { deleted: rows.length };
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AGGREGATE INVENTORY — every part across every supplier in the tenant,
+// powering the ERP system's "Supplier Inventory" overview tab. Returns
+// top-level parts only (parentProductId IS NULL) with their supplier
+// name, configuration count, attachment count, and the set of project
+// numbers their supplier has been involved in (used for the project
+// filter dropdown).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AggregateInventoryPart = {
+  id: number;
+  supplierId: number;
+  supplierName: string;
+  name: string;
+  productCode: string | null;
+  category: string | null;
+  description: string | null;
+  thumbnailUrl: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  modelCount: number;
+  attachmentCount: number;
+  projectNums: string[];
+};
+
+export async function listAggregateSupplierInventory(): Promise<{
+  parts: AggregateInventoryPart[];
+  projectNums: string[];
+}> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: missing supplier-view permission");
+  }
+  await ensureSupplierInventorySchema();
+
+  // Scope to the user's tenant. CADuniQ staff see every tenant (their
+  // clientId is null on user_profiles), so we let them through with no
+  // supplier-side filter; everyone else only sees their own tenant.
+  const tenantClientId = profile.clientId ?? null;
+  const supplierRows = tenantClientId == null
+    ? await db
+        .select({ id: suppliers.id, name: suppliers.name })
+        .from(suppliers)
+    : await db
+        .select({ id: suppliers.id, name: suppliers.name })
+        .from(suppliers)
+        .where(eq(suppliers.clientId, tenantClientId));
+  if (supplierRows.length === 0) return { parts: [], projectNums: [] };
+  const supplierIds = supplierRows.map((s) => s.id);
+  const supplierNameById = new Map(supplierRows.map((s) => [s.id, s.name]));
+
+  // Parts only — configurations show up nested inside their part's
+  // drawer, not as separate cards on the overview.
+  const parts = await db
+    .select()
+    .from(supplierProducts)
+    .where(
+      and(
+        inArray(supplierProducts.supplierId, supplierIds),
+        sql`${supplierProducts.parentProductId} IS NULL`,
+        eq(supplierProducts.archived, false),
+      ),
+    )
+    .orderBy(desc(supplierProducts.updatedAt));
+  if (parts.length === 0) {
+    // Even with no parts, surface the project list so the filter
+    // dropdown is still useful for empty-state navigation.
+    const allProjects = await db
+      .select({ projectNum: supplierProjectEntries.projectNum })
+      .from(supplierProjectEntries)
+      .where(inArray(supplierProjectEntries.supplierId, supplierIds));
+    const projSet = new Set<string>();
+    for (const p of allProjects) projSet.add(p.projectNum);
+    return { parts: [], projectNums: Array.from(projSet).sort() };
+  }
+  const partIds = parts.map((p) => p.id);
+
+  // Configuration counts — one row per parent_product_id.
+  const configRows = await db
+    .select({
+      parentProductId: supplierProducts.parentProductId,
+      n: sql<number>`COUNT(*)::int`,
+    })
+    .from(supplierProducts)
+    .where(
+      and(
+        inArray(supplierProducts.parentProductId, partIds),
+        eq(supplierProducts.archived, false),
+      ),
+    )
+    .groupBy(supplierProducts.parentProductId);
+  const configCountByParent = new Map<number, number>();
+  for (const r of configRows) {
+    if (r.parentProductId != null) configCountByParent.set(r.parentProductId, r.n);
+  }
+
+  // Attachment counts — sum a part's own attachments PLUS every
+  // attachment on its configurations. The overview's "files" count
+  // reflects everything tied to the part as a whole.
+  const allProductIdsToCount: number[] = [
+    ...partIds,
+    ...configRows
+      .filter((r) => r.parentProductId != null)
+      .flatMap((r) => {
+        // We don't have model ids here yet, just counts. Pull them
+        // separately so we can sum attachments across both levels.
+        return [] as number[];
+      }),
+  ];
+  // Pull every model id under these parts so we can include their
+  // attachment counts too.
+  const modelIdRows = await db
+    .select({ id: supplierProducts.id, parentProductId: supplierProducts.parentProductId })
+    .from(supplierProducts)
+    .where(
+      and(
+        inArray(supplierProducts.parentProductId, partIds),
+        eq(supplierProducts.archived, false),
+      ),
+    );
+  const modelIdsByParent = new Map<number, number[]>();
+  for (const r of modelIdRows) {
+    if (r.parentProductId == null) continue;
+    const arr = modelIdsByParent.get(r.parentProductId) ?? [];
+    arr.push(r.id);
+    modelIdsByParent.set(r.parentProductId, arr);
+    allProductIdsToCount.push(r.id);
+  }
+  const attachmentCountRows = allProductIdsToCount.length > 0
+    ? await db
+        .select({
+          productId: supplierProductAttachments.productId,
+          n: sql<number>`COUNT(*)::int`,
+        })
+        .from(supplierProductAttachments)
+        .where(inArray(supplierProductAttachments.productId, allProductIdsToCount))
+        .groupBy(supplierProductAttachments.productId)
+    : [];
+  const attachmentCountByProduct = new Map<number, number>();
+  for (const r of attachmentCountRows) attachmentCountByProduct.set(r.productId, r.n);
+
+  // Projects each supplier has been involved in — drives the
+  // project-filter dropdown on the overview AND tags each card.
+  const projectRows = await db
+    .select({
+      supplierId: supplierProjectEntries.supplierId,
+      projectNum: supplierProjectEntries.projectNum,
+    })
+    .from(supplierProjectEntries)
+    .where(inArray(supplierProjectEntries.supplierId, supplierIds));
+  const projectsBySupplier = new Map<number, Set<string>>();
+  for (const r of projectRows) {
+    const s = projectsBySupplier.get(r.supplierId) ?? new Set<string>();
+    s.add(r.projectNum);
+    projectsBySupplier.set(r.supplierId, s);
+  }
+  const allProjectSet = new Set<string>();
+  for (const r of projectRows) allProjectSet.add(r.projectNum);
+
+  const assembled: AggregateInventoryPart[] = parts.map((p) => {
+    const childIds = modelIdsByParent.get(p.id) ?? [];
+    let attachmentCount = attachmentCountByProduct.get(p.id) ?? 0;
+    for (const cid of childIds) {
+      attachmentCount += attachmentCountByProduct.get(cid) ?? 0;
+    }
+    return {
+      id: p.id,
+      supplierId: p.supplierId,
+      supplierName: supplierNameById.get(p.supplierId) ?? "—",
+      name: p.name,
+      productCode: p.productCode,
+      category: p.category,
+      description: p.description,
+      thumbnailUrl: p.thumbnailUrl,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      modelCount: configCountByParent.get(p.id) ?? 0,
+      attachmentCount,
+      projectNums: Array.from(projectsBySupplier.get(p.supplierId) ?? []).sort(),
+    };
+  });
+
+  return { parts: assembled, projectNums: Array.from(allProjectSet).sort() };
 }

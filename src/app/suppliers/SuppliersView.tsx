@@ -38,6 +38,7 @@ import {
   customCatSlug,
   listCustomSectionIds,
 } from "./supplier-attachment-categories";
+import FileViewerModal, { forceDownloadFile } from "@/components/FileViewerModal";
 import IncotermSelect from "./IncotermSelect";
 import {
   aiGenerateSupplier,
@@ -297,12 +298,19 @@ export default function SuppliersView({
   initialData,
   canEdit,
   registeredSupplierIds = [],
+  jumpToSupplierId = null,
+  onJumpToSupplierHandled,
 }: {
   initialData: FullSupplier[];
   canEdit: boolean;
   // Ids of suppliers that have completed portal signup (their email or
   // a contact email matches a user_profiles row with isSupplier=true).
   registeredSupplierIds?: number[];
+  // When set on render, pre-open this supplier's detail panel. Cleared
+  // via onJumpToSupplierHandled after we've consumed it so a subsequent
+  // tab switch doesn't accidentally re-open the same row.
+  jumpToSupplierId?: number | null;
+  onJumpToSupplierHandled?: () => void;
 }) {
   const registeredIdSet = useMemo(
     () => new Set<number>(registeredSupplierIds),
@@ -595,6 +603,18 @@ export default function SuppliersView({
     setActiveId(null);
     setEditingProjId(null);
   }
+
+  // Auto-open the requested supplier when the user jumps in from the
+  // Supplier Inventory overview tab. We default to the Products tab so
+  // they land on the catalog they were just browsing aggregately.
+  useEffect(() => {
+    if (jumpToSupplierId == null) return;
+    setActiveId(jumpToSupplierId);
+    setActiveTab("inventory");
+    onJumpToSupplierHandled?.();
+    // Only re-fire when the incoming id changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpToSupplierId]);
 
   function runAction<T>(fn: () => Promise<T>, successMsg?: string) {
     startTransition(async () => {
@@ -906,13 +926,22 @@ export default function SuppliersView({
     if (successCount > 0) toast(`${successCount} file${successCount > 1 ? "s" : ""} uploaded`);
   }
 
-  function downloadAttachment(a: SupplierAttachment) {
+  async function downloadAttachment(a: SupplierAttachment) {
     if (!a.url) return;
+    try {
+      // Browsers strip the <a download> attribute on cross-origin URLs
+      // (Vercel Blob is on a different host), so re-host the bytes in
+      // a same-origin blob: URL via forceDownloadFile and let the
+      // browser save normally. Falls back to opening in a new tab on
+      // any failure.
+      await forceDownloadFile(a.url, a.name);
+      return;
+    } catch {
+      // fall through to legacy new-tab fallback
+    }
     const link = document.createElement("a");
     link.href = a.url;
     link.download = a.name;
-    // Some browsers ignore download with cross-origin URLs — opening in new tab
-    // is a safe fallback.
     link.target = "_blank";
     link.rel = "noopener";
     link.click();
@@ -2080,6 +2109,7 @@ function AttachmentsTab({
   // attachments) so the row stays visible until the first upload lands
   // and the database becomes the source of truth.
   const [draftSections, setDraftSections] = useState<string[]>([]);
+  const [previewingAttachment, setPreviewingAttachment] = useState<SupplierAttachment | null>(null);
 
   // Persisted custom sections — every non-canonical catId on this
   // supplier's attachments. Suppliers can add them from /portal/about-us
@@ -2234,6 +2264,7 @@ function AttachmentsTab({
                             </div>
                           </div>
                           <div className="file-actions">
+                            <button className="icon-btn" onClick={() => setPreviewingAttachment(a)} title="Preview">👁</button>
                             <button className="icon-btn" onClick={() => onDownload(a)} title="Download">⬇</button>
                             {canEdit && <button className="icon-btn danger" onClick={() => confirm(`Delete "${a.name}"?`) && onDelete(a.id)} title="Delete">🗑</button>}
                           </div>
@@ -2268,6 +2299,15 @@ function AttachmentsTab({
           </button>
         )}
       </div>
+
+      {previewingAttachment && previewingAttachment.url && (
+        <FileViewerModal
+          url={previewingAttachment.url}
+          name={previewingAttachment.name}
+          mimeType={previewingAttachment.mimeType}
+          onClose={() => setPreviewingAttachment(null)}
+        />
+      )}
     </>
   );
 }

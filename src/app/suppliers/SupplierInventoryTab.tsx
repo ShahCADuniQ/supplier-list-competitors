@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { upload } from "@vercel/blob/client";
+import FileViewerModal, { forceDownloadFile } from "@/components/FileViewerModal";
 import {
   type SupplierProductWithAttachments,
   type SupplierWithProductCount,
@@ -1809,7 +1810,21 @@ function AttachmentRow({ attachment, canEdit, productId, isCover, onChanged, onD
   const [saving, setSaving] = useState(false);
   const [settingCover, setSettingCover] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const isImg = isImage(a.contentType, a.name);
+
+  async function onDownloadClick() {
+    setDownloading(true);
+    setErr(null);
+    try {
+      await forceDownloadFile(a.url, a.name);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Download failed");
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function setAsCover() {
     setSettingCover(true); setErr(null);
@@ -1856,8 +1871,22 @@ function AttachmentRow({ attachment, canEdit, productId, isCover, onChanged, onD
       background: "var(--lb-bg-elev)",
     }}>
       {isImg ? (
-        // Larger preview for product photos — click through to full size.
-        <a href={a.url} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0, display: "block", position: "relative" }}>
+        // Larger preview for product photos — click opens the preview
+        // modal so the user gets the same controls (full preview +
+        // download) as the file row.
+        <button
+          type="button"
+          onClick={() => setPreviewing(true)}
+          style={{
+            flexShrink: 0,
+            display: "block",
+            position: "relative",
+            padding: 0,
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={a.url}
@@ -1889,15 +1918,27 @@ function AttachmentRow({ attachment, canEdit, productId, isCover, onChanged, onD
               Cover
             </span>
           )}
-        </a>
+        </button>
       ) : (
-        <div style={{
-          width: 48, height: 48, borderRadius: 5, background: "var(--lb-bg)",
-          display: "grid", placeItems: "center", border: "1px solid var(--lb-border)",
-          flexShrink: 0, fontSize: 18,
-        }}>
+        <button
+          type="button"
+          onClick={() => setPreviewing(true)}
+          title="Preview"
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: 5,
+            background: "var(--lb-bg)",
+            display: "grid",
+            placeItems: "center",
+            border: "1px solid var(--lb-border)",
+            flexShrink: 0,
+            fontSize: 18,
+            cursor: "pointer",
+          }}
+        >
           {fileIcon(a.name)}
-        </div>
+        </button>
       )}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
         {editing ? (
@@ -1923,9 +1964,29 @@ function AttachmentRow({ attachment, canEdit, productId, isCover, onChanged, onD
           </>
         ) : (
           <>
-            <a href={a.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13.5, fontWeight: 600, color: "var(--lb-text-1)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
+            <button
+              type="button"
+              onClick={() => setPreviewing(true)}
+              title="Preview"
+              style={{
+                fontSize: 13.5,
+                fontWeight: 600,
+                color: "var(--lb-text-1)",
+                textDecoration: "none",
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+              }}
+            >
               {a.name}
-            </a>
+            </button>
             <div style={{ fontSize: 11, color: "var(--lb-text-3)" }}>
               Uploaded {fmtStamp(a.uploadedAt)}
               {a.uploadedByRole === "supplier" && <span> by supplier</span>}
@@ -1946,6 +2007,28 @@ function AttachmentRow({ attachment, canEdit, productId, isCover, onChanged, onD
                 {a.notes}
               </div>
             )}
+            <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setPreviewing(true)}
+                style={{ ...MINI_BTN, fontSize: 11.5 }}
+              >
+                👁 Preview
+              </button>
+              <button
+                type="button"
+                onClick={onDownloadClick}
+                disabled={downloading}
+                style={{
+                  ...MINI_BTN,
+                  fontSize: 11.5,
+                  opacity: downloading ? 0.6 : 1,
+                  cursor: downloading ? "wait" : "pointer",
+                }}
+              >
+                {downloading ? "Downloading…" : "⬇ Download"}
+              </button>
+            </div>
           </>
         )}
       </div>
@@ -1966,6 +2049,15 @@ function AttachmentRow({ attachment, canEdit, productId, isCover, onChanged, onD
           <button type="button" onClick={onDelete} style={{ ...MINI_BTN, color: "#dc2626", borderColor: "rgba(220,38,38,0.4)" }}>Delete</button>
           {err && <div style={{ color: "#dc2626", fontSize: 11 }}>{err}</div>}
         </div>
+      )}
+
+      {previewing && (
+        <FileViewerModal
+          url={a.url}
+          name={a.name}
+          mimeType={a.contentType}
+          onClose={() => setPreviewing(false)}
+        />
       )}
     </div>
   );
