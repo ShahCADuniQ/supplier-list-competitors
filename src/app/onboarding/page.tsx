@@ -128,67 +128,105 @@ export default async function OnboardingPage({
     }
   }
 
-  // Auto-link engineering signups to an existing tenant when the user's
-  // email domain matches one of the tenant's admins. The supplier wants
-  // "@lightbase.ca" signups to attach to the existing Lightbase tenant
-  // — NO "tell us about your company" form, NO new tenant — and land on
-  // the awaiting-approval screen so the tenant admin can grant modules.
+  // Auto-link engineering signups to an existing tenant. The matching
+  // is robust to a few realities:
+  //   1. Email-domain match against ANY existing user on the tenant
+  //      (not only admins — a tenant may not have an @-domain admin yet
+  //      but a non-admin team member already attached counts).
+  //   2. Fuzzy match the domain root against the client name as a last
+  //      resort (e.g. "lightbase.ca" → "Lightbase"), which catches
+  //      tenants whose admins haven't signed in yet.
+  // We also run this even when profile.clientId is already populated
+  // (older backfills used to auto-attach every non-pending user to the
+  // default tenant) so a stale attachment doesn't strand the signup
+  // on the "Tell us about your company" form.
   //
-  // Generic email domains (gmail/outlook/etc.) bypass this so unrelated
-  // companies don't all collapse onto a single tenant.
-  if (role === "engineering" && profile.email && profile.clientId == null) {
+  // Generic email domains (gmail/outlook/etc.) bypass this entirely.
+  if (role === "engineering" && profile.email && !profile.isSupplier) {
     const domain = profile.email.split("@").pop()?.toLowerCase() ?? "";
     if (domain && !PUBLIC_EMAIL_DOMAINS.has(domain)) {
-      const [match] = await db
+      // (1) Domain match against any tenant user.
+      let match: { clientId: number; clientName: string } | undefined;
+      const userMatches = await db
         .select({ clientId: clients.id, clientName: clients.name })
         .from(userProfiles)
         .innerJoin(clients, eq(clients.id, userProfiles.clientId))
         .where(
-          and(
-            eq(userProfiles.role, "admin"),
-            sql`LOWER(SPLIT_PART(${userProfiles.email}, '@', 2)) = ${domain}`,
-          ),
+          sql`LOWER(SPLIT_PART(${userProfiles.email}, '@', 2)) = ${domain}
+              AND LOWER(${userProfiles.email}) <> ${profile.email.toLowerCase()}`,
         )
         .limit(1);
+      if (userMatches.length > 0) {
+        match = userMatches[0];
+      }
+
+      // (2) Fuzzy match: take the part of the domain before the first
+      // dot ("lightbase.ca" → "lightbase") and compare it as a prefix
+      // of the normalised client name. Catches "Lightbase",
+      // "Lightbase Operations", "Lightbase Inc." — anything that
+      // starts with the same brand root.
+      if (!match) {
+        const root = domain
+          .split(".")[0]
+          .replace(/[^a-z0-9]/g, "");
+        if (root.length >= 3) {
+          const nameMatches = await db
+            .select({ clientId: clients.id, clientName: clients.name })
+            .from(clients)
+            .where(
+              sql`LOWER(REGEXP_REPLACE(${clients.name}, '[^a-zA-Z0-9]', '', 'g')) LIKE ${root + "%"}`,
+            )
+            .limit(1);
+          if (nameMatches.length > 0) match = nameMatches[0];
+        }
+      }
+
       if (match) {
-        // Attach this user as a pending member of the existing tenant.
-        // role stays 'pending' and all canView_* flags stay false —
-        // the existing admin opts them into modules from /admin.
-        await db
-          .update(userProfiles)
-          .set({
-            clientId: match.clientId,
-            pendingSignupRole: null,
-            role: "pending",
-            updatedAt: new Date(),
-          })
-          .where(eq(userProfiles.clerkUserId, profile.clerkUserId));
+        const alreadyOnRightTenant = profile.clientId === match.clientId;
+        const needsWrite =
+          !alreadyOnRightTenant || profile.pendingSignupRole != null;
+        if (needsWrite) {
+          await db
+            .update(userProfiles)
+            .set({
+              clientId: match.clientId,
+              pendingSignupRole: null,
+              // Keep them awaiting approval — admin grants modules.
+              role: "pending",
+              updatedAt: new Date(),
+            })
+            .where(eq(userProfiles.clerkUserId, profile.clerkUserId));
+        }
 
         // Notify the tenant's admins so they know somebody's waiting.
         // Best-effort — never block the redirect on a notify failure.
-        try {
-          const team = await db
-            .select({ id: userProfiles.clerkUserId })
-            .from(userProfiles)
-            .where(
-              and(
-                eq(userProfiles.clientId, match.clientId),
-                eq(userProfiles.role, "admin"),
-              ),
-            );
-          if (team.length > 0) {
-            await db.insert(erpNotifications).values(
-              team.map((u) => ({
-                targetClerkId: u.id,
-                kind: "supplier.signed-up" as const,
-                title: `New team member signed up: ${profile.email}`,
-                body: `${profile.displayName ?? profile.email} signed up under your domain (${domain}). Grant module access from the admin panel.`,
-                linkUrl: "/admin",
-              })),
-            );
+        // We notify on every fresh attachment (not when we're just
+        // clearing pendingSignupRole on someone already attached).
+        if (!alreadyOnRightTenant) {
+          try {
+            const team = await db
+              .select({ id: userProfiles.clerkUserId })
+              .from(userProfiles)
+              .where(
+                and(
+                  eq(userProfiles.clientId, match.clientId),
+                  eq(userProfiles.role, "admin"),
+                ),
+              );
+            if (team.length > 0) {
+              await db.insert(erpNotifications).values(
+                team.map((u) => ({
+                  targetClerkId: u.id,
+                  kind: "supplier.signed-up" as const,
+                  title: `New team member signed up: ${profile.email}`,
+                  body: `${profile.displayName ?? profile.email} signed up under your domain (${domain}). Grant module access from the admin panel.`,
+                  linkUrl: "/admin",
+                })),
+              );
+            }
+          } catch (e) {
+            console.warn("[onboarding] notify-admins failed:", e);
           }
-        } catch (e) {
-          console.warn("[onboarding] notify-admins failed:", e);
         }
 
         // Send them home — AwaitingAccess will render because they
