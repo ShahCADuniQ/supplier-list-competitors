@@ -64,11 +64,6 @@ export default function InventoryAndManufacturing({
   registeredSupplierIds?: number[];
 }) {
   const [tab, setTab] = useState<TabKey>("onboarding-requests");
-  // When the user clicks a card on the Supplier Inventory overview, we
-  // bounce them to the Suppliers tab and pre-open the chosen supplier's
-  // detail panel. SuppliersView reads this prop on mount and clears it
-  // via onJumpToSupplierHandled so a second click doesn't re-open.
-  const [jumpToSupplierId, setJumpToSupplierId] = useState<number | null>(null);
 
   return (
     <div className="flex flex-col min-h-full" style={{ background: "var(--lb-bg)" }}>
@@ -127,8 +122,6 @@ export default function InventoryAndManufacturing({
             initialData={initialData}
             canEdit={canEdit}
             registeredSupplierIds={registeredSupplierIds}
-            jumpToSupplierId={jumpToSupplierId}
-            onJumpToSupplierHandled={() => setJumpToSupplierId(null)}
           />
         )}
         {tab === "barcodes" && <BarcodeGenerator canEdit={canEdit} />}
@@ -137,12 +130,7 @@ export default function InventoryAndManufacturing({
           <OrdersTab suppliers={initialData} canEdit={canEdit} />
         )}
         {tab === "supplier-inventory" && (
-          <SupplierInventoryOverview
-            onJumpToSupplier={(supplierId) => {
-              setJumpToSupplierId(supplierId);
-              setTab("suppliers");
-            }}
-          />
+          <SupplierInventoryOverview canEdit={canEdit} />
         )}
         {tab === "boms" && (
           <StubTab

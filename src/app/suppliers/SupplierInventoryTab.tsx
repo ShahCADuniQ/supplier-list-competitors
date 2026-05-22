@@ -432,8 +432,10 @@ function ProductCard({ product, onOpen, modelCount = 0 }: {
     >
       <div style={{ position: "relative", aspectRatio: "4/3", width: "100%", borderRadius: 6, overflow: "hidden", background: "var(--lb-bg)", border: "1px solid var(--lb-border)", display: "grid", placeItems: "center" }}>
         {coverUrl ? (
+          // Fit the entire picture in frame (no cropping). The parent
+          // tile background fills any letterbox space.
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={coverUrl} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <img src={coverUrl} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
         ) : (
           <span style={{ color: "var(--lb-text-3)", fontSize: 24 }}>📦</span>
         )}
@@ -722,7 +724,7 @@ type ActiveTab =
   | { kind: "enum"; key: SupplierProductAttachmentCategory }
   | { kind: "custom"; label: string };
 
-function ProductDrawer({ product, models, parentProduct, allProducts, canEdit, onClose, onChanged, onOpenSibling }: {
+export function ProductDrawer({ product, models, parentProduct, allProducts, canEdit, onClose, onChanged, onOpenSibling }: {
   product: SupplierProductWithAttachments;
   // Sub-models nested under this part. Empty for parts with no
   // configurations, and ignored entirely when the drawer is showing a

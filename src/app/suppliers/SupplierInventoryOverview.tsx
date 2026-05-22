@@ -2,27 +2,24 @@
 
 // ERP System → "Supplier Inventory" sub-tab. Aggregate read-only view of
 // every top-level PART across every supplier in the tenant, with
-// filters by project number and free-text product search. Replaces the
-// previous Manufacturing stub.
+// filters by project number, supplier (searchable), part name
+// (searchable), and free-text product search.
 //
-// Clicking a card hands off to the parent (InventoryAndManufacturing)
-// via `onJumpToSupplier`, which switches the sub-tab to "Suppliers" and
-// pre-opens the chosen supplier's detail panel + the Products tab on
-// that panel so the user can drill into files/configurations with the
-// full editor.
+// Clicking a card opens the part's drawer INLINE on this tab — no tab
+// switch — so the user can manage files / configurations without
+// losing their place in the overview.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   listAggregateSupplierInventory,
   type AggregateInventoryPart,
 } from "./supplier-inventory-actions";
+import ProductDrawerLoader from "./ProductDrawerLoader";
 
 export default function SupplierInventoryOverview({
-  onJumpToSupplier,
+  canEdit,
 }: {
-  // Called with the supplier id (and optional part id to focus) when the
-  // user clicks a card. Parent navigates to the suppliers tab.
-  onJumpToSupplier: (supplierId: number, partId?: number) => void;
+  canEdit: boolean;
 }) {
   const [data, setData] = useState<{
     parts: AggregateInventoryPart[];
@@ -32,19 +29,34 @@ export default function SupplierInventoryOverview({
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
+  const [partNameFilter, setPartNameFilter] = useState<string>("all");
+  const [openPart, setOpenPart] = useState<AggregateInventoryPart | null>(null);
 
-  useEffect(() => {
+  function reload() {
     listAggregateSupplierInventory()
       .then(setData)
       .catch((e) => setErr(e instanceof Error ? e.message : "Load failed"));
+  }
+
+  useEffect(() => {
+    reload();
   }, []);
 
+  // Distinct supplier and part-name lists — feed the searchable dropdowns.
   const suppliers = useMemo(() => {
     const map = new Map<number, string>();
     for (const p of data?.parts ?? []) map.set(p.supplierId, p.supplierName);
     return Array.from(map.entries())
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }, [data]);
+
+  const partNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of data?.parts ?? []) {
+      if (p.name && p.name.trim()) set.add(p.name.trim());
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [data]);
 
   const filtered = useMemo(() => {
@@ -54,6 +66,9 @@ export default function SupplierInventoryOverview({
         return false;
       }
       if (projectFilter !== "all" && !p.projectNums.includes(projectFilter)) {
+        return false;
+      }
+      if (partNameFilter !== "all" && p.name !== partNameFilter) {
         return false;
       }
       if (!q) return true;
@@ -68,7 +83,7 @@ export default function SupplierInventoryOverview({
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [data, search, projectFilter, supplierFilter]);
+  }, [data, search, projectFilter, supplierFilter, partNameFilter]);
 
   if (err) {
     return (
@@ -95,6 +110,12 @@ export default function SupplierInventoryOverview({
       </div>
     );
   }
+
+  const anyFilterActive =
+    !!search ||
+    projectFilter !== "all" ||
+    supplierFilter !== "all" ||
+    partNameFilter !== "all";
 
   return (
     <div
@@ -129,9 +150,9 @@ export default function SupplierInventoryOverview({
             Supplier Inventory
           </h1>
           <p style={{ fontSize: 13, color: "var(--lb-text-3)", margin: "4px 0 0" }}>
-            Every part across every supplier in your tenant. Filter by project
-            or by product to find what you need, then click a card to jump
-            into that supplier&apos;s catalog.
+            Every part across every supplier in your tenant. Filter by
+            supplier, part name, project, or free-text search — click any
+            card to open the part directly.
           </p>
         </div>
         <div
@@ -153,7 +174,7 @@ export default function SupplierInventoryOverview({
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
           gap: 10,
           padding: 14,
           borderRadius: 12,
@@ -161,7 +182,7 @@ export default function SupplierInventoryOverview({
           border: "1px solid var(--lb-border)",
         }}
       >
-        <FilterField label="Product search">
+        <FilterField label="Free-text search">
           <input
             type="search"
             value={search}
@@ -170,6 +191,31 @@ export default function SupplierInventoryOverview({
             style={INPUT_STYLE}
           />
         </FilterField>
+
+        <FilterField label="Supplier">
+          <SearchableDropdown
+            value={
+              supplierFilter === "all"
+                ? null
+                : suppliers.find((s) => String(s.id) === supplierFilter)?.name ?? null
+            }
+            options={suppliers.map((s) => ({ id: String(s.id), label: s.name }))}
+            allLabel="All suppliers"
+            placeholder="Search suppliers…"
+            onChange={(id) => setSupplierFilter(id ?? "all")}
+          />
+        </FilterField>
+
+        <FilterField label="Part name">
+          <SearchableDropdown
+            value={partNameFilter === "all" ? null : partNameFilter}
+            options={partNames.map((n) => ({ id: n, label: n }))}
+            allLabel="All parts"
+            placeholder="Search part names…"
+            onChange={(id) => setPartNameFilter(id ?? "all")}
+          />
+        </FilterField>
+
         <FilterField label="Project">
           <select
             value={projectFilter}
@@ -184,21 +230,8 @@ export default function SupplierInventoryOverview({
             ))}
           </select>
         </FilterField>
-        <FilterField label="Supplier">
-          <select
-            value={supplierFilter}
-            onChange={(e) => setSupplierFilter(e.target.value)}
-            style={INPUT_STYLE}
-          >
-            <option value="all">All suppliers</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={String(s.id)}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </FilterField>
-        {(search || projectFilter !== "all" || supplierFilter !== "all") && (
+
+        {anyFilterActive && (
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <button
               type="button"
@@ -206,6 +239,7 @@ export default function SupplierInventoryOverview({
                 setSearch("");
                 setProjectFilter("all");
                 setSupplierFilter("all");
+                setPartNameFilter("all");
               }}
               style={RESET_BTN}
             >
@@ -242,10 +276,20 @@ export default function SupplierInventoryOverview({
             <PartCard
               key={p.id}
               part={p}
-              onClick={() => onJumpToSupplier(p.supplierId, p.id)}
+              onClick={() => setOpenPart(p)}
             />
           ))}
         </div>
+      )}
+
+      {openPart && (
+        <ProductDrawerLoader
+          partId={openPart.id}
+          supplierId={openPart.supplierId}
+          canEdit={canEdit}
+          onClose={() => setOpenPart(null)}
+          onChanged={reload}
+        />
       )}
     </div>
   );
@@ -273,6 +317,167 @@ function FilterField({
       </span>
       {children}
     </label>
+  );
+}
+
+// Compact combobox: text input that filters a scrollable list of
+// options. Used for the supplier and part-name dropdowns so long lists
+// stay browsable. The "all" sentinel is the implicit reset option and
+// is rendered as the first row of the popup.
+function SearchableDropdown({
+  value,
+  options,
+  allLabel,
+  placeholder,
+  onChange,
+}: {
+  value: string | null;
+  options: { id: string; label: string }[];
+  allLabel: string;
+  placeholder: string;
+  onChange: (id: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, query]);
+
+  // Close popup on outside click — use a per-instance ref so multiple
+  // dropdowns on the same page don't share a single id.
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      const root = rootRef.current;
+      if (root && root.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  // Display label = value (current selection) or the "all" sentinel.
+  return (
+    <div style={{ position: "relative" }} ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          ...INPUT_STYLE,
+          textAlign: "left",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+        }}
+        title={value ?? allLabel}
+      >
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: value ? "var(--lb-text)" : "var(--lb-text-3)",
+          }}
+        >
+          {value ?? allLabel}
+        </span>
+        <span style={{ color: "var(--lb-text-3)", fontSize: 10 }}>▼</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            zIndex: 30,
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+            borderRadius: 10,
+            boxShadow: "var(--lb-shadow)",
+            maxHeight: 280,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={placeholder}
+            autoFocus
+            style={{
+              ...INPUT_STYLE,
+              borderRadius: 0,
+              border: "none",
+              borderBottom: "1px solid var(--lb-border)",
+              background: "var(--lb-bg)",
+            }}
+          />
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              overflowY: "auto",
+              flex: 1,
+            }}
+          >
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(null);
+                  setOpen(false);
+                  setQuery("");
+                }}
+                style={DROPDOWN_OPTION_STYLE}
+              >
+                {allLabel}
+              </button>
+            </li>
+            {filtered.length === 0 ? (
+              <li style={{ padding: 10, fontSize: 12, color: "var(--lb-text-3)" }}>
+                No matches.
+              </li>
+            ) : (
+              filtered.map((o) => {
+                const selected = o.id === (value ?? "");
+                return (
+                  <li key={o.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onChange(o.id);
+                        setOpen(false);
+                        setQuery("");
+                      }}
+                      style={{
+                        ...DROPDOWN_OPTION_STYLE,
+                        background: selected
+                          ? "color-mix(in srgb, var(--lb-accent) 14%, transparent)"
+                          : "transparent",
+                        color: selected ? "var(--lb-accent)" : "var(--lb-text)",
+                        fontWeight: selected ? 700 : 500,
+                      }}
+                    >
+                      {o.label}
+                    </button>
+                  </li>
+                );
+              })
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -325,7 +530,14 @@ function PartCard({
           <img
             src={part.thumbnailUrl}
             alt={part.name}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            style={{
+              // Fit the entire picture in frame — no cropping. The
+              // surrounding card panels in --lb-bg so the letterbox
+              // edges blend with the card.
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+            }}
           />
         ) : (
           <span style={{ fontSize: 24, color: "var(--lb-text-3)" }}>📦</span>
@@ -471,6 +683,17 @@ const INPUT_STYLE: React.CSSProperties = {
   color: "var(--lb-text)",
   fontSize: 13,
   outline: "none",
+};
+
+const DROPDOWN_OPTION_STYLE: React.CSSProperties = {
+  width: "100%",
+  textAlign: "left",
+  padding: "8px 12px",
+  background: "transparent",
+  border: "none",
+  cursor: "pointer",
+  fontSize: 13,
+  color: "var(--lb-text)",
 };
 
 const RESET_BTN: React.CSSProperties = {
