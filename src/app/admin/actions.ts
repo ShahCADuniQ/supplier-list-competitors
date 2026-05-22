@@ -3,7 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { clients, suppliers, userProfiles, type Client } from "@/db/schema";
+import {
+  clients,
+  supplierContacts,
+  suppliers,
+  userProfiles,
+  type Client,
+} from "@/db/schema";
 import {
   ensureUserProfileColumns,
   isCaduniqUser,
@@ -137,6 +143,74 @@ export async function revokeUser(clerkUserId: string) {
     canViewOee: false,
     canEdit: false,
   });
+}
+
+// Permanently remove a user_profiles row. The Clerk identity is left
+// alone — we can't reach Clerk's API from here without an admin key —
+// but our local profile is wiped, so the next time the user signs in
+// getOrCreateProfile creates a fresh row and they're treated as a
+// brand-new account that can re-register through /get-started.
+//
+// Authorisation:
+//   • CADuniQ staff can delete anyone.
+//   • A tenant admin can delete users on their own tenant only.
+//   • Seeded admin emails are protected (you can't lock yourself out
+//     of the deployment by deleting the seeded operator).
+//   • Self-delete is blocked — the actor has to delete via someone
+//     else's account, otherwise a misclick logs them out permanently.
+//
+// Cleanup:
+//   • If the deleted user is a supplier (is_supplier=true), we ALSO
+//     clear their supplier_contacts rows so the auto-link path on
+//     re-signup doesn't silently re-attach them to the old supplier.
+//     The supplier row itself stays — it belongs to the engineering
+//     tenant's directory.
+export async function hardDeleteUser(input: {
+  clerkUserId: string;
+}): Promise<{ deletedEmail: string }> {
+  const actor = await requireAdmin();
+  await ensureUserProfileColumns();
+
+  if (input.clerkUserId === actor.clerkUserId) {
+    throw new Error("You can't delete your own account.");
+  }
+
+  const [target] = await db
+    .select()
+    .from(userProfiles)
+    .where(eq(userProfiles.clerkUserId, input.clerkUserId))
+    .limit(1);
+  if (!target) throw new Error("User not found");
+
+  if (isSeededAdminEmail(target.email)) {
+    throw new Error(
+      "Seeded admin accounts can't be deleted from the UI — edit the seed list in code first.",
+    );
+  }
+
+  // Non-CADuniQ admins can only delete users on their own tenant.
+  if (!isCaduniqUser(actor)) {
+    if (target.clientId !== actor.clientId) {
+      throw new Error("You can only delete users on your own tenant.");
+    }
+  }
+
+  // If the target was a supplier, drop their portal-link contact rows
+  // so they can register cleanly next time without auto-linking back to
+  // a supplier their old account was tied to.
+  if (target.isSupplier && target.email) {
+    await db
+      .delete(supplierContacts)
+      .where(sql`LOWER(${supplierContacts.email}) = ${target.email.toLowerCase()}`);
+  }
+
+  await db
+    .delete(userProfiles)
+    .where(eq(userProfiles.clerkUserId, input.clerkUserId));
+
+  revalidatePath("/admin");
+  revalidatePath("/");
+  return { deletedEmail: target.email };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

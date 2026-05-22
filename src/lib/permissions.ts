@@ -240,14 +240,50 @@ export function ensureUserProfileColumns(): Promise<void> {
       // Backfill: any user_profiles row whose email matches a suppliers row
       // gets flagged as a supplier user (covers people who signed in before
       // migration 0026 ran).
+      //
+      // CRITICAL: skip rows where the user has clearly committed to a
+      // different role — admin, retailer, OR mid-signup with a non-
+      // supplier pending_signup_role. Otherwise an internal team member
+      // whose email accidentally landed in the suppliers table gets
+      // hijacked into the vendor portal on every sign-in.
       await db.execute(sql`
         UPDATE "user_profiles" up
           SET "is_supplier" = true
           WHERE "is_supplier" = false
+            AND "is_retailer" = false
+            AND "role" <> 'admin'
+            AND ("pending_signup_role" IS NULL OR "pending_signup_role" = 'supplier')
             AND EXISTS (
               SELECT 1 FROM "suppliers" s
               WHERE LOWER(s.email) = LOWER(up.email)
             )
+      `);
+      // Recovery: a user who has explicitly committed to "engineering"
+      // or "retailer" (via the role-chooser cookie persisted to
+      // pending_signup_role) should NEVER also be flagged as a
+      // supplier. If a stale backfill from a previous run set the
+      // flag, clear it now so the home page stops routing them to
+      // /portal. This is what unsticks accounts like pbosco@lightbase.ca
+      // whose email accidentally landed in the suppliers table.
+      await db.execute(sql`
+        UPDATE "user_profiles"
+          SET "is_supplier" = false
+          WHERE "is_supplier" = true
+            AND "pending_signup_role" IN ('engineering', 'retailer')
+      `);
+      // Same recovery for users who became admins / staff but kept a
+      // stale is_supplier flag from before they were promoted.
+      await db.execute(sql`
+        UPDATE "user_profiles"
+          SET "is_supplier" = false
+          WHERE "is_supplier" = true
+            AND "role" = 'admin'
+      `);
+      await db.execute(sql`
+        UPDATE "user_profiles"
+          SET "is_supplier" = false
+          WHERE "is_supplier" = true
+            AND "is_retailer" = true
       `);
     } catch (e) {
       console.warn(
@@ -365,7 +401,18 @@ export async function getOrCreateProfile(): Promise<UserProfile | null> {
   const isAdmin = isSeededAdminEmail(email);
   // Suppliers are external — never auto-admin. A supplier email being on
   // the admin allowlist would be a configuration mistake, so admin wins.
-  const isSupplier = !isAdmin && (await isSupplierEmail(email));
+  //
+  // CRITICAL: respect the role-chooser cookie. If the user explicitly
+  // picked "engineering" or "retailer" on /get-started, they're telling
+  // us they're signing up as something OTHER than a supplier. Even if a
+  // stale suppliers row carries their email (mistaken vendor contact,
+  // test data, etc.), the cookie wins — otherwise pbosco@lightbase.ca
+  // ends up flagged as a supplier the moment he signs up as an
+  // engineering company.
+  const cookieSaysNotSupplier =
+    roleHintFromCookie === "engineering" || roleHintFromCookie === "retailer";
+  const isSupplier =
+    !isAdmin && !cookieSaysNotSupplier && (await isSupplierEmail(email));
 
   // A row may already exist for this email under a *different* clerk_user_id
   // (e.g. a previous Clerk user for the same address, or a pre-seeded row).

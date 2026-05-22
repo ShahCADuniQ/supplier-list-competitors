@@ -38,6 +38,7 @@ import {
   approveUser,
   approveUserFullView,
   revokeUser,
+  hardDeleteUser,
   updateUserAccess,
   type AccessUpdate,
 } from "./actions";
@@ -794,6 +795,30 @@ export default function AdminPanel({
                               }}
                             >
                               {u.role === "pending" ? "Reject" : "Revoke"}
+                            </Btn>
+                          )}
+                          {!isPrimary && !isSelf && (
+                            <Btn
+                              variant="danger"
+                              disabled={busy === u.clerkUserId}
+                              onClick={() => {
+                                const typed = window.prompt(
+                                  `Permanently delete ${u.email}? Type their email to confirm. This removes the account from our database so they can re-register from scratch.`,
+                                );
+                                if (
+                                  !typed ||
+                                  typed.trim().toLowerCase() !== u.email.toLowerCase()
+                                ) {
+                                  return;
+                                }
+                                action(
+                                  u.clerkUserId,
+                                  () => hardDeleteUser({ clerkUserId: u.clerkUserId }),
+                                  "User deleted",
+                                );
+                              }}
+                            >
+                              🗑 Delete
                             </Btn>
                           )}
                         </div>

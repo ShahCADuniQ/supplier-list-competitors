@@ -51,6 +51,23 @@ export default async function Home() {
 
   if (!profile) return <SignedOutHero />;
 
+  // Mid-signup users who explicitly picked a role on /get-started come
+  // first — if the cookie / pendingSignupRole says "engineering" or
+  // "retailer" but a stale suppliers row also flagged them as a
+  // supplier, the user's explicit choice still wins. Without this
+  // pbosco@lightbase.ca (an engineering signup whose email happened to
+  // appear in the suppliers table) would get hijacked to /portal.
+  const isMidSignup =
+    profile.role === "pending" &&
+    profile.approvedAt === null &&
+    profile.pendingSignupRole != null;
+  if (isMidSignup && profile.pendingSignupRole === "engineering") {
+    redirect("/onboarding?role=engineering");
+  }
+  if (isMidSignup && profile.pendingSignupRole === "retailer") {
+    redirect("/onboarding?role=retailer");
+  }
+
   // Supplier users skip the buyer dashboard entirely and land on their
   // vendor portal. They're not staff — the home page would just confuse
   // them with internal KPIs.
