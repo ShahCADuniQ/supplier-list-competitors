@@ -29,6 +29,7 @@ import {
   type OnboardingAttachmentRow,
 } from "@/app/suppliers/onboarding-actions";
 import { SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
+import SubCategoryPicker from "@/components/SubCategoryPicker";
 import {
   SUPPLIER_ATTACHMENT_CATEGORIES,
   CUSTOM_SECTION_META,
@@ -823,10 +824,11 @@ function ShopSummaryEditor({
           </select>
         </Field>
         <Field label="Sub-category / specialty">
-          <input
+          <SubCategoryPicker
+            category={category}
             value={subCategory}
-            onChange={(e) => setSubCategory(e.target.value)}
-            style={INPUT_STYLE}
+            onChange={setSubCategory}
+            inputStyle={INPUT_STYLE}
             placeholder="e.g. aluminum extrusion, 0-10V drivers …"
           />
         </Field>

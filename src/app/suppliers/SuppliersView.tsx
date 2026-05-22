@@ -39,6 +39,7 @@ import {
   listCustomSectionIds,
 } from "./supplier-attachment-categories";
 import FileViewerModal, { forceDownloadFile } from "@/components/FileViewerModal";
+import SubCategoryPicker from "@/components/SubCategoryPicker";
 import IncotermSelect from "./IncotermSelect";
 import {
   aiGenerateSupplier,
@@ -1365,7 +1366,15 @@ export default function SuppliersView({
                   <option value="">—</option>
                   {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select></div>
-                <div className="form-group"><label>Sub-Category</label><input className="form-input" value={addForm.subCategory} onChange={(e) => setAddForm((f) => ({ ...f, subCategory: e.target.value }))} /></div>
+                <div className="form-group">
+                  <label>Sub-Category</label>
+                  <SubCategoryPicker
+                    category={addForm.category}
+                    value={addForm.subCategory}
+                    onChange={(next) => setAddForm((f) => ({ ...f, subCategory: next }))}
+                    className="form-input"
+                  />
+                </div>
                 <div className="form-group"><label>Origin</label><select className="form-input" value={addForm.origin} onChange={(e) => setAddForm((f) => ({ ...f, origin: e.target.value }))}>
                   <option value="">—</option>
                   {ORIGINS.map((o) => <option key={o} value={o}>{o}</option>)}
@@ -1547,7 +1556,15 @@ function DetailsTab({
       <div className="form-grid">
         <div className="form-group"><label>Supplier Name</label><input className="form-input" value={details.name ?? ""} onChange={set("name")} disabled={ro} /></div>
         <div className="form-group"><label>Category</label><select className="form-input" value={details.category ?? ""} onChange={set("category")} disabled={ro}><option value="">—</option>{CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
-        <div className="form-group"><label>Sub-Category</label><input className="form-input" value={details.subCategory ?? ""} onChange={set("subCategory")} disabled={ro} /></div>
+        <div className="form-group">
+          <label>Sub-Category</label>
+          <SubCategoryPicker
+            category={details.category}
+            value={details.subCategory ?? ""}
+            onChange={(next) => setDetails((d) => ({ ...d, subCategory: next }))}
+            className="form-input"
+          />
+        </div>
         <div className="form-group"><label>Origin</label><select className="form-input" value={details.origin ?? ""} onChange={set("origin")} disabled={ro}><option value="">—</option>{ORIGINS.map((o) => <option key={o} value={o}>{o}</option>)}</select></div>
         <div className="form-group"><label>Status</label><select className="form-input" value={details.status ?? "Active"} onChange={set("status")} disabled={ro}><option value="Active">Active</option><option value="Historical">Historical</option></select></div>
         <div className="form-group"><label>Contact Name</label><input className="form-input" value={details.contactName ?? ""} onChange={set("contactName")} disabled={ro} /></div>

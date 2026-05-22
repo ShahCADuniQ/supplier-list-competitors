@@ -27,6 +27,7 @@ import {
   listCustomSectionIds,
 } from "@/app/suppliers/supplier-attachment-categories";
 import FileViewerModal, { forceDownloadFile } from "@/components/FileViewerModal";
+import SubCategoryPicker from "@/components/SubCategoryPicker";
 
 // Canonical sections + custom sections (derived from attachments +
 // transient drafts) are computed inside AboutUsAttachments. The shared
@@ -310,10 +311,11 @@ function ShopInfoEditor({
           </select>
         </Field>
         <Field label="Sub-category / specialty">
-          <input
+          <SubCategoryPicker
+            category={category}
             value={subCategory}
-            onChange={(e) => setSubCategory(e.target.value)}
-            style={INPUT_STYLE}
+            onChange={setSubCategory}
+            inputStyle={INPUT_STYLE}
             placeholder="e.g. aluminum extrusion, 0-10V drivers …"
           />
         </Field>

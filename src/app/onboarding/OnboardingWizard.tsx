@@ -18,6 +18,7 @@ import {
   claimSupplier,
 } from "./onboarding-actions";
 import { SUPPLIER_CATEGORIES as CANONICAL_SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
+import SubCategoryPicker from "@/components/SubCategoryPicker";
 
 const SECTION: React.CSSProperties = {
   background: "var(--lb-bg-elev)",
@@ -348,11 +349,12 @@ function SupplierFlow({
             </select>
           </Field>
           <Field label="Sub-category / specialty">
-            <input
+            <SubCategoryPicker
+              category={category}
               value={subCategory}
-              onChange={(e) => setSubCategory(e.target.value)}
+              onChange={setSubCategory}
               placeholder="e.g. aluminum extrusion, 0-10V drivers, IES-rated lenses…"
-              style={INPUT}
+              inputStyle={INPUT}
             />
           </Field>
         </div>

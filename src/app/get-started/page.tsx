@@ -19,11 +19,16 @@ export const metadata = {
   description: "Choose your account type to sign up for CADuniQ.",
 };
 
+// Uniform sizing across all three role-card CTAs — single-line labels,
+// shared height, and full card width so the three buttons line up
+// regardless of label length.
 const CARD_BTN: React.CSSProperties = {
-  display: "inline-flex",
+  display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  padding: "11px 22px",
+  width: "100%",
+  height: 52,
+  padding: "0 22px",
   fontSize: 14,
   fontWeight: 700,
   borderRadius: 999,
@@ -31,6 +36,8 @@ const CARD_BTN: React.CSSProperties = {
   color: "#fff",
   border: "none",
   boxShadow: "0 4px 14px rgba(37,99,235,0.22)",
+  whiteSpace: "nowrap",
+  textAlign: "center",
 };
 
 export default async function GetStartedPage() {
@@ -150,7 +157,7 @@ export default async function GetStartedPage() {
               background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)",
               marginTop: 4,
             }}>
-              Sign up as a designer/engineering company →
+              Sign up as a designer →
             </Link>
           </article>
 
@@ -171,19 +178,23 @@ export default async function GetStartedPage() {
               </span>
             </div>
             <div>
-              <h2 style={{ margin: "0 0 8px", fontSize: 22, fontWeight: 800, letterSpacing: "-0.015em" }}>
-                I make parts
+              <h2 style={{ margin: "0 0 6px", fontSize: 22, fontWeight: 800, letterSpacing: "-0.015em" }}>
+                Supplier
               </h2>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "var(--lb-text)", margin: "0 0 8px" }}>
+                I make parts or provide finished products
+              </div>
               <p style={{ margin: 0, fontSize: 14, color: "var(--lb-text-2)", lineHeight: 1.55 }}>
                 You run a machine shop, fabrication plant, electronics
-                assembly, or any other manufacturing service. CADuniQ matches
-                you with engineering companies that already need exactly what
-                you make.
+                assembly, distribution business, or any other supplier
+                operation. CADuniQ matches you with engineering companies
+                that already need exactly what you make — or already
+                source finished goods you resell.
               </p>
             </div>
             <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
               {[
-                "Receive qualified RFQs. No cold calling, no sales effort.",
+                "Receive qualified RFQs for parts AND finished-product opportunities",
                 "Build a private catalog with datasheets, IES, drawings, photos",
                 "Get paid via escrow within 48 hours of QC pass",
                 "The buyer's identity stays anonymous until you both agree",
