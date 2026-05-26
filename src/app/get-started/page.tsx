@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
+import CaduniqLogo from "@/components/CaduniqLogo";
+import ThemeToggle from "@/components/ThemeToggle";
 
 // Public sign-up chooser. Three cards: Engineering Company / Supplier /
 // Retailer. Each links into Clerk's sign-up with a `role` hint that the
@@ -63,23 +65,19 @@ export default async function GetStartedPage() {
       `,
       color: "var(--lb-text)",
       padding: "clamp(48px, 8vw, 96px) 24px",
+      position: "relative",
     }}>
+      {/* Theme toggle pinned to the top corner — this page has no
+          sticky nav of its own, so anchor the control here. */}
+      <div style={{ position: "absolute", top: 18, right: 20 }}>
+        <ThemeToggle />
+      </div>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
         {/* HEADER */}
         <header style={{ textAlign: "center", marginBottom: 48 }}>
-          <Link href="/" style={{
-            display: "inline-flex", alignItems: "center", gap: 8,
-            color: "var(--lb-text-3)", textDecoration: "none", fontSize: 13,
-            marginBottom: 24,
-          }}>
-            <span style={{
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              width: 26, height: 26, borderRadius: 7,
-              background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ea580c 100%)",
-              color: "#fff", fontWeight: 800, fontSize: 13,
-            }}>C</span>
-            <strong style={{ color: "var(--lb-text)" }}>CADuniQ</strong>
-          </Link>
+          <div style={{ display: "inline-flex", marginBottom: 24 }}>
+            <CaduniqLogo href="/" height={88} />
+          </div>
           <h1 style={{
             margin: 0, fontSize: "clamp(28px, 4vw, 44px)",
             fontWeight: 800, letterSpacing: "-0.02em", color: "var(--lb-text)",

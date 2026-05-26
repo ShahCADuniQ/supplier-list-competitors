@@ -266,6 +266,19 @@ html.dark {
   }
 }
 
+/* ─── CADuniQ logo theme swap ──────────────────────────────────────────
+   The logo PNG ships in two pre-processed flavours: a dark-text version
+   for light themes and a light-text version for dark themes. Both <img>s
+   are rendered into the DOM by <CaduniqLogo />; these rules toggle which
+   one is visible based on the .dark class on <html>. Doing it via CSS
+   rather than React state avoids a flash-of-wrong-logo during hydration.
+   !important locks the toggle so a stray Tailwind utility (e.g. `block`)
+   on a wrapping element can never make both render at once. */
+.caduniq-logo-light { display: block !important; }
+.caduniq-logo-dark { display: none !important; }
+html.dark .caduniq-logo-light { display: none !important; }
+html.dark .caduniq-logo-dark { display: block !important; }
+
 /* ─── Reusable SaaS dashboard primitives ───────────────────────────── */
 
 .lb-glass {

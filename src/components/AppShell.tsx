@@ -2,11 +2,11 @@
 
 import { UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
-import Link from "next/link";
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
 import SubNav from "./SubNav";
 import ThemeToggle from "./ThemeToggle";
+import CaduniqLogo from "./CaduniqLogo";
 
 type Props = {
   email: string | null;
@@ -94,46 +94,10 @@ export default function AppShell({
           className="sticky top-0 z-30 flex items-center justify-between px-6"
           style={{
             height: "var(--lb-topbar-h)",
-            background: "rgba(255,255,255,0.85)",
-            backdropFilter: "blur(14px)",
-            borderBottom: "1px solid var(--lb-border)",
+            background: "transparent",
           }}
         >
-          <Link
-            href="/"
-            className="flex items-center gap-2.5"
-            style={{ textDecoration: "none", color: "var(--lb-text)" }}
-          >
-            <span
-              aria-hidden
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 34,
-                height: 34,
-                borderRadius: 10,
-                background:
-                  "linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ea580c 100%)",
-                color: "#fff",
-                fontWeight: 900,
-                fontSize: 17,
-                letterSpacing: "-0.04em",
-              }}
-            >
-              C
-            </span>
-            <span
-              style={{
-                fontFamily: "var(--lb-font-display)",
-                fontWeight: 800,
-                fontSize: 17,
-                letterSpacing: "-0.015em",
-              }}
-            >
-              CADuniQ
-            </span>
-          </Link>
+          <CaduniqLogo href="/" height={60} />
           <div className="flex items-center gap-3">
             <ThemeToggle />
             <UserButton />

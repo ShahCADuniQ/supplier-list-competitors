@@ -89,6 +89,37 @@ export function ensureSupplierInventorySchema(): Promise<void> {
           ON DELETE CASCADE;
       EXCEPTION WHEN duplicate_object THEN null; END $$`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_products_parent_idx" ON "supplier_products" ("parent_product_id")`);
+      // Cross-supplier product identity + primary/secondary tagging.
+      // globalProductId clusters rows that represent the same part
+      // across multiple suppliers; isPrimarySupplier picks the chosen
+      // one within each cluster.
+      await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "global_product_id" text`);
+      await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "is_primary_supplier" boolean NOT NULL DEFAULT true`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_products_global_idx" ON "supplier_products" ("global_product_id")`);
+      // Backfill: every row that doesn't already have a
+      // globalProductId gets a fresh one. Every part AND every
+      // configuration has its OWN cluster id — configs no longer
+      // inherit from their parent — so they can each be linked to
+      // alternative configs (cross-supplier "same component, my
+      // preferred variant") independently of the part cluster.
+      await db.execute(sql`
+        UPDATE "supplier_products"
+          SET "global_product_id" = 'gp-' || gen_random_uuid()::text
+          WHERE "global_product_id" IS NULL
+      `);
+      // One-time repair: configurations that previously inherited
+      // their parent's globalProductId (older schema versions) get
+      // their own fresh id so the part-level cluster doesn't bleed
+      // through into the config-level cluster. Idempotent: after the
+      // first run no config still shares its parent's id.
+      await db.execute(sql`
+        UPDATE "supplier_products" child
+          SET "global_product_id" = 'gp-' || gen_random_uuid()::text
+          FROM "supplier_products" parent
+          WHERE child."parent_product_id" = parent."id"
+            AND child."global_product_id" = parent."global_product_id"
+            AND parent."global_product_id" IS NOT NULL
+      `);
     } catch (e) {
       _ensured = null; // allow retry on next call if this somehow failed
       throw e;

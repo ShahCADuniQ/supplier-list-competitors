@@ -19,7 +19,15 @@ import {
   deleteSupplierProduct,
   deleteSupplierProductAttachment,
   deleteSupplierProductCustomSection,
+  linkAlternativeProduct,
+  listAlternativeSuppliersForPart,
+  listCataloguePartsForLinking,
   moveSupplierProductsToPart,
+  promoteToPrimarySupplier,
+  unlinkFromAlternativeCluster,
+  unmarkPrimarySupplier,
+  type AlternativeSupplierPart,
+  type CataloguePickerPart,
   listSupplierProducts,
   listSuppliersWithCatalog,
   updateSupplierProduct,
@@ -880,6 +888,18 @@ export function ProductDrawer({ product, models, parentProduct, allProducts, can
       />
       {err && <div style={{ color: "#dc2626", fontSize: 12.5, padding: "4px 16px" }}>{err}</div>}
 
+      {/* Alternative products — same component, different supplier.
+          Rendered for BOTH parts and configurations so each level can
+          have its own primary/backup cluster (configs are linked
+          separately from their parent). */}
+      <AlternativeSuppliersBlock
+        partId={product.id}
+        canEdit={canEdit}
+        onChanged={onChanged}
+        onOpenAlternative={(id) => onOpenSibling(id)}
+        isConfig={!isPart}
+      />
+
       {/* Configurations — only shown for parts (not models). */}
       {isPart && (
         <ModelsBlock
@@ -1462,6 +1482,708 @@ function MoveProductsToPartDialog({
                   : "Pick at least one"}
             </button>
           </div>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// Alternative-product cluster for a part. Every product in the
+// cluster is its own catalogue entry tied to its own supplier; here
+// we list the cluster, let the admin link more EXISTING products
+// in, mark one as primary, demote primaries, or unlink products
+// that don't actually belong.
+function AlternativeSuppliersBlock({
+  partId,
+  canEdit,
+  onChanged,
+  onOpenAlternative,
+  isConfig,
+}: {
+  partId: number;
+  canEdit: boolean;
+  onChanged: () => void;
+  onOpenAlternative: (id: number) => void;
+  // Drives the labels/copy: same logic for parts vs. configurations,
+  // just different language ("alternative product" vs. "alternative
+  // configuration").
+  isConfig: boolean;
+}) {
+  const [alts, setAlts] = useState<AlternativeSupplierPart[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [linking, setLinking] = useState(false);
+
+  function reload() {
+    listAlternativeSuppliersForPart({ partId })
+      .then(setAlts)
+      .catch((e) => setErr(e instanceof Error ? e.message : "Load failed"));
+  }
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partId]);
+
+  async function promote(id: number) {
+    setBusyId(id);
+    setErr(null);
+    try {
+      await promoteToPrimarySupplier({ partId: id });
+      reload();
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Promote failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function unmark(id: number) {
+    setBusyId(id);
+    setErr(null);
+    try {
+      await unmarkPrimarySupplier({ partId: id });
+      reload();
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Unmark failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function unlink(id: number) {
+    if (!confirm("Remove this product from the alternative cluster? Its files stay; only the cross-supplier link is broken.")) return;
+    setBusyId(id);
+    setErr(null);
+    try {
+      await unlinkFromAlternativeCluster({ partId: id });
+      reload();
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Unlink failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const primary = alts?.find((a) => a.isPrimarySupplier) ?? null;
+  const backups = alts?.filter((a) => !a.isPrimarySupplier) ?? [];
+
+  return (
+    <section
+      style={{
+        padding: 16,
+        borderBottom: "1px solid var(--lb-border)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+            }}
+          >
+            {isConfig ? "Alternative configurations" : "Alternative products"}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>
+            {alts === null
+              ? "Loading…"
+              : alts.length <= 1
+                ? isConfig
+                  ? "No alternative configurations linked. Pick another configuration from the catalogue and link it as a backup variant."
+                  : "No alternatives linked. Pick another existing product from the catalogue and link it as a backup."
+                : primary
+                  ? `${backups.length} backup${backups.length === 1 ? "" : "s"} on file. Demote the primary, promote a backup, or link more.`
+                  : `${alts.length} ${isConfig ? "configuration" : "product"}${alts.length === 1 ? "" : "s"} in this cluster — none marked primary yet. Pick one to set as primary.`}
+          </div>
+        </div>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => setLinking(true)}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              borderRadius: 999,
+              background: "var(--lb-accent)",
+              border: "1px solid var(--lb-accent)",
+              color: "var(--lb-accent-fg)",
+              cursor: "pointer",
+            }}
+          >
+            {isConfig ? "+ Link alternative configuration" : "+ Link alternative product"}
+          </button>
+        )}
+      </div>
+
+      {err && (
+        <div
+          style={{
+            padding: 10,
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.10)",
+            border: "1px solid rgba(220,38,38,0.40)",
+            color: "#dc2626",
+            fontSize: 12.5,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {alts && alts.length > 0 && (
+        <ul
+          style={{
+            listStyle: "none",
+            padding: 0,
+            margin: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          {[primary, ...backups].filter(Boolean).map((a) => {
+            if (!a) return null;
+            const here = a.id === partId;
+            return (
+              <li key={a.id}>
+                <div
+                  style={{
+                    padding: 10,
+                    borderRadius: 8,
+                    background: a.isPrimarySupplier
+                      ? "color-mix(in srgb, #16a34a 10%, var(--lb-bg))"
+                      : "var(--lb-bg)",
+                    border: a.isPrimarySupplier
+                      ? "1px solid #16a34a"
+                      : "1px solid var(--lb-border)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: 0.4,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: a.isPrimarySupplier ? "#16a34a" : "var(--lb-bg-elev)",
+                      color: a.isPrimarySupplier ? "white" : "var(--lb-text-3)",
+                      border: a.isPrimarySupplier
+                        ? "1px solid #16a34a"
+                        : "1px solid var(--lb-border)",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {a.isPrimarySupplier ? "★ PRIMARY" : "ALTERNATIVE"}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: "var(--lb-text)" }}>
+                      {a.supplierName}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11.5,
+                        color: "var(--lb-text-3)",
+                        marginTop: 2,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {a.productCode ? `${a.productCode} · ` : ""}
+                      {a.name}
+                      {a.modelCount > 0 && ` · ${a.modelCount} config${a.modelCount === 1 ? "" : "s"}`}
+                      {a.attachmentCount > 0 && ` · ${a.attachmentCount} file${a.attachmentCount === 1 ? "" : "s"}`}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {!here && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenAlternative(a.id)}
+                        title="Open this product"
+                        style={{
+                          padding: "5px 10px",
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          borderRadius: 999,
+                          background: "var(--lb-bg-elev)",
+                          border: "1px solid var(--lb-border)",
+                          color: "var(--lb-text-2)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Open →
+                      </button>
+                    )}
+                    {canEdit && !a.isPrimarySupplier && (
+                      <button
+                        type="button"
+                        onClick={() => promote(a.id)}
+                        disabled={busyId === a.id}
+                        style={{
+                          padding: "5px 12px",
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          borderRadius: 999,
+                          background: "#16a34a",
+                          border: "1px solid #16a34a",
+                          color: "white",
+                          cursor: busyId === a.id ? "wait" : "pointer",
+                          opacity: busyId === a.id ? 0.6 : 1,
+                        }}
+                      >
+                        Mark as primary
+                      </button>
+                    )}
+                    {canEdit && a.isPrimarySupplier && (
+                      <button
+                        type="button"
+                        onClick={() => unmark(a.id)}
+                        disabled={busyId === a.id}
+                        style={{
+                          padding: "5px 12px",
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          borderRadius: 999,
+                          background: "transparent",
+                          border: "1px solid var(--lb-border)",
+                          color: "var(--lb-text-2)",
+                          cursor: busyId === a.id ? "wait" : "pointer",
+                          opacity: busyId === a.id ? 0.6 : 1,
+                        }}
+                      >
+                        Unmark primary
+                      </button>
+                    )}
+                    {canEdit && alts.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => unlink(a.id)}
+                        disabled={busyId === a.id}
+                        title="Remove this product from the alternative cluster"
+                        style={{
+                          padding: "5px 10px",
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          borderRadius: 999,
+                          background: "transparent",
+                          border: "1px solid rgba(220,38,38,0.45)",
+                          color: "#dc2626",
+                          cursor: busyId === a.id ? "wait" : "pointer",
+                          opacity: busyId === a.id ? 0.6 : 1,
+                        }}
+                      >
+                        Unlink
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {linking && (
+        <LinkAlternativeProductDialog
+          partId={partId}
+          isConfig={isConfig}
+          onClose={() => setLinking(false)}
+          onLinked={() => {
+            setLinking(false);
+            reload();
+            onChanged();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+// Picker dialog — pick another EXISTING product from the catalogue to
+// link as an alternative. Shows every other top-level part in the
+// tenant; selecting one merges its cluster into the current part's.
+function LinkAlternativeProductDialog({
+  partId,
+  isConfig,
+  onClose,
+  onLinked,
+}: {
+  partId: number;
+  isConfig: boolean;
+  onClose: () => void;
+  onLinked: () => void;
+}) {
+  const [parts, setParts] = useState<CataloguePickerPart[] | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
+  const [view, setView] = useState<"card" | "list">("card");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    listCataloguePartsForLinking({ excludePartId: partId })
+      .then(setParts)
+      .catch((e) => setErr(e instanceof Error ? e.message : "Load failed"));
+  }, [partId]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return parts ?? [];
+    return (parts ?? []).filter((p) =>
+      `${p.name} ${p.productCode ?? ""} ${p.category ?? ""} ${p.supplierName}`
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [parts, search]);
+
+  async function submit() {
+    if (selectedId == null || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await linkAlternativeProduct({
+        existingPartId: partId,
+        alternativePartId: selectedId,
+      });
+      onLinked();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Link failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ModalShell
+      title={
+        isConfig
+          ? "Link an alternative configuration"
+          : "Link an alternative product"
+      }
+      onClose={onClose}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+        <p style={{ margin: 0, fontSize: 12.5, color: "var(--lb-text-3)" }}>
+          {isConfig
+            ? "Pick another configuration that already exists in the catalogue. The two configurations merge into one alternative cluster, independent of their parent parts' clusters."
+            : "Pick a product that already exists in the catalogue. The two rows merge into one alternative cluster — files, history, and search stay linked across suppliers without re-uploading anything."}
+        </p>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by code, name, category, supplier…"
+            style={{ ...INPUT_STYLE, flex: 1, minWidth: 200 }}
+            autoFocus
+          />
+          <div
+            style={{
+              display: "flex",
+              gap: 4,
+              padding: 3,
+              background: "var(--lb-bg-elev)",
+              border: "1px solid var(--lb-border)",
+              borderRadius: 999,
+            }}
+          >
+            <button type="button" onClick={() => setView("card")} style={PILL_BTN(view === "card")}>
+              Cards
+            </button>
+            <button type="button" onClick={() => setView("list")} style={PILL_BTN(view === "list")}>
+              List
+            </button>
+          </div>
+        </div>
+        {parts === null ? (
+          <div style={{ padding: 12, color: "var(--lb-text-3)", fontSize: 12.5 }}>Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div
+            style={{
+              padding: 16,
+              textAlign: "center",
+              border: "1px dashed var(--lb-border)",
+              borderRadius: 8,
+              color: "var(--lb-text-3)",
+              fontSize: 12.5,
+            }}
+          >
+            {parts.length === 0
+              ? "No other products in the catalogue yet."
+              : "No products match that filter."}
+          </div>
+        ) : view === "card" ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+              gap: 10,
+              maxHeight: 460,
+              overflowY: "auto",
+              padding: 4,
+            }}
+          >
+            {filtered.map((p) => {
+              const on = p.id === selectedId;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setSelectedId(p.id)}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    padding: 10,
+                    borderRadius: 10,
+                    background: on
+                      ? "color-mix(in srgb, var(--lb-accent) 14%, var(--lb-bg-elev))"
+                      : "var(--lb-bg-elev)",
+                    border: on
+                      ? "2px solid var(--lb-accent)"
+                      : "1px solid var(--lb-border)",
+                    color: "var(--lb-text)",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    transition: "border-color 140ms ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!on) e.currentTarget.style.borderColor = "var(--lb-accent)";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!on) e.currentTarget.style.borderColor = "var(--lb-border)";
+                  }}
+                >
+                  <div
+                    style={{
+                      aspectRatio: "4/3",
+                      width: "100%",
+                      borderRadius: 6,
+                      overflow: "hidden",
+                      background: "var(--lb-bg)",
+                      border: "1px solid var(--lb-border)",
+                      display: "grid",
+                      placeItems: "center",
+                    }}
+                  >
+                    {p.thumbnailUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={p.thumbnailUrl}
+                        alt={p.name}
+                        style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                      />
+                    ) : (
+                      <span style={{ fontSize: 20, color: "var(--lb-text-3)" }}>📦</span>
+                    )}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 700,
+                        fontFamily: p.productCode
+                          ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                          : undefined,
+                        letterSpacing: "-0.01em",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {p.productCode || p.name}
+                    </div>
+                    {p.productCode && p.name && p.name !== p.productCode && (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--lb-text-3)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          marginTop: 2,
+                        }}
+                      >
+                        {p.name}
+                      </div>
+                    )}
+                    {p.parentName && (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--lb-text-3)",
+                          marginTop: 2,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        under{" "}
+                        <strong style={{ color: "var(--lb-text-2)" }}>
+                          {p.parentProductCode || p.parentName}
+                        </strong>
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 4,
+                      fontSize: 10.5,
+                    }}
+                  >
+                    <span
+                      style={{
+                        padding: "2px 7px",
+                        borderRadius: 999,
+                        background: "rgba(8,145,178,0.15)",
+                        color: "#0891b2",
+                        border: "1px solid rgba(8,145,178,0.3)",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {p.supplierName}
+                    </span>
+                    {p.category && (
+                      <span
+                        style={{
+                          padding: "2px 7px",
+                          borderRadius: 999,
+                          background: "var(--lb-bg)",
+                          border: "1px solid var(--lb-border)",
+                          color: "var(--lb-text-3)",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {p.category}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              maxHeight: 460,
+              overflowY: "auto",
+              border: "1px solid var(--lb-border)",
+              borderRadius: 8,
+              background: "var(--lb-bg)",
+            }}
+          >
+            {filtered.map((p) => {
+              const on = p.id === selectedId;
+              return (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(p.id)}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 2,
+                      alignItems: "stretch",
+                      padding: "10px 12px",
+                      borderRadius: 6,
+                      background: on
+                        ? "color-mix(in srgb, var(--lb-accent) 14%, transparent)"
+                        : "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      color: on ? "var(--lb-accent)" : "var(--lb-text)",
+                    }}
+                  >
+                    <div style={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      fontFamily: p.productCode
+                        ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                        : undefined,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}>
+                      {p.productCode || p.name}
+                    </div>
+                    <div style={{
+                      fontSize: 11.5,
+                      color: on ? "var(--lb-accent)" : "var(--lb-text-3)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}>
+                      {p.supplierName}
+                      {p.category ? ` · ${p.category}` : ""}
+                      {p.productCode && p.name && p.name !== p.productCode ? ` · ${p.name}` : ""}
+                      {p.parentName ? ` · under ${p.parentProductCode || p.parentName}` : ""}
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {err && (
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              background: "rgba(220,38,38,0.10)",
+              border: "1px solid rgba(220,38,38,0.40)",
+              color: "#dc2626",
+              fontSize: 12.5,
+            }}
+          >
+            {err}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={MINI_BTN} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={busy || selectedId == null}
+            style={{
+              ...PRIMARY_BTN,
+              opacity: busy || selectedId == null ? 0.6 : 1,
+            }}
+          >
+            {busy ? "Linking…" : "Link as alternative"}
+          </button>
         </div>
       </div>
     </ModalShell>

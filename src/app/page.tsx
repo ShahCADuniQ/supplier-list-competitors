@@ -25,6 +25,9 @@ import {
   ADMIN_EMAIL_DOMAINS,
 } from "@/lib/permissions";
 import { CLIENT_CONFIG, CADUNIQ_PRODUCT_LABEL } from "@/lib/client-config";
+import CaduniqLogo from "@/components/CaduniqLogo";
+import ThemeToggle from "@/components/ThemeToggle";
+import ScrollAwareTopNav from "@/components/ScrollAwareTopNav";
 import CaduniqHQDashboard, {
   type HQClientRow,
   type HQPendingSignup,
@@ -532,40 +535,13 @@ function SignedOutHero() {
   // straight to Clerk for returning users.
   return (
     <main style={{ background: "var(--lb-bg)", color: "var(--lb-text)", minHeight: "100vh" }}>
-      {/* ════════ TOP NAV — logo left, Sign in / Sign up right ════════ */}
-      <nav style={{
-        position: "sticky", top: 0, zIndex: 50,
-        background: "rgba(255,255,255,0.85)", backdropFilter: "blur(14px)",
-        borderBottom: "1px solid var(--lb-border)",
-        padding: "12px clamp(16px, 4vw, 28px)",
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        gap: 8,
-      }}>
-        <Link href="/" style={{
-          display: "flex", alignItems: "center", gap: 10,
-          textDecoration: "none", color: "var(--lb-text)",
-          minWidth: 0,
-        }}>
-          <span aria-hidden style={{
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 38, height: 38, borderRadius: 11,
-            background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ea580c 100%)",
-            color: "#fff", fontWeight: 900, fontSize: 19, letterSpacing: "-0.04em",
-            boxShadow: "0 4px 14px rgba(37,99,235,0.22)",
-            flexShrink: 0,
-          }}>C</span>
-          <span style={{ fontWeight: 800, fontSize: 19, letterSpacing: "-0.015em" }}>
-            CADuniQ{" "}
-            {/* "Manufacturing" subtitle hides on very small screens to */}
-            {/* keep the nav from wrapping or pushing CTAs off-screen. */}
-            <span
-              className="hidden sm:inline"
-              style={{ fontWeight: 500, color: "var(--lb-text-2)" }}
-            >
-              Manufacturing
-            </span>
-          </span>
-        </Link>
+      {/* ════════ TOP NAV — logo left, Sign in / Sign up right ════════
+          Hides on scroll-down, reappears on scroll-up. At the top of
+          the page it's transparent so the hero gradient bleeds through;
+          once scrolling reveals it again, it gets a solid theme-matching
+          surface so the content underneath doesn't show through. */}
+      <ScrollAwareTopNav>
+        <CaduniqLogo href="/" height={88} />
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
           {/* Anchor nav links hide on phones — they're nice-to-have on */}
           {/* desktop but eat the limited horizontal budget on mobile. */}
@@ -589,6 +565,7 @@ function SignedOutHero() {
           >
             For you
           </Link>
+          <ThemeToggle />
           <Link href="/sign-in" style={{
             padding: "8px 16px", fontSize: 13.5, fontWeight: 600,
             borderRadius: 999, color: "var(--lb-text)",
@@ -605,7 +582,7 @@ function SignedOutHero() {
             whiteSpace: "nowrap",
           }}>Sign up →</Link>
         </div>
-      </nav>
+      </ScrollAwareTopNav>
 
       {/* ════════ HERO with embedded CAD-to-Cash visual flow ════════ */}
       <section style={{
@@ -635,12 +612,7 @@ function SignedOutHero() {
             fontSize: 12, fontWeight: 700, letterSpacing: "0.04em",
             border: "1px solid rgba(37,99,235,0.20)",
           }}>
-            <span aria-hidden style={{
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              width: 22, height: 22, borderRadius: 7,
-              background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ea580c 100%)",
-              color: "#fff", fontWeight: 800, fontSize: 12.5,
-            }}>C</span>
+            <CaduniqLogo height={28} />
             <span style={{ color: "var(--lb-text)", fontWeight: 800, letterSpacing: "-0.01em", textTransform: "none" }}>
               {CADUNIQ_PRODUCT_LABEL}
             </span>
@@ -1113,13 +1085,8 @@ function SignedOutHero() {
         borderTop: "1px solid var(--lb-border)", color: "var(--lb-text-3)",
         fontSize: 12.5,
       }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 6 }}>
-          <span aria-hidden style={{
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 22, height: 22, borderRadius: 6,
-            background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ea580c 100%)",
-            color: "#fff", fontWeight: 800, fontSize: 12,
-          }}>C</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 6 }}>
+          <CaduniqLogo height={40} />
           <strong style={{ color: "var(--lb-text-2)" }}>{CADUNIQ_PRODUCT_LABEL}</strong>
           <span>· Made in Montréal</span>
         </div>

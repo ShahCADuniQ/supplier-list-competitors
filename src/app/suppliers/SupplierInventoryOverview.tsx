@@ -30,6 +30,10 @@ export default function SupplierInventoryOverview({
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [partNameFilter, setPartNameFilter] = useState<string>("all");
+  // "all" surfaces every catalogue row; "primary" hides cluster
+  // alternatives so each part is represented by its primary pick
+  // (or by itself when it has no alternatives linked yet).
+  const [scope, setScope] = useState<"all" | "primary">("all");
   const [openPart, setOpenPart] = useState<AggregateInventoryPart | null>(null);
 
   function reload() {
@@ -62,6 +66,14 @@ export default function SupplierInventoryOverview({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (data?.parts ?? []).filter((p) => {
+      // Scope: "primary" hides cluster alternatives (rows in a
+      // multi-product cluster that aren't marked primary). Standalone
+      // products (alternativeSupplierCount=0) always show in both
+      // scopes — they're the only face of their cluster by definition.
+      if (scope === "primary") {
+        const isInCluster = p.alternativeSupplierCount > 0;
+        if (isInCluster && !p.isPrimarySupplier) return false;
+      }
       if (supplierFilter !== "all" && String(p.supplierId) !== supplierFilter) {
         return false;
       }
@@ -83,7 +95,7 @@ export default function SupplierInventoryOverview({
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [data, search, projectFilter, supplierFilter, partNameFilter]);
+  }, [data, search, projectFilter, supplierFilter, partNameFilter, scope]);
 
   if (err) {
     return (
@@ -115,7 +127,8 @@ export default function SupplierInventoryOverview({
     !!search ||
     projectFilter !== "all" ||
     supplierFilter !== "all" ||
-    partNameFilter !== "all";
+    partNameFilter !== "all" ||
+    scope !== "all";
 
   return (
     <div
@@ -147,27 +160,72 @@ export default function SupplierInventoryOverview({
               margin: 0,
             }}
           >
-            Supplier Inventory
+            Supplier Catalogue
           </h1>
           <p style={{ fontSize: 13, color: "var(--lb-text-3)", margin: "4px 0 0" }}>
-            Every part across every supplier in your tenant. Filter by
-            supplier, part name, project, or free-text search — click any
-            card to open the part directly.
+            Every part across every supplier in your tenant. Green
+            highlight = the one you picked as primary; open any card to
+            link alternative products from the catalogue and decide
+            which one of them is your primary. Linked products share a
+            global product ID so swapping primaries never loses history.
           </p>
         </div>
         <div
           style={{
-            fontSize: 12,
-            color: "var(--lb-text-3)",
-            background: "var(--lb-bg-elev)",
-            border: "1px solid var(--lb-border)",
-            borderRadius: 999,
-            padding: "6px 14px",
-            whiteSpace: "nowrap",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
             alignSelf: "center",
           }}
         >
-          {filtered.length} of {data.parts.length} part{data.parts.length === 1 ? "" : "s"}
+          {/* Scope toggle — All vs Primary only. Sits right next to
+              the count badge so the relationship between "what's
+              shown" and "scope" reads instantly. */}
+          <div
+            role="tablist"
+            aria-label="Scope"
+            style={{
+              display: "flex",
+              gap: 4,
+              padding: 3,
+              background: "var(--lb-bg-elev)",
+              border: "1px solid var(--lb-border)",
+              borderRadius: 999,
+            }}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={scope === "all"}
+              onClick={() => setScope("all")}
+              style={SCOPE_PILL(scope === "all")}
+            >
+              All products
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={scope === "primary"}
+              onClick={() => setScope("primary")}
+              style={SCOPE_PILL(scope === "primary", "#16a34a")}
+            >
+              ★ Primary only
+            </button>
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--lb-text-3)",
+              background: "var(--lb-bg-elev)",
+              border: "1px solid var(--lb-border)",
+              borderRadius: 999,
+              padding: "6px 14px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {filtered.length} of {data.parts.length} part{data.parts.length === 1 ? "" : "s"}
+          </div>
         </div>
       </header>
 
@@ -240,6 +298,7 @@ export default function SupplierInventoryOverview({
                 setProjectFilter("all");
                 setSupplierFilter("all");
                 setPartNameFilter("all");
+                setScope("all");
               }}
               style={RESET_BTN}
             >
@@ -488,6 +547,11 @@ function PartCard({
   part: AggregateInventoryPart;
   onClick: () => void;
 }) {
+  const isPrimary = part.isPrimarySupplier;
+  const idleBorder = isPrimary ? "#16a34a" : "var(--lb-border)";
+  const idleBg = isPrimary
+    ? "color-mix(in srgb, #16a34a 8%, var(--lb-bg-elev))"
+    : "var(--lb-bg-elev)";
   return (
     <button
       type="button"
@@ -498,18 +562,22 @@ function PartCard({
         gap: 10,
         padding: 14,
         borderRadius: 12,
-        background: "var(--lb-bg-elev)",
-        border: "1px solid var(--lb-border)",
+        background: idleBg,
+        // Primary suppliers get a thicker green border so they pop
+        // out of the catalogue grid at a glance.
+        border: isPrimary
+          ? "2px solid #16a34a"
+          : "1px solid var(--lb-border)",
         color: "var(--lb-text)",
         textAlign: "left",
         cursor: "pointer",
         transition: "border-color 140ms ease, transform 140ms ease",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "var(--lb-accent)";
+        e.currentTarget.style.borderColor = isPrimary ? "#22c55e" : "var(--lb-accent)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "var(--lb-border)";
+        e.currentTarget.style.borderColor = idleBorder;
       }}
     >
       <div
@@ -558,6 +626,43 @@ function PartCard({
             }}
           >
             {part.modelCount} config{part.modelCount === 1 ? "" : "s"}
+          </span>
+        )}
+        {isPrimary && (
+          <span
+            style={{
+              position: "absolute",
+              top: 6,
+              left: 6,
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing: 0.4,
+              background: "#16a34a",
+              color: "white",
+            }}
+          >
+            ★ PRIMARY
+          </span>
+        )}
+        {!isPrimary && part.alternativeSupplierCount > 0 && (
+          <span
+            style={{
+              position: "absolute",
+              top: 6,
+              left: 6,
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing: 0.4,
+              background: "rgba(15,23,42,0.7)",
+              color: "white",
+              backdropFilter: "blur(4px)",
+            }}
+          >
+            ALTERNATIVE
           </span>
         )}
       </div>
@@ -638,6 +743,21 @@ function PartCard({
         >
           📎 {part.attachmentCount} file{part.attachmentCount === 1 ? "" : "s"}
         </span>
+        {part.alternativeSupplierCount > 0 && (
+          <span
+            style={{
+              padding: "2px 8px",
+              borderRadius: 999,
+              background: "rgba(16,185,129,0.15)",
+              color: "#16a34a",
+              border: "1px solid rgba(16,185,129,0.45)",
+              fontWeight: 700,
+            }}
+          >
+            +{part.alternativeSupplierCount} alternative
+            {part.alternativeSupplierCount === 1 ? "" : "s"}
+          </span>
+        )}
       </div>
       {part.projectNums.length > 0 && (
         <div
@@ -706,3 +826,18 @@ const RESET_BTN: React.CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
 };
+
+function SCOPE_PILL(active: boolean, activeColor = "var(--lb-accent)"): React.CSSProperties {
+  return {
+    padding: "5px 14px",
+    borderRadius: 999,
+    fontSize: 12.5,
+    fontWeight: active ? 800 : 600,
+    border: active ? `1px solid ${activeColor}` : "1px solid transparent",
+    background: active ? activeColor : "transparent",
+    color: active ? "#fff" : "var(--lb-text-2)",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    transition: "background 140ms ease, color 140ms ease",
+  };
+}

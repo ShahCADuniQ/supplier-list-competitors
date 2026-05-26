@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CLIENT_CONFIG } from "@/lib/client-config";
+import CaduniqLogo from "./CaduniqLogo";
 
 type Props = {
   email: string | null;
@@ -139,25 +140,13 @@ export default function Sidebar({
         background: "var(--lb-bg)",
       }}
     >
-      {/* Brand mark — solid accent square */}
-      <Link
-        href="/"
-        title={CLIENT_CONFIG.name}
-        aria-label={`${CLIENT_CONFIG.name} home`}
-        className="inline-flex items-center justify-center mb-3 transition-transform hover:scale-105"
-        style={{
-          width: 44,
-          height: 44,
-          borderRadius: 14,
-          background: "var(--lb-accent)",
-          color: "var(--lb-accent-fg)",
-          fontWeight: 700,
-          fontSize: 18,
-          letterSpacing: "-0.02em",
-        }}
-      >
-        {CLIENT_CONFIG.name.slice(0, 1).toUpperCase()}
-      </Link>
+      {/* Brand mark — CADuniQ logo. Renders transparent so it sits
+          flush on the sidebar surface in both light and dark themes
+          (the dark variant of the PNG handles the navy → white text
+          recolour). */}
+      <div className="mb-3 transition-transform hover:scale-105">
+        <CaduniqLogo href="/" height={60} label={CLIENT_CONFIG.name} />
+      </div>
 
       {/* Primary nav rail */}
       <nav className="flex flex-col items-center gap-2 flex-1" aria-label="Primary">

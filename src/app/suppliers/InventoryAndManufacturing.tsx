@@ -42,7 +42,7 @@ const SUB_TABS = [
   // stub — every part across every supplier in the tenant, with project
   // / product filters.
   { key: "inventory", label: "Lightbase Inventory" },
-  { key: "supplier-inventory", label: "Supplier Inventory" },
+  { key: "supplier-inventory", label: "Supplier Catalogue" },
   { key: "boms", label: "BOMs" },
   { key: "quality", label: "Quality" },
   { key: "maintenance", label: "Maintenance" },

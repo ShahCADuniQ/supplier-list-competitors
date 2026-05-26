@@ -255,12 +255,23 @@ export async function createSupplierProduct(input: {
     }
     parentProductId = parent.id;
   }
+  // Every row — part or config — gets its OWN globalProductId so each
+  // can be linked to alternatives at its own level independently.
+  // Linking part A↔B doesn't auto-link A's configurations to B's.
+  const globalProductId = `gp-${crypto.randomUUID()}`;
 
   const [row] = await db
     .insert(supplierProducts)
     .values({
       supplierId: input.supplierId,
       parentProductId,
+      globalProductId,
+      // Fresh products are UNMARKED — the user explicitly promotes one
+      // to primary later. Until then every product in the cluster is a
+      // peer and the catalogue card shows no green PRIMARY badge.
+      // (Configurations don't participate in primary/secondary
+      // tracking; they inherit the implicit default.)
+      isPrimarySupplier: false,
       name: input.name.trim(),
       productCode: input.productCode?.trim() || null,
       description: input.description?.trim() || null,
@@ -654,6 +665,13 @@ export type AggregateInventoryPart = {
   modelCount: number;
   attachmentCount: number;
   projectNums: string[];
+  // Cross-supplier product identity. Two cards with the same
+  // globalProductId represent the same part on different suppliers.
+  globalProductId: string | null;
+  isPrimarySupplier: boolean;
+  // Number of other supplier_products rows that share the cluster
+  // (excluding this one). Drives the "+N backup suppliers" badge.
+  alternativeSupplierCount: number;
 };
 
 export async function listAggregateSupplierInventory(): Promise<{
@@ -791,12 +809,41 @@ export async function listAggregateSupplierInventory(): Promise<{
   const allProjectSet = new Set<string>();
   for (const r of projectRows) allProjectSet.add(r.projectNum);
 
+  // Cluster sizes per globalProductId — drives the "+N alternative
+  // suppliers" badge on each card.
+  const globalIds = Array.from(
+    new Set(parts.map((p) => p.globalProductId).filter((g): g is string => !!g)),
+  );
+  const clusterCountByGlobalId = new Map<string, number>();
+  if (globalIds.length > 0) {
+    const clusterRows = await db
+      .select({
+        globalProductId: supplierProducts.globalProductId,
+        n: sql<number>`COUNT(*)::int`,
+      })
+      .from(supplierProducts)
+      .where(
+        and(
+          inArray(supplierProducts.globalProductId, globalIds),
+          sql`${supplierProducts.parentProductId} IS NULL`,
+          eq(supplierProducts.archived, false),
+        ),
+      )
+      .groupBy(supplierProducts.globalProductId);
+    for (const r of clusterRows) {
+      if (r.globalProductId) clusterCountByGlobalId.set(r.globalProductId, r.n);
+    }
+  }
+
   const assembled: AggregateInventoryPart[] = parts.map((p) => {
     const childIds = modelIdsByParent.get(p.id) ?? [];
     let attachmentCount = attachmentCountByProduct.get(p.id) ?? 0;
     for (const cid of childIds) {
       attachmentCount += attachmentCountByProduct.get(cid) ?? 0;
     }
+    const clusterSize = p.globalProductId
+      ? clusterCountByGlobalId.get(p.globalProductId) ?? 1
+      : 1;
     return {
       id: p.id,
       supplierId: p.supplierId,
@@ -811,8 +858,412 @@ export async function listAggregateSupplierInventory(): Promise<{
       modelCount: configCountByParent.get(p.id) ?? 0,
       attachmentCount,
       projectNums: Array.from(projectsBySupplier.get(p.supplierId) ?? []).sort(),
+      globalProductId: p.globalProductId,
+      isPrimarySupplier: p.isPrimarySupplier,
+      alternativeSupplierCount: Math.max(0, clusterSize - 1),
     };
   });
 
   return { parts: assembled, projectNums: Array.from(allProjectSet).sort() };
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRIMARY / ALTERNATIVE SUPPLIERS
+// Same product code, multiple suppliers — one is primary, rest are
+// backups. The cluster is identified by globalProductId.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AlternativeSupplierPart = {
+  id: number;
+  supplierId: number;
+  supplierName: string;
+  name: string;
+  productCode: string | null;
+  isPrimarySupplier: boolean;
+  thumbnailUrl: string | null;
+  attachmentCount: number;
+  modelCount: number;
+};
+
+// List every alternative supplier for the same global product (i.e.,
+// every supplier_products row sharing globalProductId with the given
+// part OR configuration). The query is scoped to the SAME nesting
+// level as the input — parts cluster with parts, configurations with
+// configurations — so a part's alternatives don't accidentally drag
+// in unrelated configurations and vice versa.
+export async function listAlternativeSuppliersForPart(input: {
+  partId: number;
+}): Promise<AlternativeSupplierPart[]> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: cannot view suppliers");
+  }
+  await ensureSupplierInventorySchema();
+
+  const [target] = await db
+    .select({
+      globalProductId: supplierProducts.globalProductId,
+      parentProductId: supplierProducts.parentProductId,
+    })
+    .from(supplierProducts)
+    .where(eq(supplierProducts.id, input.partId))
+    .limit(1);
+  if (!target?.globalProductId) return [];
+  const isConfig = target.parentProductId != null;
+
+  // Rows in the cluster, with each supplier's name. Same-level
+  // scoping: configs cluster with configs, parts with parts.
+  const rows = await db
+    .select({
+      id: supplierProducts.id,
+      supplierId: supplierProducts.supplierId,
+      supplierName: suppliers.name,
+      name: supplierProducts.name,
+      productCode: supplierProducts.productCode,
+      isPrimarySupplier: supplierProducts.isPrimarySupplier,
+      thumbnailUrl: supplierProducts.thumbnailUrl,
+      supplierClientId: suppliers.clientId,
+    })
+    .from(supplierProducts)
+    .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
+    .where(
+      and(
+        eq(supplierProducts.globalProductId, target.globalProductId),
+        isConfig
+          ? sql`${supplierProducts.parentProductId} IS NOT NULL`
+          : sql`${supplierProducts.parentProductId} IS NULL`,
+        eq(supplierProducts.archived, false),
+      ),
+    );
+  if (rows.length === 0) return [];
+
+  // Tenant scope: non-CADuniQ users only see alternatives on their
+  // own tenant's suppliers.
+  const tenantClientId = profile.clientId ?? null;
+  const inTenant = (clientId: number | null) =>
+    tenantClientId == null || clientId === tenantClientId;
+  const visibleRows = rows.filter((r) => inTenant(r.supplierClientId));
+  if (visibleRows.length === 0) return [];
+
+  const ids = visibleRows.map((r) => r.id);
+  const attachmentCountRows = await db
+    .select({
+      productId: supplierProductAttachments.productId,
+      n: sql<number>`COUNT(*)::int`,
+    })
+    .from(supplierProductAttachments)
+    .where(inArray(supplierProductAttachments.productId, ids))
+    .groupBy(supplierProductAttachments.productId);
+  const attachmentCountByProduct = new Map<number, number>();
+  for (const r of attachmentCountRows) attachmentCountByProduct.set(r.productId, r.n);
+
+  const modelCountRows = await db
+    .select({
+      parentProductId: supplierProducts.parentProductId,
+      n: sql<number>`COUNT(*)::int`,
+    })
+    .from(supplierProducts)
+    .where(
+      and(
+        inArray(supplierProducts.parentProductId, ids),
+        eq(supplierProducts.archived, false),
+      ),
+    )
+    .groupBy(supplierProducts.parentProductId);
+  const modelCountByParent = new Map<number, number>();
+  for (const r of modelCountRows) {
+    if (r.parentProductId != null) modelCountByParent.set(r.parentProductId, r.n);
+  }
+
+  return visibleRows
+    .map((r) => ({
+      id: r.id,
+      supplierId: r.supplierId,
+      supplierName: r.supplierName,
+      name: r.name,
+      productCode: r.productCode,
+      isPrimarySupplier: r.isPrimarySupplier,
+      thumbnailUrl: r.thumbnailUrl,
+      attachmentCount: attachmentCountByProduct.get(r.id) ?? 0,
+      modelCount: modelCountByParent.get(r.id) ?? 0,
+    }))
+    .sort((a, b) => {
+      if (a.isPrimarySupplier !== b.isPrimarySupplier) return a.isPrimarySupplier ? -1 : 1;
+      return a.supplierName.localeCompare(b.supplierName);
+    });
+}
+
+// Link an EXISTING product from the catalogue as an alternative for
+// the current part. Both rows must be top-level parts that already
+// exist (each was created independently against its own supplier).
+// We merge the two clusters: every part currently sharing the target's
+// globalProductId (plus its configurations) is rewritten to share the
+// current part's globalProductId. Neither row's primary flag is
+// touched — the user still chooses which one (if any) is primary.
+export async function linkAlternativeProduct(input: {
+  existingPartId: number;
+  alternativePartId: number;
+}): Promise<{ mergedRows: number }> {
+  // Authorise on both products separately so we never reach across
+  // tenant boundaries via this action.
+  await requireProductAccess(input.existingPartId);
+  await requireProductAccess(input.alternativePartId);
+  await ensureSupplierInventorySchema();
+
+  if (input.existingPartId === input.alternativePartId) {
+    throw new Error("Pick a different product to link");
+  }
+
+  const rows = await db
+    .select({
+      id: supplierProducts.id,
+      supplierId: supplierProducts.supplierId,
+      parentProductId: supplierProducts.parentProductId,
+      globalProductId: supplierProducts.globalProductId,
+    })
+    .from(supplierProducts)
+    .where(inArray(supplierProducts.id, [input.existingPartId, input.alternativePartId]));
+  const source = rows.find((r) => r.id === input.existingPartId);
+  const target = rows.find((r) => r.id === input.alternativePartId);
+  if (!source || !target) throw new Error("Product not found");
+  // Same-level only — parts cluster with parts, configurations with
+  // configurations. Mixing the two would let a part's cluster bleed
+  // into the configuration tree (or vice versa) and break the
+  // semantics on every screen that filters by nesting level.
+  const sourceIsConfig = source.parentProductId != null;
+  const targetIsConfig = target.parentProductId != null;
+  if (sourceIsConfig !== targetIsConfig) {
+    throw new Error(
+      "Link a part to a part, or a configuration to a configuration",
+    );
+  }
+  if (!source.globalProductId || !target.globalProductId) {
+    throw new Error("Both rows must have a global product ID");
+  }
+  if (source.globalProductId === target.globalProductId) {
+    // Already in the same cluster — silently no-op.
+    return { mergedRows: 0 };
+  }
+
+  // Merge the target cluster INTO the source cluster. Every row
+  // (parts + configurations) currently using target's globalProductId
+  // gets rewritten to source's globalProductId.
+  const updated = await db
+    .update(supplierProducts)
+    .set({
+      globalProductId: source.globalProductId,
+      updatedAt: new Date(),
+    })
+    .where(eq(supplierProducts.globalProductId, target.globalProductId))
+    .returning({ id: supplierProducts.id });
+
+  revalidatePath("/suppliers");
+  revalidatePath("/portal");
+  return { mergedRows: updated.length };
+}
+
+// Unmark the current part as primary without promoting anyone else
+// — the cluster has no primary chosen. Used when the admin wants to
+// clear the green badge entirely.
+export async function unmarkPrimarySupplier(input: {
+  partId: number;
+}): Promise<void> {
+  await requireProductAccess(input.partId);
+  await ensureSupplierInventorySchema();
+  await db
+    .update(supplierProducts)
+    .set({ isPrimarySupplier: false, updatedAt: new Date() })
+    .where(eq(supplierProducts.id, input.partId));
+  revalidatePath("/suppliers");
+  revalidatePath("/portal");
+}
+
+// Unlink a part from its current cluster so it stands alone again.
+// Generates a fresh globalProductId for this part (and its
+// configurations) and demotes it from primary if it was. Useful when
+// an alternative turns out to be a different product after all.
+export async function unlinkFromAlternativeCluster(input: {
+  partId: number;
+}): Promise<void> {
+  await requireProductAccess(input.partId);
+  await ensureSupplierInventorySchema();
+  const freshId = `gp-${crypto.randomUUID()}`;
+  // Rewrite the part + its configurations.
+  await db
+    .update(supplierProducts)
+    .set({
+      globalProductId: freshId,
+      isPrimarySupplier: false,
+      updatedAt: new Date(),
+    })
+    .where(eq(supplierProducts.id, input.partId));
+  await db
+    .update(supplierProducts)
+    .set({ globalProductId: freshId, updatedAt: new Date() })
+    .where(eq(supplierProducts.parentProductId, input.partId));
+  revalidatePath("/suppliers");
+  revalidatePath("/portal");
+}
+
+// Catalogue picker source: every other top-level part across the
+// user's tenant suppliers (except the one being looked at). Returns
+// supplier name + part info so the linker dialog can render rich
+// rows. Tenant-scoped automatically.
+export type CataloguePickerPart = {
+  id: number;
+  supplierId: number;
+  supplierName: string;
+  name: string;
+  productCode: string | null;
+  category: string | null;
+  globalProductId: string | null;
+  thumbnailUrl: string | null;
+  // Populated only when picking a configuration — gives the picker
+  // enough context to show "Foo configuration · under AF Series-22mm"
+  // so the user knows which part it belongs to.
+  parentName: string | null;
+  parentProductCode: string | null;
+};
+
+export async function listCataloguePartsForLinking(input: {
+  excludePartId: number;
+}): Promise<CataloguePickerPart[]> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: cannot view suppliers");
+  }
+  await ensureSupplierInventorySchema();
+
+  // Detect whether we're linking from a part or a configuration — the
+  // picker only surfaces rows at the same nesting level.
+  const [target] = await db
+    .select({ parentProductId: supplierProducts.parentProductId })
+    .from(supplierProducts)
+    .where(eq(supplierProducts.id, input.excludePartId))
+    .limit(1);
+  if (!target) return [];
+  const isConfig = target.parentProductId != null;
+
+  const tenantClientId = profile.clientId ?? null;
+  const supplierRows = tenantClientId == null
+    ? await db.select({ id: suppliers.id, name: suppliers.name }).from(suppliers)
+    : await db
+        .select({ id: suppliers.id, name: suppliers.name })
+        .from(suppliers)
+        .where(eq(suppliers.clientId, tenantClientId));
+  if (supplierRows.length === 0) return [];
+  const supplierIds = supplierRows.map((s) => s.id);
+  const nameById = new Map(supplierRows.map((s) => [s.id, s.name]));
+
+  const rows = await db
+    .select({
+      id: supplierProducts.id,
+      supplierId: supplierProducts.supplierId,
+      name: supplierProducts.name,
+      productCode: supplierProducts.productCode,
+      category: supplierProducts.category,
+      globalProductId: supplierProducts.globalProductId,
+      thumbnailUrl: supplierProducts.thumbnailUrl,
+      parentProductId: supplierProducts.parentProductId,
+    })
+    .from(supplierProducts)
+    .where(
+      and(
+        inArray(supplierProducts.supplierId, supplierIds),
+        isConfig
+          ? sql`${supplierProducts.parentProductId} IS NOT NULL`
+          : sql`${supplierProducts.parentProductId} IS NULL`,
+        eq(supplierProducts.archived, false),
+        sql`${supplierProducts.id} <> ${input.excludePartId}`,
+      ),
+    )
+    .orderBy(desc(supplierProducts.updatedAt));
+  if (rows.length === 0) return [];
+
+  // For configurations, fetch each parent's name/code in one query so
+  // we can render "<config> · under <parent>".
+  const parentMap = new Map<number, { name: string; productCode: string | null }>();
+  if (isConfig) {
+    const parentIds = Array.from(
+      new Set(rows.map((r) => r.parentProductId).filter((v): v is number => v != null)),
+    );
+    if (parentIds.length > 0) {
+      const parents = await db
+        .select({
+          id: supplierProducts.id,
+          name: supplierProducts.name,
+          productCode: supplierProducts.productCode,
+        })
+        .from(supplierProducts)
+        .where(inArray(supplierProducts.id, parentIds));
+      for (const p of parents) parentMap.set(p.id, { name: p.name, productCode: p.productCode });
+    }
+  }
+
+  return rows.map((p) => {
+    const parent =
+      p.parentProductId != null ? parentMap.get(p.parentProductId) ?? null : null;
+    return {
+      id: p.id,
+      supplierId: p.supplierId,
+      supplierName: nameById.get(p.supplierId) ?? "—",
+      name: p.name,
+      productCode: p.productCode,
+      category: p.category,
+      globalProductId: p.globalProductId,
+      thumbnailUrl: p.thumbnailUrl,
+      parentName: parent?.name ?? null,
+      parentProductCode: parent?.productCode ?? null,
+    };
+  });
+}
+
+// Promote an alternative supplier's part to the primary for its
+// globalProductId cluster. Demotes whichever row was previously
+// primary in the same cluster.
+export async function promoteToPrimarySupplier(input: {
+  partId: number;
+}): Promise<void> {
+  await requireProductAccess(input.partId);
+  await ensureSupplierInventorySchema();
+
+  const [target] = await db
+    .select({
+      id: supplierProducts.id,
+      globalProductId: supplierProducts.globalProductId,
+      parentProductId: supplierProducts.parentProductId,
+    })
+    .from(supplierProducts)
+    .where(eq(supplierProducts.id, input.partId))
+    .limit(1);
+  if (!target) throw new Error("Row not found");
+  if (!target.globalProductId) {
+    throw new Error("Row has no globalProductId");
+  }
+
+  const isConfig = target.parentProductId != null;
+  // Demote every other row in the cluster (same nesting level only),
+  // then promote this one.
+  await db
+    .update(supplierProducts)
+    .set({ isPrimarySupplier: false, updatedAt: new Date() })
+    .where(
+      and(
+        eq(supplierProducts.globalProductId, target.globalProductId),
+        isConfig
+          ? sql`${supplierProducts.parentProductId} IS NOT NULL`
+          : sql`${supplierProducts.parentProductId} IS NULL`,
+        sql`${supplierProducts.id} <> ${target.id}`,
+      ),
+    );
+  await db
+    .update(supplierProducts)
+    .set({ isPrimarySupplier: true, updatedAt: new Date() })
+    .where(eq(supplierProducts.id, target.id));
+
+  revalidatePath("/suppliers");
+  revalidatePath("/portal");
 }

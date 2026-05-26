@@ -19,6 +19,8 @@ import {
 } from "./onboarding-actions";
 import { SUPPLIER_CATEGORIES as CANONICAL_SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
 import SubCategoryPicker from "@/components/SubCategoryPicker";
+import CaduniqLogo from "@/components/CaduniqLogo";
+import ThemeToggle from "@/components/ThemeToggle";
 
 const SECTION: React.CSSProperties = {
   background: "var(--lb-bg-elev)",
@@ -93,20 +95,15 @@ export default function OnboardingWizard({
       `,
       color: "var(--lb-text)",
       padding: "clamp(32px, 6vw, 64px) 20px",
+      position: "relative",
     }}>
+      <div style={{ position: "absolute", top: 18, right: 20 }}>
+        <ThemeToggle />
+      </div>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
-        <Link href="/" style={{
-          display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 18,
-          color: "var(--lb-text-3)", textDecoration: "none", fontSize: 13,
-        }}>
-          <span aria-hidden style={{
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 26, height: 26, borderRadius: 7,
-            background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ea580c 100%)",
-            color: "#fff", fontWeight: 800, fontSize: 13,
-          }}>C</span>
-          <strong style={{ color: "var(--lb-text)" }}>CADuniQ Manufacturing</strong>
-        </Link>
+        <div style={{ display: "inline-flex", marginBottom: 18 }}>
+          <CaduniqLogo href="/" height={72} />
+        </div>
 
         {role === "engineering" ? (
           <EngineeringFlow defaultEmail={defaultEmail} defaultName={defaultName} />

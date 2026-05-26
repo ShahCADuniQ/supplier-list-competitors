@@ -3,6 +3,9 @@ import { redirect } from "next/navigation";
 import { SignUp } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
 import { CADUNIQ_PRODUCT_LABEL } from "@/lib/client-config";
+import CaduniqLogo from "@/components/CaduniqLogo";
+import ThemeToggle from "@/components/ThemeToggle";
+import ScrollAwareTopNav from "@/components/ScrollAwareTopNav";
 
 // Role-hint persistence: see /api/signup-role/[role]/route.ts.
 // /get-started → role card → /api/signup-role/<role> (sets cookie,
@@ -74,28 +77,10 @@ export default async function SignUpPage({
         flexDirection: "column",
       }}
     >
-      <header style={{
-        position: "sticky", top: 0, zIndex: 50,
-        background: "rgba(255,255,255,0.85)", backdropFilter: "blur(14px)",
-        borderBottom: "1px solid var(--lb-border)",
-        padding: "14px 28px",
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-      }}>
-        <Link href="/" style={{
-          display: "flex", alignItems: "center", gap: 10,
-          textDecoration: "none", color: "var(--lb-text)",
-        }}>
-          <span aria-hidden style={{
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 36, height: 36, borderRadius: 10,
-            background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 60%, #ea580c 100%)",
-            color: "#fff", fontWeight: 800, fontSize: 18, letterSpacing: "-0.04em",
-          }}>C</span>
-          <span style={{ fontWeight: 800, fontSize: 19, letterSpacing: "-0.015em" }}>
-            CADuniQ <span style={{ fontWeight: 500, color: "var(--lb-text-2)" }}>Manufacturing</span>
-          </span>
-        </Link>
+      <ScrollAwareTopNav padding="16px 28px">
+        <CaduniqLogo href="/" height={80} />
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <ThemeToggle />
           <Link href="/" style={{
             padding: "8px 16px", fontSize: 13.5, fontWeight: 600,
             color: "var(--lb-text-2)", textDecoration: "none",
@@ -107,7 +92,7 @@ export default async function SignUpPage({
             border: "1px solid var(--lb-border)", textDecoration: "none",
           }}>Sign in</Link>
         </div>
-      </header>
+      </ScrollAwareTopNav>
 
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 20px" }}>
         <div style={{ width: "100%", maxWidth: 440 }}>

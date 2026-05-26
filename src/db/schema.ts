@@ -476,6 +476,19 @@ export const supplierProducts = pgTable(
     // each model's attachments hang off its own row. Self-reference
     // with ON DELETE CASCADE so deleting a part wipes its models too.
     parentProductId: integer("parent_product_id"),
+    // Cross-supplier product identity. Two supplier_products rows
+    // representing the SAME (or near-equivalent) part on different
+    // suppliers share the same globalProductId. Lets the catalogue
+    // show "primary + alternatives" for backup-supplier planning.
+    // Auto-populated on create (a fresh UUID when the row starts a
+    // new family, or inherited from the existing family when the row
+    // is added as an alternative).
+    globalProductId: text("global_product_id"),
+    // Within a globalProductId group, exactly one row is the primary
+    // supplier; the rest are alternatives/backups. New top-level
+    // parts default to true; alternatives added via the "+ Add
+    // alternative supplier" picker default to false.
+    isPrimarySupplier: boolean("is_primary_supplier").notNull().default(true),
     name: text("name").notNull(),
     productCode: text("product_code"),
     description: text("description"),
@@ -496,6 +509,7 @@ export const supplierProducts = pgTable(
     archivedIdx: index("supplier_products_archived_idx").on(t.archived),
     nameIdx: index("supplier_products_name_idx").on(t.name),
     parentIdx: index("supplier_products_parent_idx").on(t.parentProductId),
+    globalIdx: index("supplier_products_global_idx").on(t.globalProductId),
   }),
 );
 export type SupplierProduct = typeof supplierProducts.$inferSelect;
