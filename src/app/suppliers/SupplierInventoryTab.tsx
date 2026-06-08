@@ -8,7 +8,7 @@
 //
 // Every attachment row shows submission date + time per the brief.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { upload } from "@vercel/blob/client";
 import FileViewerModal, { forceDownloadFile } from "@/components/FileViewerModal";
 import {
@@ -40,6 +40,7 @@ import {
   shortCategoryLabel,
   type SupplierProductAttachmentCategory,
 } from "./supplier-inventory-constants";
+import { deriveBrandFromUrl, deriveWebsiteFromUrl } from "@/lib/ai/url-brand";
 import type { SupplierProductAttachment } from "@/db/schema";
 
 const CARD_STYLE: React.CSSProperties = {
@@ -1948,12 +1949,52 @@ function AddPurchaseSourceDialog({
   const [productUrl, setProductUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Track whether the user has manually edited the supplier fields. We
+  // auto-fill from the URL on every change, but stop overriding once the
+  // user types in any of the supplier inputs so we don't clobber their
+  // edits.
+  const supplierTouchedRef = useRef(false);
+  // Reflects the brand we currently autodetected — shown as an inline hint
+  // so the user understands where the prefilled value came from and how to
+  // override it.
+  const [detectedBrand, setDetectedBrand] = useState<string | null>(null);
 
   useEffect(() => {
     listSuppliersWithCatalog()
       .then(setSuppliers)
       .catch((e) => setErr(e instanceof Error ? e.message : "Load failed"));
   }, []);
+
+  // Auto-detect supplier from the URL. If the detected brand matches an
+  // existing supplier (case-insensitive on name), switch to the "Existing
+  // supplier" tab and pre-select it. Otherwise fill in the new-supplier
+  // fields. Stops the moment the user manually edits a supplier field.
+  useEffect(() => {
+    if (supplierTouchedRef.current) return;
+    const brand = deriveBrandFromUrl(productUrl);
+    setDetectedBrand(brand);
+    if (!brand) return;
+    const list = suppliers ?? [];
+    const match = list.find(
+      (s) => s.name.trim().toLowerCase() === brand.toLowerCase(),
+    );
+    if (match) {
+      setSupplierKind("existing");
+      setSupplierId(match.id);
+      setSupplierQuery("");
+    } else {
+      setSupplierKind("new");
+      setNewSupplierName(brand);
+      const site = deriveWebsiteFromUrl(productUrl);
+      if (site) setNewSupplierWebsite(site);
+    }
+  }, [productUrl, suppliers]);
+
+  // Helpers that mark the supplier section as user-edited so the autofill
+  // effect above stops touching it.
+  function touchSupplier() {
+    supplierTouchedRef.current = true;
+  }
 
   const filteredSuppliers = (suppliers ?? []).filter((s) => {
     const q = supplierQuery.trim().toLowerCase();
@@ -2029,6 +2070,25 @@ function AddPurchaseSourceDialog({
           />
         </Field>
 
+        {detectedBrand && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--lb-text-3)",
+              padding: "6px 10px",
+              borderRadius: 8,
+              background: "color-mix(in srgb, var(--lb-accent) 8%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--lb-accent) 30%, transparent)",
+            }}
+          >
+            Detected supplier:{" "}
+            <strong style={{ color: "var(--lb-text)" }}>{detectedBrand}</strong>
+            {supplierTouchedRef.current
+              ? null
+              : " — pre-filled below. Edit anything to override."}
+          </div>
+        )}
+
         {/* Kind toggle: existing supplier vs new */}
         <div
           role="tablist"
@@ -2048,7 +2108,10 @@ function AddPurchaseSourceDialog({
               type="button"
               role="tab"
               aria-selected={supplierKind === k}
-              onClick={() => setSupplierKind(k)}
+              onClick={() => {
+                touchSupplier();
+                setSupplierKind(k);
+              }}
               style={{
                 padding: "5px 14px",
                 fontSize: 12.5,
@@ -2070,7 +2133,10 @@ function AddPurchaseSourceDialog({
             <input
               type="search"
               value={supplierQuery}
-              onChange={(e) => setSupplierQuery(e.target.value)}
+              onChange={(e) => {
+                touchSupplier();
+                setSupplierQuery(e.target.value);
+              }}
               placeholder="Search suppliers…"
               style={INPUT_STYLE}
             />
@@ -2096,7 +2162,10 @@ function AddPurchaseSourceDialog({
                   <button
                     key={s.id}
                     type="button"
-                    onClick={() => setSupplierId(s.id)}
+                    onClick={() => {
+                      touchSupplier();
+                      setSupplierId(s.id);
+                    }}
                     style={{
                       display: "block",
                       width: "100%",
@@ -2121,7 +2190,10 @@ function AddPurchaseSourceDialog({
             <Field label="Supplier name *">
               <input
                 value={newSupplierName}
-                onChange={(e) => setNewSupplierName(e.target.value)}
+                onChange={(e) => {
+                  touchSupplier();
+                  setNewSupplierName(e.target.value);
+                }}
                 placeholder="e.g. ACME Industrial"
                 style={INPUT_STYLE}
               />
@@ -2129,7 +2201,10 @@ function AddPurchaseSourceDialog({
             <Field label="Supplier website (optional)">
               <input
                 value={newSupplierWebsite}
-                onChange={(e) => setNewSupplierWebsite(e.target.value)}
+                onChange={(e) => {
+                  touchSupplier();
+                  setNewSupplierWebsite(e.target.value);
+                }}
                 placeholder="https://www.acme.com"
                 style={INPUT_STYLE}
               />
