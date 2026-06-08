@@ -1,6 +1,8 @@
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 import { AI_MODEL, openaiClient } from "./openai";
 import { fetchUrlAsText, parseFile, type ParsedSource } from "./parsers";
+import { perplexityChat } from "./perplexity";
+import { claudeClient, CLAUDE_MODEL } from "./claude";
 import { SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
 
 // AI extractor uses the same canonical category vocabulary the
@@ -878,3 +880,138 @@ Return JSON.`;
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Supplier product extraction (Add Product on Supplier Catalogue)
+// URL → Perplexity reads the page → Claude structures the result against our
+// supplierProducts schema, including supplier-resolution fields so the caller
+// can match against existing suppliers or create a new supplier row.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type SupplierProductConfigurationExtraction = {
+  name: string;
+  productCode: string | null;
+  description: string | null;
+};
+
+export type SupplierProductExtraction = {
+  name: string;
+  productCode: string | null;
+  category: string | null;
+  description: string | null;
+  thumbnailUrl: string | null;
+  imageUrls: string[];
+  supplierName: string | null;
+  supplierWebsite: string | null;
+  supplierEmail: string | null;
+  configurations: SupplierProductConfigurationExtraction[];
+};
+
+export async function extractSupplierProductFromUrl(input: {
+  url: string;
+  supplierHint?: string;
+  categoryHint?: string;
+}): Promise<SupplierProductExtraction> {
+  const { url, supplierHint, categoryHint } = input;
+  const trimmed = url.trim();
+  if (!trimmed) throw new Error("URL is required");
+
+  // 1) Perplexity: read the page and return the visible product info.
+  const pplxSystem =
+    "You read product pages and report only what is visible on the page. Do not invent specs or codes that are not present.";
+  const pplxUser = [
+    `Read this product page: ${trimmed}`,
+    `Return the visible product information as plain text. Include:`,
+    `- product name`,
+    `- product code / SKU / model number`,
+    `- short description`,
+    `- category (light fixture, hardware, electronics, etc.)`,
+    `- the manufacturer / brand name (NOT the retailer if different)`,
+    `- the brand's website domain (full URL if available)`,
+    `- the brand's contact email if shown`,
+    `- direct URLs to product images (large, not thumbnails)`,
+    `- any variant table / configuration list (sizes, voltages, finishes, etc.) with each variant's code`,
+    supplierHint ? `Hint: the supplier is likely "${supplierHint}".` : "",
+    categoryHint ? `Hint: the category is likely "${categoryHint}".` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const pplx = await perplexityChat({
+    systemPrompt: pplxSystem,
+    userPrompt: pplxUser,
+    maxTokens: 2000,
+  });
+  const pageNotes = pplx.content || "";
+
+  // 2) Claude: structure the notes into our schema. JSON-only response.
+  const categoryList = SUPPLIER_CATEGORIES.join(", ");
+  const claudePrompt = [
+    `You are extracting a supplier-product card for an ERP catalogue.`,
+    `Source notes (already collected from the product page):`,
+    `"""`,
+    pageNotes,
+    `"""`,
+    ``,
+    `Respond ONLY with a JSON object matching this TypeScript type:`,
+    `{`,
+    `  "name": string,                       // product name`,
+    `  "productCode": string | null,          // SKU / model number`,
+    `  "category": string | null,             // pick ONE of: ${categoryList}, or null`,
+    `  "description": string | null,          // 1-3 short sentences`,
+    `  "thumbnailUrl": string | null,         // best single image URL`,
+    `  "imageUrls": string[],                 // up to 6 additional image URLs`,
+    `  "supplierName": string | null,         // manufacturer / brand`,
+    `  "supplierWebsite": string | null,      // brand website (full URL)`,
+    `  "supplierEmail": string | null,        // brand contact email`,
+    `  "configurations": Array<{`,
+    `    "name": string,`,
+    `    "productCode": string | null,`,
+    `    "description": string | null`,
+    `  }>                                      // empty array if none`,
+    `}`,
+    ``,
+    `Rules:`,
+    `- For category, only use one of the listed values. Set null if uncertain.`,
+    `- supplierName is the MANUFACTURER, not the reseller/retailer.`,
+    `- Configurations: only include variants that have their OWN product code.`,
+    `  Plain text variants without codes belong in description, not configurations.`,
+    `- Respond with the JSON object only — no markdown, no commentary.`,
+  ].join("\n");
+
+  const claude = claudeClient();
+  const resp = await claude.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 2048,
+    messages: [{ role: "user", content: claudePrompt }],
+  });
+
+  const block = resp.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") {
+    throw new Error("Claude returned no text content");
+  }
+  const jsonText = block.text.trim().replace(/^```json\n?|\n?```$/g, "");
+  let parsed: SupplierProductExtraction;
+  try {
+    parsed = JSON.parse(jsonText) as SupplierProductExtraction;
+  } catch (e) {
+    throw new Error(
+      `Claude returned non-JSON: ${(e as Error).message}\n${jsonText.slice(0, 200)}`,
+    );
+  }
+
+  // Defensive defaults — Claude sometimes omits optional arrays.
+  if (!Array.isArray(parsed.imageUrls)) parsed.imageUrls = [];
+  if (!Array.isArray(parsed.configurations)) parsed.configurations = [];
+  // Snap category to allowed list.
+  if (
+    parsed.category &&
+    !(SUPPLIER_CATEGORIES as readonly string[]).includes(parsed.category)
+  ) {
+    parsed.category = null;
+  }
+
+  if (!parsed.name || !parsed.name.trim()) {
+    throw new Error("Extraction missing required field: name");
+  }
+  return parsed;
+}
