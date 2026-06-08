@@ -632,6 +632,26 @@ function ConfirmExtraction({
       }
       const result: CommitSupplierProductResult = await res.json();
       console.log("[add-product] created", result);
+      // If we tried to download images and none landed, tell the user
+      // explicitly — almost always the brand site blocks external fetches
+      // even with browser headers, in which case they can drag-drop the
+      // image directly inside the product drawer after the card opens.
+      if (
+        result.thumbnailAttempted &&
+        !result.thumbnailLanded &&
+        result.imagesLanded === 0
+      ) {
+        window.alert(
+          `Product saved, but no images could be downloaded.\n\n` +
+            `The brand site likely blocks external fetches.\n` +
+            `Open the new card and drag-drop an image into the "Other files" tab to add one.`,
+        );
+      } else if (result.thumbnailAttempted && !result.thumbnailLanded) {
+        console.warn(
+          `[add-product] thumbnail extraction failed; backfilled from extra image`,
+          result.failedImageUrls,
+        );
+      }
       onCreated();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));

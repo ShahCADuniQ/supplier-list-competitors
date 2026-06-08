@@ -9,8 +9,8 @@
 // supplier resolution and the existing-product link choice between them.
 // Extract streams progress via SSE; commit is a single JSON request.
 
-import { put } from "@vercel/blob";
 import { revalidatePath } from "next/cache";
+import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { supplierProducts, supplierProductAttachments } from "@/db/schema";
@@ -30,6 +30,11 @@ import {
   type SupplierResolutionCandidate,
   type ExistingProductMatchCandidate,
 } from "./supplier-inventory-actions";
+// Reuse the competitors module's battle-tested image fetcher — it sends a
+// browser User-Agent + Referer + Accept headers so CDN WAFs (Cloudflare,
+// Akamai) don't 403 the request, validates that the response is an actual
+// image (and not an HTML login wall), and enforces a max size + timeout.
+import { downloadProductImageToBlob } from "@/app/competitors/_attachments";
 
 export type AddSupplierProductProgress = {
   step:
@@ -118,33 +123,15 @@ export type CommitSupplierProductResult = {
   partId: number;
   supplierId: number;
   configurationIds: number[];
+  // Image-download accounting — surfaced so the client can show a toast
+  // explaining why a card might be missing its picture (almost always: the
+  // brand site blocked the fetch even with browser headers).
+  thumbnailLanded: boolean;
+  thumbnailAttempted: boolean;
+  imagesAttempted: number;
+  imagesLanded: number;
+  failedImageUrls: string[];
 };
-
-// Downloads a single remote image into Vercel Blob and returns the public URL
-// plus pathname. Returns null on failure (logged) — the row still saves, just
-// without a thumbnail.
-async function downloadToBlob(
-  remoteUrl: string,
-  prefix: string,
-): Promise<{ url: string; pathname: string } | null> {
-  try {
-    const res = await fetch(remoteUrl, { redirect: "follow" });
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    const cleanName =
-      (remoteUrl.split("/").pop() || "image").split("?")[0] || "image";
-    const safe =
-      cleanName.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 80) || "image";
-    const blob = await put(`${prefix}/${Date.now()}-${safe}`, buf, {
-      access: "public",
-      addRandomSuffix: true,
-    });
-    return { url: blob.url, pathname: blob.pathname };
-  } catch (e) {
-    console.warn("[add-product] image download failed:", remoteUrl, e);
-    return null;
-  }
-}
 
 export async function commitSupplierProduct(
   input: CommitSupplierProductInput,
@@ -172,16 +159,26 @@ export async function commitSupplierProduct(
   }
 
   // 2) Download thumbnail if extraction gave us a remote URL.
+  //    Use a fresh per-product prefix so it groups under the supplier
+  //    naturally on Vercel Blob.
+  const imagePrefix = `supplier-products/${supplierId}/${crypto.randomUUID()}`;
   let thumbnailUrl: string | null = null;
   let thumbnailPathname: string | null = null;
+  let thumbnailLanded = false;
+  const thumbnailAttempted = !!input.product.thumbnailUrl;
   if (input.product.thumbnailUrl) {
-    const downloaded = await downloadToBlob(
-      input.product.thumbnailUrl,
-      `supplier-products/${supplierId}`,
-    );
+    const downloaded = await downloadProductImageToBlob({
+      pathPrefix: imagePrefix,
+      sourceUrl: input.product.thumbnailUrl,
+    });
     if (downloaded) {
-      thumbnailUrl = downloaded.url;
-      thumbnailPathname = downloaded.pathname;
+      thumbnailUrl = downloaded.blobUrl;
+      thumbnailPathname = downloaded.blobPathname;
+      thumbnailLanded = true;
+    } else {
+      console.warn(
+        `[add-product] thumbnail download failed: ${input.product.thumbnailUrl}`,
+      );
     }
   }
 
@@ -234,21 +231,55 @@ export async function commitSupplierProduct(
   }
 
   // 6) Download additional images, attach as "other_file" rows under the part.
-  for (const remote of input.product.imageUrls.slice(0, 6)) {
-    const downloaded = await downloadToBlob(
-      remote,
-      `supplier-products/${supplierId}/${partRow.id}`,
-    );
-    if (!downloaded) continue;
+  //    If thumbnailUrl was also in the imageUrls list, skip it — we already
+  //    downloaded it above as the thumbnail.
+  const imageQueue = input.product.imageUrls
+    .slice(0, 6)
+    .filter((u) => u && u !== input.product.thumbnailUrl);
+  const imagesAttempted = imageQueue.length;
+  let imagesLanded = 0;
+  const failedImageUrls: string[] = [];
+  if (!thumbnailLanded && thumbnailAttempted) {
+    failedImageUrls.push(input.product.thumbnailUrl!);
+  }
+  for (const remote of imageQueue) {
+    const downloaded = await downloadProductImageToBlob({
+      pathPrefix: imagePrefix,
+      sourceUrl: remote,
+    });
+    if (!downloaded) {
+      failedImageUrls.push(remote);
+      continue;
+    }
+    imagesLanded += 1;
     await db.insert(supplierProductAttachments).values({
       productId: partRow.id,
       category: "other_file",
-      name: downloaded.pathname.split("/").pop() ?? "image",
-      url: downloaded.url,
-      blobPathname: downloaded.pathname,
+      name: downloaded.blobPathname.split("/").pop() ?? "image",
+      url: downloaded.blobUrl,
+      blobPathname: downloaded.blobPathname,
+      contentType: downloaded.mime,
+      size: downloaded.size,
       uploadedByRole: "lightbase",
       uploadedByClerkId: profile.clerkUserId,
     });
+
+    // Backfill the thumbnail from the first successfully-downloaded extra
+    // image if the original thumbnail attempt failed. Better than no picture
+    // at all — the user can swap it later in the drawer.
+    if (!thumbnailLanded) {
+      thumbnailUrl = downloaded.blobUrl;
+      thumbnailPathname = downloaded.blobPathname;
+      thumbnailLanded = true;
+      await db
+        .update(supplierProducts)
+        .set({
+          thumbnailUrl,
+          thumbnailPathname,
+          updatedAt: new Date(),
+        })
+        .where(eq(supplierProducts.id, partRow.id));
+    }
   }
 
   revalidatePath("/suppliers");
@@ -258,5 +289,10 @@ export async function commitSupplierProduct(
     partId: partRow.id,
     supplierId,
     configurationIds,
+    thumbnailLanded,
+    thumbnailAttempted,
+    imagesAttempted,
+    imagesLanded,
+    failedImageUrls,
   };
 }

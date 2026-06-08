@@ -928,7 +928,7 @@ export async function extractSupplierProductFromUrl(input: {
     `- the manufacturer / brand name (NOT the retailer if different)`,
     `- the brand's website domain (full URL if available)`,
     `- the brand's contact email if shown`,
-    `- direct URLs to product images (large, not thumbnails)`,
+    `- direct URLs to product images (largest available, NOT thumbnails). Prefer the og:image meta tag if present. Return absolute https URLs only — no relative paths.`,
     `- any variant table / configuration list (sizes, voltages, finishes, etc.) with each variant's code`,
     supplierHint ? `Hint: the supplier is likely "${supplierHint}".` : "",
     categoryHint ? `Hint: the category is likely "${categoryHint}".` : "",
@@ -958,8 +958,8 @@ export async function extractSupplierProductFromUrl(input: {
     `  "productCode": string | null,          // SKU / model number`,
     `  "category": string | null,             // pick ONE of: ${categoryList}, or null`,
     `  "description": string | null,          // 1-3 short sentences`,
-    `  "thumbnailUrl": string | null,         // best single image URL`,
-    `  "imageUrls": string[],                 // up to 6 additional image URLs`,
+    `  "thumbnailUrl": string | null,         // best single image URL (absolute https)`,
+    `  "imageUrls": string[],                 // up to 6 additional image URLs (absolute https)`,
     `  "supplierName": string | null,         // manufacturer / brand`,
     `  "supplierWebsite": string | null,      // brand website (full URL)`,
     `  "supplierEmail": string | null,        // brand contact email`,
@@ -1009,6 +1009,17 @@ export async function extractSupplierProductFromUrl(input: {
   ) {
     parsed.category = null;
   }
+  // Strip image URLs that aren't absolute http(s). Relative paths sneak past
+  // Claude when the page uses them; downloadProductImageToBlob would reject
+  // them later but we save a round-trip by dropping them here.
+  const isAbsoluteHttp = (u: string | null): u is string =>
+    typeof u === "string" && /^https?:\/\//i.test(u);
+  if (!isAbsoluteHttp(parsed.thumbnailUrl)) {
+    parsed.thumbnailUrl = null;
+  }
+  parsed.imageUrls = parsed.imageUrls.filter(isAbsoluteHttp);
+  // Deduplicate imageUrls — Claude often repeats the thumbnail in the array.
+  parsed.imageUrls = Array.from(new Set(parsed.imageUrls));
 
   if (!parsed.name || !parsed.name.trim()) {
     throw new Error("Extraction missing required field: name");
