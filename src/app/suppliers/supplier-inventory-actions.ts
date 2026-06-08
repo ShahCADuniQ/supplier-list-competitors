@@ -375,6 +375,7 @@ export async function updateSupplierProduct(input: {
   description?: string | null;
   category?: string | null;
   notes?: string | null;
+  productUrl?: string | null;
   thumbnailUrl?: string | null;
   thumbnailPathname?: string | null;
 }): Promise<void> {
@@ -390,6 +391,7 @@ export async function updateSupplierProduct(input: {
   if (input.description !== undefined) patch.description = input.description?.trim() || null;
   if (input.category !== undefined) patch.category = input.category?.trim() || null;
   if (input.notes !== undefined) patch.notes = input.notes?.trim() || null;
+  if (input.productUrl !== undefined) patch.productUrl = input.productUrl?.trim() || null;
   if (input.thumbnailUrl !== undefined) patch.thumbnailUrl = input.thumbnailUrl;
   if (input.thumbnailPathname !== undefined) patch.thumbnailPathname = input.thumbnailPathname;
 

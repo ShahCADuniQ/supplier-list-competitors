@@ -1259,6 +1259,52 @@ function ModelsBlock({
                   >
                     {fileCount} file{fileCount === 1 ? "" : "s"}
                   </span>
+                  {m.productUrl && (
+                    // Per-configuration source link. Stop propagation so the
+                    // click opens the URL instead of also opening the model
+                    // drawer. Nested <a> inside <button> is invalid HTML, so
+                    // we use a styled span + window.open.
+                    <span
+                      role="link"
+                      tabIndex={0}
+                      title={m.productUrl}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (m.productUrl) {
+                          window.open(
+                            m.productUrl,
+                            "_blank",
+                            "noopener,noreferrer",
+                          );
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (
+                          (e.key === "Enter" || e.key === " ") &&
+                          m.productUrl
+                        ) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          window.open(
+                            m.productUrl,
+                            "_blank",
+                            "noopener,noreferrer",
+                          );
+                        }
+                      }}
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: "var(--lb-accent)",
+                        padding: "2px 6px",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        userSelect: "none",
+                      }}
+                    >
+                      ↗
+                    </span>
+                  )}
                   <span style={{ color: "var(--lb-text-3)", fontSize: 14 }}>→</span>
                 </button>
               </li>
@@ -2254,6 +2300,7 @@ function ProductMetaBlock({ product, editing, onToggleEdit, onSaved, onDelete, c
   const [category, setCategory] = useState(product.category ?? "");
   const [description, setDescription] = useState(product.description ?? "");
   const [notes, setNotes] = useState(product.notes ?? "");
+  const [productUrl, setProductUrl] = useState(product.productUrl ?? "");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -2263,7 +2310,8 @@ function ProductMetaBlock({ product, editing, onToggleEdit, onSaved, onDelete, c
     setCategory(product.category ?? "");
     setDescription(product.description ?? "");
     setNotes(product.notes ?? "");
-  }, [product.id, product.name, product.productCode, product.category, product.description, product.notes]);
+    setProductUrl(product.productUrl ?? "");
+  }, [product.id, product.name, product.productCode, product.category, product.description, product.notes, product.productUrl]);
 
   async function save() {
     setSaving(true); setErr(null);
@@ -2272,6 +2320,7 @@ function ProductMetaBlock({ product, editing, onToggleEdit, onSaved, onDelete, c
         id: product.id,
         name, productCode: productCode || null, category: category || null,
         description: description || null, notes: notes || null,
+        productUrl: productUrl.trim() || null,
       });
       onSaved();
     } catch (e) {
@@ -2296,6 +2345,43 @@ function ProductMetaBlock({ product, editing, onToggleEdit, onSaved, onDelete, c
             </div>
             {product.description && (
               <p style={{ fontSize: 13, color: "var(--lb-text-2)", margin: "6px 0 0", lineHeight: 1.5 }}>{product.description}</p>
+            )}
+            {product.productUrl && (
+              <a
+                href={product.productUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={product.productUrl}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  marginTop: 8,
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  background: "color-mix(in srgb, var(--lb-accent) 12%, transparent)",
+                  border: "1px solid var(--lb-accent)",
+                  color: "var(--lb-accent)",
+                  textDecoration: "none",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  maxWidth: "100%",
+                }}
+              >
+                <span>↗ Source</span>
+                <span
+                  style={{
+                    color: "var(--lb-text-3)",
+                    fontWeight: 500,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    maxWidth: 320,
+                  }}
+                >
+                  {product.productUrl.replace(/^https?:\/\//, "")}
+                </span>
+              </a>
             )}
           </div>
           {canEdit && (
@@ -2336,6 +2422,14 @@ function ProductMetaBlock({ product, editing, onToggleEdit, onSaved, onDelete, c
       </div>
       <Field label="Description">
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} style={{ ...INPUT_STYLE, minHeight: 60, resize: "vertical" }} />
+      </Field>
+      <Field label="Product URL">
+        <input
+          value={productUrl}
+          onChange={(e) => setProductUrl(e.target.value)}
+          placeholder="https://www.brand.com/products/..."
+          style={INPUT_STYLE}
+        />
       </Field>
       <Field label="Notes (internal)">
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...INPUT_STYLE, minHeight: 50, resize: "vertical" }} />
