@@ -3,6 +3,7 @@ import { AI_MODEL, openaiClient } from "./openai";
 import { fetchUrlAsText, parseFile, type ParsedSource } from "./parsers";
 import { perplexityChat } from "./perplexity";
 import { claudeClient, CLAUDE_MODEL } from "./claude";
+import { tryFetchShopifyProduct } from "./shopify";
 import { SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
 
 // AI extractor uses the same canonical category vocabulary the
@@ -914,6 +915,45 @@ export async function extractSupplierProductFromUrl(input: {
   const { url, supplierHint, categoryHint } = input;
   const trimmed = url.trim();
   if (!trimmed) throw new Error("URL is required");
+
+  // 0) Shopify storefront fast path. Every Shopify store exposes
+  //    /products/<handle>.json which returns the full product record
+  //    (title, vendor, description, every image, every variant) without
+  //    the AI guesswork. This is strictly better data — skip the AI
+  //    pipeline when it works.
+  const shopify = await tryFetchShopifyProduct(trimmed);
+  if (shopify) {
+    const code =
+      shopify.variants.find((v) => v.sku && v.sku.trim())?.sku?.trim() ?? null;
+    // Snap category from product_type if it lands in our allowed list.
+    let category: string | null = null;
+    if (shopify.productType) {
+      const ptLower = shopify.productType.toLowerCase();
+      const hit = SUPPLIER_CATEGORIES.find(
+        (c) => c.toLowerCase() === ptLower,
+      );
+      if (hit) category = hit;
+    }
+    return {
+      name: shopify.title,
+      productCode: code,
+      category: category ?? categoryHint ?? null,
+      description: shopify.description || null,
+      thumbnailUrl: shopify.images[0]?.src ?? null,
+      imageUrls: shopify.images.slice(1, 7).map((i) => i.src),
+      supplierName: shopify.vendor ?? supplierHint ?? null,
+      supplierWebsite: shopify.storefrontUrl,
+      supplierEmail: null,
+      // Each Shopify variant becomes a configuration row. Variant title
+      // is the human-readable combination (e.g. "Black / 8mm / 100 pcs").
+      configurations: shopify.variants.map((v) => ({
+        name: v.title,
+        productCode: v.sku?.trim() || null,
+        description:
+          v.options.length > 1 ? v.options.join(" · ") : null,
+      })),
+    };
+  }
 
   // 1) Perplexity: read the page and return the visible product info.
   const pplxSystem =

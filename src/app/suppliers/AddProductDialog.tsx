@@ -488,6 +488,7 @@ function UrlTab({
       <ConfirmExtraction
         extracted={extracted}
         suppliers={suppliers}
+        sourcePageUrl={url.trim()}
         onError={onError}
         onCancel={() => {
           setExtracted(null);
@@ -564,12 +565,14 @@ function UrlTab({
 function ConfirmExtraction({
   extracted,
   suppliers,
+  sourcePageUrl,
   onError,
   onCancel,
   onCreated,
 }: {
   extracted: AddSupplierProductExtractResult;
   suppliers: SupplierOption[];
+  sourcePageUrl: string;
   onError: (msg: string | null) => void;
   onCancel: () => void;
   onCreated: () => void;
@@ -611,6 +614,7 @@ function ConfirmExtraction({
       const body: CommitSupplierProductInput = {
         supplier,
         linkToGlobalProductId: linkTo,
+        sourcePageUrl,
         product: {
           name,
           productCode: productCode || null,
@@ -760,10 +764,51 @@ function ConfirmExtraction({
       )}
 
       {extraction.configurations.length > 0 && (
-        <SectionHeader
-          title="Configurations"
-          subtitle={`${extraction.configurations.length} variant(s) will be created as nested rows.`}
-        />
+        <>
+          <SectionHeader
+            title="Configurations"
+            subtitle={`${extraction.configurations.length} variant(s) will be created as nested rows under this part.`}
+          />
+          <div
+            style={{
+              maxHeight: 180,
+              overflowY: "auto",
+              border: "1px solid var(--lb-border)",
+              borderRadius: 8,
+              background: "var(--lb-bg)",
+            }}
+          >
+            {extraction.configurations.map((c, i) => (
+              <div
+                key={`${c.productCode ?? c.name}-${i}`}
+                style={{
+                  padding: "8px 10px",
+                  borderBottom:
+                    i < extraction.configurations.length - 1
+                      ? "1px solid var(--lb-border)"
+                      : "none",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  fontSize: 12.5,
+                }}
+              >
+                <span style={{ color: "var(--lb-text)" }}>{c.name}</span>
+                {c.productCode && (
+                  <span
+                    style={{
+                      fontFamily: "monospace",
+                      color: "var(--lb-text-3)",
+                      fontSize: 11.5,
+                    }}
+                  >
+                    {c.productCode}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>

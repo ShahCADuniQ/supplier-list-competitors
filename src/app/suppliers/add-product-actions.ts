@@ -102,6 +102,10 @@ export type CommitSupplierProductInput = {
   // When set, the new product joins this cluster instead of getting its own
   // fresh globalProductId.
   linkToGlobalProductId: string | null;
+  // Original product page URL — only set when adding from URL flow. Used as
+  // the Referer when downloading images so hotlink-protected CDNs (Shopify,
+  // BigCommerce, etc.) let the image through.
+  sourcePageUrl?: string | null;
   // The product card itself. May come from extraction (auto-fill) or from the
   // manual form. The commit endpoint doesn't care which.
   product: {
@@ -170,6 +174,7 @@ export async function commitSupplierProduct(
     const downloaded = await downloadProductImageToBlob({
       pathPrefix: imagePrefix,
       sourceUrl: input.product.thumbnailUrl,
+      refererOverride: input.sourcePageUrl ?? undefined,
     });
     if (downloaded) {
       thumbnailUrl = downloaded.blobUrl;
@@ -246,6 +251,7 @@ export async function commitSupplierProduct(
     const downloaded = await downloadProductImageToBlob({
       pathPrefix: imagePrefix,
       sourceUrl: remote,
+      refererOverride: input.sourcePageUrl ?? undefined,
     });
     if (!downloaded) {
       failedImageUrls.push(remote);

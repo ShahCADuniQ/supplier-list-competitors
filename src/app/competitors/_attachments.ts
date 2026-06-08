@@ -617,9 +617,36 @@ export async function downloadProductImageToBlob(input: {
    */
   pathPrefix: string;
   sourceUrl: string;
+  /**
+   * Override the Referer header. Pass the original product PAGE URL when
+   * downloading from a hotlink-protected CDN (Shopify, BigCommerce, etc.) —
+   * the CDN compares Referer against the brand's storefront, not the image
+   * URL's own origin. Default uses the image URL's origin (good enough for
+   * sites without hotlink protection).
+   */
+  refererOverride?: string;
 }): Promise<DownloadedImage | null> {
   const u = input.sourceUrl.trim();
   if (!/^https?:\/\//i.test(u)) return null;
+
+  // Compute Referer:
+  //   - explicit override wins (storefront-origin for CDN images)
+  //   - else fall back to the image URL's own origin
+  //   - else last-resort Google (some sites accept ANY referer except none)
+  const referer: string = (() => {
+    if (input.refererOverride) {
+      try {
+        return new URL(input.refererOverride).origin + "/";
+      } catch {
+        // fall through
+      }
+    }
+    try {
+      return new URL(u).origin + "/";
+    } catch {
+      return "https://www.google.com/";
+    }
+  })();
 
   let res: Response;
   try {
@@ -631,13 +658,7 @@ export async function downloadProductImageToBlob(input: {
           "User-Agent": BROWSER_UA,
           Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
-          Referer: (() => {
-            try {
-              return new URL(u).origin + "/";
-            } catch {
-              return "https://www.google.com/";
-            }
-          })(),
+          Referer: referer,
         },
       },
       15_000,
