@@ -15,6 +15,7 @@ import {
   type AggregateInventoryPart,
 } from "./supplier-inventory-actions";
 import ProductDrawerLoader from "./ProductDrawerLoader";
+import { dedupeParts, type SupplierCatalogueScope } from "./_dedupe-parts";
 
 export default function SupplierInventoryOverview({
   canEdit,
@@ -30,10 +31,8 @@ export default function SupplierInventoryOverview({
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [partNameFilter, setPartNameFilter] = useState<string>("all");
-  // "all" surfaces every catalogue row; "primary" hides cluster
-  // alternatives so each part is represented by its primary pick
-  // (or by itself when it has no alternatives linked yet).
-  const [scope, setScope] = useState<"all" | "primary">("all");
+  // Scope controls deduplication. See dedupeParts above for the rule.
+  const [scope, setScope] = useState<SupplierCatalogueScope>("all");
   const [openPart, setOpenPart] = useState<AggregateInventoryPart | null>(null);
 
   function reload() {
@@ -65,15 +64,7 @@ export default function SupplierInventoryOverview({
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (data?.parts ?? []).filter((p) => {
-      // Scope: "primary" hides cluster alternatives (rows in a
-      // multi-product cluster that aren't marked primary). Standalone
-      // products (alternativeSupplierCount=0) always show in both
-      // scopes — they're the only face of their cluster by definition.
-      if (scope === "primary") {
-        const isInCluster = p.alternativeSupplierCount > 0;
-        if (isInCluster && !p.isPrimarySupplier) return false;
-      }
+    const matchesFilters = (p: AggregateInventoryPart): boolean => {
       if (supplierFilter !== "all" && String(p.supplierId) !== supplierFilter) {
         return false;
       }
@@ -94,7 +85,13 @@ export default function SupplierInventoryOverview({
         .join(" ")
         .toLowerCase();
       return hay.includes(q);
-    });
+    };
+    // Dedup BEFORE field-filtering so the per-cluster representative is
+    // picked from the full set, not from rows that happened to survive the
+    // supplier filter. Otherwise selecting a supplier in the filter would
+    // skew which row wins each cluster.
+    const deduped = dedupeParts(data?.parts ?? [], scope);
+    return deduped.filter(matchesFilters);
   }, [data, search, projectFilter, supplierFilter, partNameFilter, scope]);
 
   if (err) {
