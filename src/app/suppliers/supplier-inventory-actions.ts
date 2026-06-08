@@ -1425,119 +1425,125 @@ export async function findExistingProductsByCode(input: {
     }));
 }
 
-// Add a new purchase source (another company that sells the same product)
-// to an existing cluster. The user pastes a URL and tells us the supplier —
-// either by picking an existing one or by typing a brand name we look up
-// (and create if not found). The new row joins the same globalProductId
-// cluster so all the sources appear together on the product.
-export async function addPurchaseSourceToCluster(input: {
-  // Any product row in the target cluster (we read its globalProductId +
-  // parent linkage from the row itself, so the new source slots in at the
-  // correct nesting level — part vs config — without the caller needing
-  // to know).
-  anchorPartId: number;
-  supplier:
-    | { kind: "existing"; supplierId: number }
-    | {
-        kind: "new";
-        name: string;
-        website: string | null;
-        email: string | null;
-      };
-  productUrl: string;
-  // Optional — defaults to the anchor's name/code so the new row reads as
-  // "the same product, different vendor" instead of a generic placeholder.
-  name?: string;
-  productCode?: string | null;
-}): Promise<{ id: number }> {
-  const profile = await getOrCreateProfile();
-  if (!profile) throw new Error("Unauthorized: not signed in");
-  if (!canViewSuppliers(profile)) {
-    throw new Error("Unauthorized: missing supplier-view permission");
+// Purchase-source flat list on the product itself.
+// Adding a source does NOT create a new catalogue card — it just appends an
+// entry to supplier_products.purchase_sources for the row we're on. The UI
+// renders these as a list of clickable links inside the same product card.
+
+export type PurchaseSource = {
+  id: string;
+  name: string;
+  url: string;
+  website?: string | null;
+  notes?: string | null;
+  addedAt: string;
+  addedByClerkId?: string | null;
+};
+
+function normalisePurchaseSource(raw: unknown): PurchaseSource | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== "string" || typeof r.name !== "string" || typeof r.url !== "string") {
+    return null;
   }
+  return {
+    id: r.id,
+    name: r.name,
+    url: r.url,
+    website: typeof r.website === "string" ? r.website : null,
+    notes: typeof r.notes === "string" ? r.notes : null,
+    addedAt: typeof r.addedAt === "string" ? r.addedAt : new Date().toISOString(),
+    addedByClerkId: typeof r.addedByClerkId === "string" ? r.addedByClerkId : null,
+  };
+}
+
+export async function addPurchaseSource(input: {
+  productId: number;
+  name: string;
+  url: string;
+  website?: string | null;
+  notes?: string | null;
+}): Promise<{ sourceId: string }> {
+  const { profile } = await requireProductAccess(input.productId);
   if (!canEdit(profile)) {
     throw new Error("Unauthorized: missing edit permission");
   }
   await ensureSupplierInventorySchema();
 
-  const url = input.productUrl.trim();
+  const url = input.url.trim();
+  const name = input.name.trim();
   if (!url) throw new Error("Product URL is required");
   if (!/^https?:\/\//i.test(url)) {
     throw new Error("Product URL must start with http:// or https://");
   }
+  if (!name) throw new Error("Source name is required");
 
-  // Read the anchor row so we know the cluster id + nesting level.
-  const [anchor] = await db
-    .select({
-      id: supplierProducts.id,
-      globalProductId: supplierProducts.globalProductId,
-      parentProductId: supplierProducts.parentProductId,
-      name: supplierProducts.name,
-      productCode: supplierProducts.productCode,
-      category: supplierProducts.category,
-    })
-    .from(supplierProducts)
-    .where(eq(supplierProducts.id, input.anchorPartId))
-    .limit(1);
-  if (!anchor) throw new Error("Anchor product not found");
-  if (!anchor.globalProductId) {
-    throw new Error("Anchor product has no cluster id");
-  }
-
-  // Resolve supplier — existing id or fresh create.
-  let supplierId: number;
-  if (input.supplier.kind === "existing") {
-    supplierId = input.supplier.supplierId;
-  } else {
-    const created = await createSupplierForExtraction({
-      name: input.supplier.name,
-      website: input.supplier.website,
-      email: input.supplier.email,
-    });
-    supplierId = created.id;
-  }
-
-  // Reject duplicate (same supplier already has a row in this cluster).
-  const [existing] = await db
-    .select({ id: supplierProducts.id })
-    .from(supplierProducts)
-    .where(
-      and(
-        eq(supplierProducts.globalProductId, anchor.globalProductId),
-        eq(supplierProducts.supplierId, supplierId),
-        eq(supplierProducts.archived, false),
-      ),
-    )
-    .limit(1);
-  if (existing) {
-    // Update the existing row's URL instead of creating a duplicate.
-    await db
-      .update(supplierProducts)
-      .set({ productUrl: url, updatedAt: new Date() })
-      .where(eq(supplierProducts.id, existing.id));
-    revalidatePath("/suppliers");
-    return { id: existing.id };
-  }
-
-  // Insert the new source.
   const [row] = await db
-    .insert(supplierProducts)
-    .values({
-      supplierId,
-      parentProductId: anchor.parentProductId,
-      globalProductId: anchor.globalProductId,
-      isPrimarySupplier: false,
-      name: input.name?.trim() || anchor.name,
-      productCode: input.productCode?.trim() ?? anchor.productCode,
-      category: anchor.category,
-      productUrl: url,
-      createdByRole: "lightbase",
-      createdByClerkId: profile.clerkUserId,
-    })
-    .returning({ id: supplierProducts.id });
+    .select({ purchaseSources: supplierProducts.purchaseSources })
+    .from(supplierProducts)
+    .where(eq(supplierProducts.id, input.productId))
+    .limit(1);
+  const current = (row?.purchaseSources ?? [])
+    .map(normalisePurchaseSource)
+    .filter((s): s is PurchaseSource => s !== null);
+
+  // Dedupe by URL (case-insensitive) — if the same URL is already in the
+  // list, no-op rather than creating a redundant entry.
+  const urlLc = url.toLowerCase();
+  const existing = current.find((s) => s.url.toLowerCase() === urlLc);
+  if (existing) {
+    revalidatePath("/suppliers");
+    return { sourceId: existing.id };
+  }
+
+  const sourceId = crypto.randomUUID();
+  const next: PurchaseSource[] = [
+    ...current,
+    {
+      id: sourceId,
+      name,
+      url,
+      website: input.website?.trim() || null,
+      notes: input.notes?.trim() || null,
+      addedAt: new Date().toISOString(),
+      addedByClerkId: profile.clerkUserId,
+    },
+  ];
+
+  await db
+    .update(supplierProducts)
+    .set({ purchaseSources: next, updatedAt: new Date() })
+    .where(eq(supplierProducts.id, input.productId));
 
   revalidatePath("/suppliers");
-  return { id: row.id };
+  return { sourceId };
+}
+
+export async function removePurchaseSource(input: {
+  productId: number;
+  sourceId: string;
+}): Promise<void> {
+  const { profile } = await requireProductAccess(input.productId);
+  if (!canEdit(profile)) {
+    throw new Error("Unauthorized: missing edit permission");
+  }
+  await ensureSupplierInventorySchema();
+
+  const [row] = await db
+    .select({ purchaseSources: supplierProducts.purchaseSources })
+    .from(supplierProducts)
+    .where(eq(supplierProducts.id, input.productId))
+    .limit(1);
+  if (!row) return;
+  const next = (row.purchaseSources ?? [])
+    .map(normalisePurchaseSource)
+    .filter((s): s is PurchaseSource => s !== null && s.id !== input.sourceId);
+
+  await db
+    .update(supplierProducts)
+    .set({ purchaseSources: next, updatedAt: new Date() })
+    .where(eq(supplierProducts.id, input.productId));
+  revalidatePath("/suppliers");
 }
 
 export async function createSupplierForExtraction(input: {

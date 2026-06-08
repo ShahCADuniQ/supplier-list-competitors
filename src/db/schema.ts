@@ -499,6 +499,24 @@ export const supplierProducts = pgTable(
     // listing for spec / pricing / availability checks. Auto-filled by the
     // Add Product URL flow; editable in the drawer. Optional.
     productUrl: text("product_url"),
+    // Additional places-to-buy this exact product (Amazon, AliExpress,
+    // DigiKey, etc.). Stored as a flat JSON list ON the product row itself
+    // — adding a source does NOT create a new catalogue card; it just
+    // appends here. Each entry: { id, name, url, website?, notes?, addedAt,
+    // addedByClerkId? }. id is a uuid so individual entries can be
+    // removed/edited without depending on array index.
+    purchaseSources: jsonb("purchase_sources")
+      .$type<Array<{
+        id: string;
+        name: string;
+        url: string;
+        website?: string | null;
+        notes?: string | null;
+        addedAt: string;
+        addedByClerkId?: string | null;
+      }>>()
+      .notNull()
+      .default([]),
     thumbnailUrl: text("thumbnail_url"),
     thumbnailPathname: text("thumbnail_pathname"),
     archived: boolean("archived").notNull().default(false),

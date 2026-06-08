@@ -125,6 +125,11 @@ export function ensureSupplierInventorySchema(): Promise<void> {
       // URL flow (top-level part uses the page URL, Shopify variants get
       // their variant URL).
       await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "product_url" text`);
+      // Additional purchase-source links (Amazon, AliExpress, DigiKey, ...)
+      // stored as a JSONB array on the SAME product row so adding another
+      // place-to-buy does not spawn a new catalogue card. Schema of each
+      // entry is defined in src/db/schema.ts > supplierProducts > purchaseSources.
+      await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "purchase_sources" jsonb NOT NULL DEFAULT '[]'::jsonb`);
     } catch (e) {
       _ensured = null; // allow retry on next call if this somehow failed
       throw e;

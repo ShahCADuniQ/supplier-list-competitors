@@ -14,7 +14,9 @@ import FileViewerModal, { forceDownloadFile } from "@/components/FileViewerModal
 import {
   type SupplierProductWithAttachments,
   type SupplierWithProductCount,
-  addPurchaseSourceToCluster,
+  type PurchaseSource,
+  addPurchaseSource,
+  removePurchaseSource,
   addSupplierProductAttachment,
   createSupplierProduct,
   deleteSupplierProduct,
@@ -890,10 +892,25 @@ export function ProductDrawer({ product, models, parentProduct, allProducts, can
       />
       {err && <div style={{ color: "#dc2626", fontSize: 12.5, padding: "4px 16px" }}>{err}</div>}
 
-      {/* Alternative products — same component, different supplier.
-          Rendered for BOTH parts and configurations so each level can
-          have its own primary/backup cluster (configs are linked
-          separately from their parent). */}
+      {/* Purchase sources — flat list of "where to buy" links on this
+          same product (Amazon, AliExpress, DigiKey, the supplier's own
+          store, etc.). Stored as supplier_products.purchase_sources JSONB
+          so adding a source does NOT spawn a new catalogue card. */}
+      <PurchaseSourcesBlock
+        productId={product.id}
+        productUrl={product.productUrl ?? null}
+        supplierName={product.supplierName}
+        sources={product.purchaseSources ?? []}
+        canEdit={canEdit}
+        onChanged={onChanged}
+      />
+
+      {/* Alternative suppliers — cluster of separate supplier_products
+          rows that share a globalProductId. Used when the SAME product
+          code is sold under multiple suppliers as a procurement
+          relationship (different terms, different files, different
+          configs). Less prominent than Purchase sources; mostly useful
+          for merging accidental duplicates. */}
       <AlternativeSuppliersBlock
         partId={product.id}
         canEdit={canEdit}
@@ -1561,7 +1578,6 @@ function AlternativeSuppliersBlock({
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [linking, setLinking] = useState(false);
-  const [addingSource, setAddingSource] = useState(false);
 
   function reload() {
     listAlternativeSuppliersForPart({ partId })
@@ -1646,56 +1662,38 @@ function AlternativeSuppliersBlock({
               color: "var(--lb-text-3)",
             }}
           >
-            {isConfig ? "Purchase sources — configurations" : "Purchase sources"}
+            {isConfig ? "Alternative suppliers — configurations" : "Alternative suppliers"}
           </div>
           <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>
             {alts === null
               ? "Loading…"
-              : alts.length === 0
-                ? "No sources yet."
-                : alts.length === 1
-                  ? "One source on file. Add another vendor below — give a URL and the supplier name, and the cluster shows every place to buy."
-                  : primary
-                    ? `${alts.length} sources on file (1 primary, ${backups.length} backup${backups.length === 1 ? "" : "s"}).`
-                    : `${alts.length} sources on file — none marked primary yet. Pick one below.`}
+              : alts.length <= 1
+                ? isConfig
+                  ? "No alternative configurations linked. Use this when the SAME configuration is sold under another supplier as a separate catalogue entry — link them so files and history stay aligned."
+                  : "No alternative suppliers linked. Use this only when the SAME product is already in the catalogue under another supplier — link them so files and history stay aligned. For 'places to buy this from' use the Purchase sources panel above instead."
+                : primary
+                  ? `${backups.length} backup supplier${backups.length === 1 ? "" : "s"} on file. Demote the primary, promote a backup, or unlink rows that don't belong.`
+                  : `${alts.length} ${isConfig ? "configuration" : "product"}${alts.length === 1 ? "" : "s"} in this cluster — none marked primary yet. Pick one to set as primary.`}
           </div>
         </div>
         {canEdit && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => setAddingSource(true)}
-              style={{
-                padding: "6px 14px",
-                fontSize: 12.5,
-                fontWeight: 700,
-                borderRadius: 999,
-                background: "var(--lb-accent)",
-                border: "1px solid var(--lb-accent)",
-                color: "var(--lb-accent-fg)",
-                cursor: "pointer",
-              }}
-            >
-              + Add purchase source
-            </button>
-            <button
-              type="button"
-              onClick={() => setLinking(true)}
-              title="Pick an existing catalogue product (from another supplier) to link as an alternative on this cluster."
-              style={{
-                padding: "6px 14px",
-                fontSize: 12.5,
-                fontWeight: 700,
-                borderRadius: 999,
-                background: "var(--lb-bg-elev)",
-                border: "1px solid var(--lb-border)",
-                color: "var(--lb-text-2)",
-                cursor: "pointer",
-              }}
-            >
-              {isConfig ? "+ Link catalogue configuration" : "+ Link catalogue product"}
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setLinking(true)}
+            title="Pick an existing catalogue product (from another supplier) to link as an alternative on this cluster."
+            style={{
+              padding: "6px 14px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              borderRadius: 999,
+              background: "var(--lb-bg-elev)",
+              border: "1px solid var(--lb-border)",
+              color: "var(--lb-text-2)",
+              cursor: "pointer",
+            }}
+          >
+            {isConfig ? "+ Link catalogue configuration" : "+ Link catalogue product"}
+          </button>
         )}
       </div>
 
@@ -1908,13 +1906,262 @@ function AlternativeSuppliersBlock({
           }}
         />
       )}
-      {addingSource && (
+    </section>
+  );
+}
+
+// New "Purchase sources" panel. Pure flat list — every entry is a
+// clickable link living on this same product row (jsonb column). The
+// product's own productUrl is rendered as the first entry under the
+// label "Primary listing" so the user sees ALL places to buy the
+// product in one section.
+function PurchaseSourcesBlock({
+  productId,
+  productUrl,
+  supplierName,
+  sources,
+  canEdit,
+  onChanged,
+}: {
+  productId: number;
+  productUrl: string | null;
+  supplierName: string;
+  sources: PurchaseSource[];
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function remove(sourceId: string) {
+    if (!confirm("Remove this purchase source?")) return;
+    setBusyId(sourceId);
+    setErr(null);
+    try {
+      await removePurchaseSource({ productId, sourceId });
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Remove failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Build the display list: primary listing first (if URL set), then every
+  // JSONB entry in insertion order.
+  type Row = {
+    key: string;
+    name: string;
+    url: string;
+    removable: boolean;
+    sourceId?: string;
+    primary?: boolean;
+  };
+  const rows: Row[] = [];
+  if (productUrl) {
+    rows.push({
+      key: "primary",
+      name: `${supplierName} (primary listing)`,
+      url: productUrl,
+      removable: false,
+      primary: true,
+    });
+  }
+  for (const s of sources) {
+    rows.push({
+      key: s.id,
+      name: s.name,
+      url: s.url,
+      removable: true,
+      sourceId: s.id,
+    });
+  }
+
+  return (
+    <section
+      style={{
+        padding: 16,
+        borderBottom: "1px solid var(--lb-border)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+            }}
+          >
+            Purchase sources
+          </div>
+          <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>
+            {rows.length === 0
+              ? "No links yet. Add the URL where this product can be bought (Amazon, AliExpress, the brand's own store, etc.)."
+              : `${rows.length} place${rows.length === 1 ? "" : "s"} to buy this product. Click any link to open the listing in a new tab.`}
+          </div>
+        </div>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              borderRadius: 999,
+              background: "var(--lb-accent)",
+              border: "1px solid var(--lb-accent)",
+              color: "var(--lb-accent-fg)",
+              cursor: "pointer",
+            }}
+          >
+            + Add purchase source
+          </button>
+        )}
+      </div>
+
+      {err && (
+        <div
+          style={{
+            padding: 10,
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.10)",
+            border: "1px solid rgba(220,38,38,0.40)",
+            color: "#dc2626",
+            fontSize: 12.5,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <ul
+          style={{
+            listStyle: "none",
+            padding: 0,
+            margin: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          {rows.map((r) => (
+            <li key={r.key}>
+              <div
+                style={{
+                  padding: 10,
+                  borderRadius: 8,
+                  background: r.primary
+                    ? "color-mix(in srgb, #16a34a 6%, var(--lb-bg))"
+                    : "var(--lb-bg)",
+                  border: r.primary
+                    ? "1px solid #16a34a"
+                    : "1px solid var(--lb-border)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    letterSpacing: 0.4,
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: r.primary ? "#16a34a" : "var(--lb-bg-elev)",
+                    color: r.primary ? "white" : "var(--lb-text-3)",
+                    border: r.primary
+                      ? "1px solid #16a34a"
+                      : "1px solid var(--lb-border)",
+                    flexShrink: 0,
+                  }}
+                >
+                  {r.primary ? "★ PRIMARY" : "LINK"}
+                </span>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontSize: 13,
+                      color: "var(--lb-text)",
+                    }}
+                  >
+                    {r.name}
+                  </div>
+                  <a
+                    href={r.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={r.url}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      marginTop: 4,
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      color: "var(--lb-accent)",
+                      textDecoration: "none",
+                      maxWidth: "100%",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    ↗ {r.url.replace(/^https?:\/\//, "")}
+                  </a>
+                </div>
+                {canEdit && r.removable && r.sourceId && (
+                  <button
+                    type="button"
+                    onClick={() => remove(r.sourceId!)}
+                    disabled={busyId === r.sourceId}
+                    title="Remove this source"
+                    style={{
+                      padding: "5px 10px",
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      borderRadius: 999,
+                      background: "transparent",
+                      border: "1px solid var(--lb-border)",
+                      color: "var(--lb-text-3)",
+                      cursor: busyId === r.sourceId ? "wait" : "pointer",
+                      opacity: busyId === r.sourceId ? 0.6 : 1,
+                    }}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {adding && (
         <AddPurchaseSourceDialog
-          anchorPartId={partId}
-          onClose={() => setAddingSource(false)}
+          productId={productId}
+          onClose={() => setAdding(false)}
           onAdded={() => {
-            setAddingSource(false);
-            reload();
+            setAdding(false);
             onChanged();
           }}
         />
@@ -1928,79 +2175,32 @@ function AlternativeSuppliersBlock({
 // and the new row joins the same cluster — visible to everyone as a
 // purchase source for that product.
 function AddPurchaseSourceDialog({
-  anchorPartId,
+  productId,
   onClose,
   onAdded,
 }: {
-  anchorPartId: number;
+  productId: number;
   onClose: () => void;
   onAdded: () => void;
 }) {
-  const [suppliers, setSuppliers] = useState<SupplierWithProductCount[] | null>(
-    null,
-  );
-  const [supplierKind, setSupplierKind] = useState<"existing" | "new">(
-    "existing",
-  );
-  const [supplierId, setSupplierId] = useState<number | null>(null);
-  const [supplierQuery, setSupplierQuery] = useState("");
-  const [newSupplierName, setNewSupplierName] = useState("");
-  const [newSupplierWebsite, setNewSupplierWebsite] = useState("");
   const [productUrl, setProductUrl] = useState("");
+  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // Track whether the user has manually edited the supplier fields. We
-  // auto-fill from the URL on every change, but stop overriding once the
-  // user types in any of the supplier inputs so we don't clobber their
-  // edits.
-  const supplierTouchedRef = useRef(false);
-  // Reflects the brand we currently autodetected — shown as an inline hint
-  // so the user understands where the prefilled value came from and how to
-  // override it.
+  // Once the user manually edits the name, stop auto-filling it from the URL.
+  const nameTouchedRef = useRef(false);
   const [detectedBrand, setDetectedBrand] = useState<string | null>(null);
 
+  // Auto-detect the source name from the URL. Skipped once the user has
+  // manually typed in the name field.
   useEffect(() => {
-    listSuppliersWithCatalog()
-      .then(setSuppliers)
-      .catch((e) => setErr(e instanceof Error ? e.message : "Load failed"));
-  }, []);
-
-  // Auto-detect supplier from the URL. If the detected brand matches an
-  // existing supplier (case-insensitive on name), switch to the "Existing
-  // supplier" tab and pre-select it. Otherwise fill in the new-supplier
-  // fields. Stops the moment the user manually edits a supplier field.
-  useEffect(() => {
-    if (supplierTouchedRef.current) return;
+    if (nameTouchedRef.current) return;
     const brand = deriveBrandFromUrl(productUrl);
     setDetectedBrand(brand);
-    if (!brand) return;
-    const list = suppliers ?? [];
-    const match = list.find(
-      (s) => s.name.trim().toLowerCase() === brand.toLowerCase(),
-    );
-    if (match) {
-      setSupplierKind("existing");
-      setSupplierId(match.id);
-      setSupplierQuery("");
-    } else {
-      setSupplierKind("new");
-      setNewSupplierName(brand);
-      const site = deriveWebsiteFromUrl(productUrl);
-      if (site) setNewSupplierWebsite(site);
-    }
-  }, [productUrl, suppliers]);
+    if (brand) setName(brand);
+  }, [productUrl]);
 
-  // Helpers that mark the supplier section as user-edited so the autofill
-  // effect above stops touching it.
-  function touchSupplier() {
-    supplierTouchedRef.current = true;
-  }
-
-  const filteredSuppliers = (suppliers ?? []).filter((s) => {
-    const q = supplierQuery.trim().toLowerCase();
-    return !q || s.name.toLowerCase().includes(q);
-  });
-
+  // Auto-detect supplier from the URL. If the detected brand matches an
   async function submit() {
     setErr(null);
     const url = productUrl.trim();
@@ -2012,28 +2212,17 @@ function AddPurchaseSourceDialog({
       setErr("URL must start with http:// or https://");
       return;
     }
-    if (supplierKind === "existing" && supplierId == null) {
-      setErr("Pick a supplier (or switch to 'New supplier').");
-      return;
-    }
-    if (supplierKind === "new" && !newSupplierName.trim()) {
-      setErr("Supplier name is required.");
+    if (!name.trim()) {
+      setErr("Source name is required.");
       return;
     }
     setBusy(true);
     try {
-      await addPurchaseSourceToCluster({
-        anchorPartId,
-        supplier:
-          supplierKind === "existing"
-            ? { kind: "existing", supplierId: supplierId! }
-            : {
-                kind: "new",
-                name: newSupplierName,
-                website: newSupplierWebsite.trim() || null,
-                email: null,
-              },
-        productUrl: url,
+      await addPurchaseSource({
+        productId,
+        name: name.trim(),
+        url,
+        website: deriveWebsiteFromUrl(url),
       });
       onAdded();
     } catch (e) {
@@ -2070,7 +2259,7 @@ function AddPurchaseSourceDialog({
           />
         </Field>
 
-        {detectedBrand && (
+        {detectedBrand && !nameTouchedRef.current && (
           <div
             style={{
               fontSize: 12,
@@ -2081,136 +2270,38 @@ function AddPurchaseSourceDialog({
               border: "1px solid color-mix(in srgb, var(--lb-accent) 30%, transparent)",
             }}
           >
-            Detected supplier:{" "}
+            Detected source:{" "}
             <strong style={{ color: "var(--lb-text)" }}>{detectedBrand}</strong>
-            {supplierTouchedRef.current
-              ? null
-              : " — pre-filled below. Edit anything to override."}
+            {" "}— pre-filled below. Edit to override.
           </div>
         )}
 
-        {/* Kind toggle: existing supplier vs new */}
+        <Field label="Source name *">
+          <input
+            value={name}
+            onChange={(e) => {
+              nameTouchedRef.current = true;
+              setName(e.target.value);
+            }}
+            placeholder="e.g. Amazon, DigiKey, AliExpress"
+            style={INPUT_STYLE}
+          />
+        </Field>
+
         <div
-          role="tablist"
           style={{
-            display: "flex",
-            gap: 6,
-            padding: 4,
+            fontSize: 11.5,
+            color: "var(--lb-text-3)",
             background: "var(--lb-bg)",
-            border: "1px solid var(--lb-border)",
-            borderRadius: 999,
-            alignSelf: "flex-start",
+            border: "1px dashed var(--lb-border)",
+            borderRadius: 8,
+            padding: "8px 10px",
           }}
         >
-          {(["existing", "new"] as const).map((k) => (
-            <button
-              key={k}
-              type="button"
-              role="tab"
-              aria-selected={supplierKind === k}
-              onClick={() => {
-                touchSupplier();
-                setSupplierKind(k);
-              }}
-              style={{
-                padding: "5px 14px",
-                fontSize: 12.5,
-                fontWeight: 700,
-                borderRadius: 999,
-                border: "1px solid transparent",
-                background: supplierKind === k ? "var(--lb-bg-elev)" : "transparent",
-                color: supplierKind === k ? "var(--lb-text)" : "var(--lb-text-3)",
-                cursor: "pointer",
-              }}
-            >
-              {k === "existing" ? "Existing supplier" : "New supplier"}
-            </button>
-          ))}
+          This adds a clickable link to <strong>this same product card</strong> —
+          it does NOT create a separate catalogue entry. Use it to track every
+          place this exact item can be purchased from.
         </div>
-
-        {supplierKind === "existing" ? (
-          <Field label="Pick supplier *">
-            <input
-              type="search"
-              value={supplierQuery}
-              onChange={(e) => {
-                touchSupplier();
-                setSupplierQuery(e.target.value);
-              }}
-              placeholder="Search suppliers…"
-              style={INPUT_STYLE}
-            />
-            <div
-              style={{
-                marginTop: 6,
-                maxHeight: 160,
-                overflowY: "auto",
-                border: "1px solid var(--lb-border)",
-                borderRadius: 8,
-              }}
-            >
-              {suppliers === null ? (
-                <div style={{ padding: 10, fontSize: 12, color: "var(--lb-text-3)" }}>
-                  Loading suppliers…
-                </div>
-              ) : filteredSuppliers.length === 0 ? (
-                <div style={{ padding: 10, fontSize: 12, color: "var(--lb-text-3)" }}>
-                  No matches.
-                </div>
-              ) : (
-                filteredSuppliers.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => {
-                      touchSupplier();
-                      setSupplierId(s.id);
-                    }}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "8px 10px",
-                      background:
-                        s.id === supplierId ? "var(--lb-bg-elev)" : "transparent",
-                      color: "var(--lb-text)",
-                      border: "none",
-                      cursor: "pointer",
-                      fontSize: 13,
-                    }}
-                  >
-                    {s.name}
-                  </button>
-                ))
-              )}
-            </div>
-          </Field>
-        ) : (
-          <>
-            <Field label="Supplier name *">
-              <input
-                value={newSupplierName}
-                onChange={(e) => {
-                  touchSupplier();
-                  setNewSupplierName(e.target.value);
-                }}
-                placeholder="e.g. ACME Industrial"
-                style={INPUT_STYLE}
-              />
-            </Field>
-            <Field label="Supplier website (optional)">
-              <input
-                value={newSupplierWebsite}
-                onChange={(e) => {
-                  touchSupplier();
-                  setNewSupplierWebsite(e.target.value);
-                }}
-                placeholder="https://www.acme.com"
-                style={INPUT_STYLE}
-              />
-            </Field>
-          </>
-        )}
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button type="button" onClick={onClose} style={MINI_BTN}>
