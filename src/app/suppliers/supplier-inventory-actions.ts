@@ -20,6 +20,7 @@ import {
   type SupplierProductAttachment,
 } from "@/db/schema";
 import {
+  canEdit,
   canViewSuppliers,
   getOrCreateProfile,
   isSupplierUser,
@@ -1266,4 +1267,181 @@ export async function promoteToPrimarySupplier(input: {
 
   revalidatePath("/suppliers");
   revalidatePath("/portal");
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Add-product orchestration helpers
+// Used by /api/suppliers/add-product/* routes. Kept adjacent to the other
+// supplier-inventory queries so they share the same auth / tenant scoping.
+// The streaming + commit orchestration itself lives in
+// src/app/suppliers/add-product-actions.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type SupplierResolutionCandidate = {
+  id: number;
+  name: string;
+  website: string | null;
+  // "domain" = supplierWebsite domain matched this supplier's website domain.
+  // "name"   = case-insensitive name equality.
+  // "hint"   = the user-supplied hint matched fuzzily.
+  matchKind: "domain" | "name" | "hint";
+};
+
+function normaliseDomain(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url.startsWith("http") ? url : `https://${url}`);
+    return u.hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+export async function findSuppliersForResolution(input: {
+  supplierName: string | null;
+  supplierWebsite: string | null;
+  supplierHint: string | null;
+}): Promise<SupplierResolutionCandidate[]> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: missing supplier-view permission");
+  }
+  await ensureSupplierInventorySchema();
+
+  const tenantClientId = profile.clientId ?? null;
+  const rows = tenantClientId == null
+    ? await db
+        .select({ id: suppliers.id, name: suppliers.name, website: suppliers.website })
+        .from(suppliers)
+    : await db
+        .select({ id: suppliers.id, name: suppliers.name, website: suppliers.website })
+        .from(suppliers)
+        .where(eq(suppliers.clientId, tenantClientId));
+
+  const targetDomain = normaliseDomain(input.supplierWebsite);
+  const targetName = input.supplierName?.trim().toLowerCase() ?? "";
+  const hint = input.supplierHint?.trim().toLowerCase() ?? "";
+
+  const out: SupplierResolutionCandidate[] = [];
+  const seen = new Set<number>();
+  function push(c: SupplierResolutionCandidate) {
+    if (seen.has(c.id)) return;
+    seen.add(c.id);
+    out.push(c);
+  }
+
+  if (targetDomain) {
+    for (const r of rows) {
+      if (normaliseDomain(r.website) === targetDomain) {
+        push({ id: r.id, name: r.name, website: r.website, matchKind: "domain" });
+      }
+    }
+  }
+  if (targetName) {
+    for (const r of rows) {
+      if (r.name.trim().toLowerCase() === targetName) {
+        push({ id: r.id, name: r.name, website: r.website, matchKind: "name" });
+      }
+    }
+  }
+  if (hint) {
+    for (const r of rows) {
+      if (r.name.trim().toLowerCase().includes(hint)) {
+        push({ id: r.id, name: r.name, website: r.website, matchKind: "hint" });
+      }
+    }
+  }
+  return out;
+}
+
+export type ExistingProductMatchCandidate = {
+  partId: number;
+  globalProductId: string;
+  productCode: string;
+  name: string;
+  supplierName: string;
+};
+
+export async function findExistingProductsByCode(input: {
+  productCode: string;
+}): Promise<ExistingProductMatchCandidate[]> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: missing supplier-view permission");
+  }
+  await ensureSupplierInventorySchema();
+
+  const code = input.productCode.trim();
+  if (!code) return [];
+
+  const tenantClientId = profile.clientId ?? null;
+  const rows = await db
+    .select({
+      partId: supplierProducts.id,
+      globalProductId: supplierProducts.globalProductId,
+      productCode: supplierProducts.productCode,
+      name: supplierProducts.name,
+      supplierName: suppliers.name,
+      supplierClientId: suppliers.clientId,
+    })
+    .from(supplierProducts)
+    .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
+    .where(
+      and(
+        sql`LOWER(TRIM(${supplierProducts.productCode})) = LOWER(${code})`,
+        sql`${supplierProducts.parentProductId} IS NULL`,
+        eq(supplierProducts.archived, false),
+      ),
+    );
+
+  return rows
+    .filter(
+      (r) => tenantClientId == null || r.supplierClientId === tenantClientId,
+    )
+    .filter(
+      (r): r is typeof r & { globalProductId: string; productCode: string } =>
+        !!r.globalProductId && !!r.productCode,
+    )
+    .map((r) => ({
+      partId: r.partId,
+      globalProductId: r.globalProductId,
+      productCode: r.productCode,
+      name: r.name,
+      supplierName: r.supplierName,
+    }));
+}
+
+export async function createSupplierForExtraction(input: {
+  name: string;
+  website: string | null;
+  email: string | null;
+}): Promise<{ id: number }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: missing supplier-view permission");
+  }
+  if (!canEdit(profile)) {
+    throw new Error("Unauthorized: missing edit permission");
+  }
+  const name = input.name.trim();
+  if (!name) throw new Error("Supplier name is required");
+
+  const tenantClientId = profile.clientId ?? null;
+  const [row] = await db
+    .insert(suppliers)
+    .values({
+      name,
+      website: input.website?.trim() || null,
+      email: input.email?.trim() || null,
+      clientId: tenantClientId,
+      status: "Active",
+    })
+    .returning({ id: suppliers.id });
+
+  revalidatePath("/suppliers");
+  return { id: row.id };
 }
