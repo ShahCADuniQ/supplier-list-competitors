@@ -203,11 +203,12 @@ export default function SupplierInventoryOverview({
             <button
               type="button"
               role="tab"
-              aria-selected={scope === "primary"}
-              onClick={() => setScope("primary")}
-              style={SCOPE_PILL(scope === "primary", "#16a34a")}
+              aria-selected={scope === "one-per-product"}
+              onClick={() => setScope("one-per-product")}
+              style={SCOPE_PILL(scope === "one-per-product", "#16a34a")}
+              title="Hide cross-supplier duplicates: show the primary row for each cluster, or the most recent if no primary is set."
             >
-              ★ Primary only
+              ★ One per product
             </button>
           </div>
           <div
