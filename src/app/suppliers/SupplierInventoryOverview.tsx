@@ -15,7 +15,7 @@ import {
   type AggregateInventoryPart,
 } from "./supplier-inventory-actions";
 import ProductDrawerLoader from "./ProductDrawerLoader";
-import { dedupeParts, type SupplierCatalogueScope } from "./_dedupe-parts";
+import { filterByScope, type SupplierCatalogueScope } from "./_dedupe-parts";
 import AddProductDialog from "./AddProductDialog";
 
 export default function SupplierInventoryOverview({
@@ -88,12 +88,9 @@ export default function SupplierInventoryOverview({
         .toLowerCase();
       return hay.includes(q);
     };
-    // Dedup BEFORE field-filtering so the per-cluster representative is
-    // picked from the full set, not from rows that happened to survive the
-    // supplier filter. Otherwise selecting a supplier in the filter would
-    // skew which row wins each cluster.
-    const deduped = dedupeParts(data?.parts ?? [], scope);
-    return deduped.filter(matchesFilters);
+    // Scope filter first (cheap), then the field filters.
+    const scoped = filterByScope(data?.parts ?? [], scope);
+    return scoped.filter(matchesFilters);
   }, [data, search, projectFilter, supplierFilter, partNameFilter, scope]);
 
   if (err) {
@@ -223,12 +220,12 @@ export default function SupplierInventoryOverview({
             <button
               type="button"
               role="tab"
-              aria-selected={scope === "one-per-product"}
-              onClick={() => setScope("one-per-product")}
-              style={SCOPE_PILL(scope === "one-per-product", "#16a34a")}
-              title="Hide cross-supplier duplicates: show the primary row for each cluster, or the most recent if no primary is set."
+              aria-selected={scope === "primary"}
+              onClick={() => setScope("primary")}
+              style={SCOPE_PILL(scope === "primary", "#16a34a")}
+              title="Show only products explicitly marked as primary. Open a product card and click 'Mark as primary' inside to promote one."
             >
-              ★ One per product
+              ★ Primary only
             </button>
           </div>
           <div
@@ -338,8 +335,10 @@ export default function SupplierInventoryOverview({
           }}
         >
           {data.parts.length === 0
-            ? "No parts in any supplier's catalog yet. Add some from a supplier's Products tab and they'll show up here."
-            : "No parts match the current filters."}
+            ? "No parts in any supplier's catalog yet. Use '+ Add product' above to add one."
+            : scope === "primary"
+              ? "No products marked as primary yet. Open any product card, scroll to 'Alternative products', and click 'Mark as primary' inside to promote a row into this view."
+              : "No parts match the current filters."}
         </div>
       ) : (
         <div
