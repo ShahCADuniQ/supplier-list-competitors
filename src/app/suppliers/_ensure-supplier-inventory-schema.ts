@@ -120,6 +120,11 @@ export function ensureSupplierInventorySchema(): Promise<void> {
             AND child."global_product_id" = parent."global_product_id"
             AND parent."global_product_id" IS NOT NULL
       `);
+      // Product source URL — added so every product card can link back to
+      // the brand storefront listing. Auto-filled by the Add Product
+      // URL flow (top-level part uses the page URL, Shopify variants get
+      // their variant URL).
+      await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "product_url" text`);
     } catch (e) {
       _ensured = null; // allow retry on next call if this somehow failed
       throw e;

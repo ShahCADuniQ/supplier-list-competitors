@@ -636,6 +636,45 @@ function PartCard({
         ) : (
           <span style={{ fontSize: 24, color: "var(--lb-text-3)" }}>📦</span>
         )}
+        {part.productUrl && (
+          // Source-link badge. Nesting <a> inside <button> is invalid HTML
+          // so we render a styled <span> and open the URL in a new tab via
+          // JS, stopping the click from also opening the drawer.
+          <span
+            role="link"
+            tabIndex={0}
+            title={part.productUrl}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (part.productUrl) {
+                window.open(part.productUrl, "_blank", "noopener,noreferrer");
+              }
+            }}
+            onKeyDown={(e) => {
+              if ((e.key === "Enter" || e.key === " ") && part.productUrl) {
+                e.preventDefault();
+                e.stopPropagation();
+                window.open(part.productUrl, "_blank", "noopener,noreferrer");
+              }
+            }}
+            style={{
+              position: "absolute",
+              top: 6,
+              left: 6,
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontSize: 11,
+              fontWeight: 700,
+              background: "rgba(15,23,42,0.75)",
+              color: "white",
+              backdropFilter: "blur(4px)",
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+          >
+            ↗ Source
+          </span>
+        )}
         {part.modelCount > 0 && (
           <span
             style={{

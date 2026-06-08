@@ -165,6 +165,7 @@ function ManualTab({
   const [productCode, setProductCode] = useState("");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
+  const [productUrl, setProductUrl] = useState("");
 
   const filteredSuppliers = useMemo(() => {
     const q = supplierQuery.trim().toLowerCase();
@@ -214,6 +215,7 @@ function ManualTab({
           productCode: productCode || null,
           category: category || null,
           description: description || null,
+          productUrl: productUrl.trim() || null,
           thumbnailUrl: null,
           imageUrls: [],
         },
@@ -371,6 +373,14 @@ function ManualTab({
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           style={{ ...INPUT_STYLE, minHeight: 70, resize: "vertical" }}
+        />
+      </Field>
+      <Field label="Product URL (optional)">
+        <input
+          value={productUrl}
+          onChange={(e) => setProductUrl(e.target.value)}
+          placeholder="https://www.brand.com/products/..."
+          style={INPUT_STYLE}
         />
       </Field>
 
@@ -588,6 +598,9 @@ function ConfirmExtraction({
   const [productCode, setProductCode] = useState(extraction.productCode ?? "");
   const [description, setDescription] = useState(extraction.description ?? "");
   const [category, setCategory] = useState(extraction.category ?? "");
+  const [productUrl, setProductUrl] = useState(
+    extraction.productUrl ?? sourcePageUrl,
+  );
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -620,6 +633,7 @@ function ConfirmExtraction({
           productCode: productCode || null,
           category: category || null,
           description: description || null,
+          productUrl: productUrl.trim() || null,
           thumbnailUrl: extraction.thumbnailUrl,
           imageUrls: extraction.imageUrls,
         },
@@ -696,6 +710,14 @@ function ConfirmExtraction({
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           style={{ ...INPUT_STYLE, minHeight: 70, resize: "vertical" }}
+        />
+      </Field>
+      <Field label="Product URL">
+        <input
+          value={productUrl}
+          onChange={(e) => setProductUrl(e.target.value)}
+          placeholder="https://www.brand.com/products/..."
+          style={INPUT_STYLE}
         />
       </Field>
 
@@ -789,11 +811,14 @@ function ConfirmExtraction({
                       : "none",
                   display: "flex",
                   justifyContent: "space-between",
+                  alignItems: "center",
                   gap: 10,
                   fontSize: 12.5,
                 }}
               >
-                <span style={{ color: "var(--lb-text)" }}>{c.name}</span>
+                <span style={{ color: "var(--lb-text)", flex: 1 }}>
+                  {c.name}
+                </span>
                 {c.productCode && (
                   <span
                     style={{
@@ -804,6 +829,22 @@ function ConfirmExtraction({
                   >
                     {c.productCode}
                   </span>
+                )}
+                {c.productUrl && (
+                  <a
+                    href={c.productUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={c.productUrl}
+                    style={{
+                      color: "var(--lb-accent)",
+                      textDecoration: "none",
+                      fontWeight: 700,
+                      fontSize: 11.5,
+                    }}
+                  >
+                    ↗
+                  </a>
                 )}
               </div>
             ))}

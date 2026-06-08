@@ -113,6 +113,7 @@ export type CommitSupplierProductInput = {
     productCode: string | null;
     category: string | null;
     description: string | null;
+    productUrl: string | null;
     thumbnailUrl: string | null; // remote URL — downloaded into blob here
     imageUrls: string[]; // additional images — attached as "other_file" rows
   };
@@ -120,6 +121,7 @@ export type CommitSupplierProductInput = {
     name: string;
     productCode: string | null;
     description: string | null;
+    productUrl: string | null;
   }>;
 };
 
@@ -205,6 +207,7 @@ export async function commitSupplierProduct(
       productCode: input.product.productCode?.trim() || null,
       category: input.product.category?.trim() || null,
       description: input.product.description?.trim() || null,
+      productUrl: input.product.productUrl?.trim() || null,
       thumbnailUrl,
       thumbnailPathname,
       createdByRole: "lightbase",
@@ -227,6 +230,7 @@ export async function commitSupplierProduct(
         name: cfgName,
         productCode: cfg.productCode?.trim() || null,
         description: cfg.description?.trim() || null,
+        productUrl: cfg.productUrl?.trim() || null,
         category: null,
         createdByRole: "lightbase",
         createdByClerkId: profile.clerkUserId,

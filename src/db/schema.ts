@@ -494,6 +494,11 @@ export const supplierProducts = pgTable(
     description: text("description"),
     category: text("category"),
     notes: text("notes"),
+    // Source / reference URL — the brand/storefront product page (e.g. the
+    // Shopify variant URL) so the team can jump straight to the original
+    // listing for spec / pricing / availability checks. Auto-filled by the
+    // Add Product URL flow; editable in the drawer. Optional.
+    productUrl: text("product_url"),
     thumbnailUrl: text("thumbnail_url"),
     thumbnailPathname: text("thumbnail_pathname"),
     archived: boolean("archived").notNull().default(false),

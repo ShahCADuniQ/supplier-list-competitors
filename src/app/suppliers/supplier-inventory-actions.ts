@@ -219,6 +219,9 @@ export async function createSupplierProduct(input: {
   notes?: string;
   thumbnailUrl?: string;
   thumbnailPathname?: string;
+  // Optional source URL — the brand storefront listing for this product.
+  // Persists to supplier_products.product_url.
+  productUrl?: string;
   // When set, the new row becomes a model / configuration nested under
   // the given part. Validated server-side to ensure the parent is part
   // of the same supplier (a hostile client can't reparent a row onto
@@ -278,6 +281,7 @@ export async function createSupplierProduct(input: {
       description: input.description?.trim() || null,
       category: input.category?.trim() || null,
       notes: input.notes?.trim() || null,
+      productUrl: input.productUrl?.trim() || null,
       thumbnailUrl: input.thumbnailUrl ?? null,
       thumbnailPathname: input.thumbnailPathname ?? null,
       createdByRole: role,
@@ -660,6 +664,7 @@ export type AggregateInventoryPart = {
   productCode: string | null;
   category: string | null;
   description: string | null;
+  productUrl: string | null;
   thumbnailUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -853,6 +858,7 @@ export async function listAggregateSupplierInventory(): Promise<{
       productCode: p.productCode,
       category: p.category,
       description: p.description,
+      productUrl: p.productUrl,
       thumbnailUrl: p.thumbnailUrl,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,

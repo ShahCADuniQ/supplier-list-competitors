@@ -892,6 +892,9 @@ export type SupplierProductConfigurationExtraction = {
   name: string;
   productCode: string | null;
   description: string | null;
+  // Variant-specific link, e.g. a Shopify ?variant=ID URL. Null when the
+  // page doesn't surface per-variant URLs.
+  productUrl: string | null;
 };
 
 export type SupplierProductExtraction = {
@@ -899,6 +902,9 @@ export type SupplierProductExtraction = {
   productCode: string | null;
   category: string | null;
   description: string | null;
+  // The brand storefront page URL for this product (top-level part).
+  // Always the URL the user pasted into the Add Product dialog.
+  productUrl: string | null;
   thumbnailUrl: string | null;
   imageUrls: string[];
   supplierName: string | null;
@@ -934,11 +940,16 @@ export async function extractSupplierProductFromUrl(input: {
       );
       if (hit) category = hit;
     }
+    // Canonical product page (strip ?variant=... so the top-level part
+    // points at the listing's default URL; per-variant URLs go on each
+    // configuration below).
+    const canonicalProductUrl = `${shopify.storefrontUrl}/products/${shopify.handle}`;
     return {
       name: shopify.title,
       productCode: code,
       category: category ?? categoryHint ?? null,
       description: shopify.description || null,
+      productUrl: canonicalProductUrl,
       thumbnailUrl: shopify.images[0]?.src ?? null,
       imageUrls: shopify.images.slice(1, 7).map((i) => i.src),
       supplierName: shopify.vendor ?? supplierHint ?? null,
@@ -946,11 +957,14 @@ export async function extractSupplierProductFromUrl(input: {
       supplierEmail: null,
       // Each Shopify variant becomes a configuration row. Variant title
       // is the human-readable combination (e.g. "Black / 8mm / 100 pcs").
+      // Each variant carries its OWN URL (?variant=<id>) so deep-linking
+      // works straight from the configuration card.
       configurations: shopify.variants.map((v) => ({
         name: v.title,
         productCode: v.sku?.trim() || null,
         description:
           v.options.length > 1 ? v.options.join(" · ") : null,
+        productUrl: `${canonicalProductUrl}?variant=${v.id}`,
       })),
     };
   }
@@ -1042,6 +1056,17 @@ export async function extractSupplierProductFromUrl(input: {
   // Defensive defaults — Claude sometimes omits optional arrays.
   if (!Array.isArray(parsed.imageUrls)) parsed.imageUrls = [];
   if (!Array.isArray(parsed.configurations)) parsed.configurations = [];
+  // The AI fallback can't infer per-variant URLs reliably (the page rarely
+  // surfaces them as plain text). Default the top-level URL to the page the
+  // user pasted, and leave per-variant URLs null — manual flow can fill
+  // them in later via the drawer.
+  parsed.productUrl = trimmed;
+  parsed.configurations = parsed.configurations.map((c) => ({
+    name: c.name,
+    productCode: c.productCode ?? null,
+    description: c.description ?? null,
+    productUrl: null,
+  }));
   // Snap category to allowed list.
   if (
     parsed.category &&
