@@ -889,6 +889,7 @@ export type AlternativeSupplierPart = {
   supplierName: string;
   name: string;
   productCode: string | null;
+  productUrl: string | null;
   isPrimarySupplier: boolean;
   thumbnailUrl: string | null;
   attachmentCount: number;
@@ -931,6 +932,7 @@ export async function listAlternativeSuppliersForPart(input: {
       supplierName: suppliers.name,
       name: supplierProducts.name,
       productCode: supplierProducts.productCode,
+      productUrl: supplierProducts.productUrl,
       isPrimarySupplier: supplierProducts.isPrimarySupplier,
       thumbnailUrl: supplierProducts.thumbnailUrl,
       supplierClientId: suppliers.clientId,
@@ -993,6 +995,7 @@ export async function listAlternativeSuppliersForPart(input: {
       supplierName: r.supplierName,
       name: r.name,
       productCode: r.productCode,
+      productUrl: r.productUrl,
       isPrimarySupplier: r.isPrimarySupplier,
       thumbnailUrl: r.thumbnailUrl,
       attachmentCount: attachmentCountByProduct.get(r.id) ?? 0,
@@ -1420,6 +1423,121 @@ export async function findExistingProductsByCode(input: {
       name: r.name,
       supplierName: r.supplierName,
     }));
+}
+
+// Add a new purchase source (another company that sells the same product)
+// to an existing cluster. The user pastes a URL and tells us the supplier —
+// either by picking an existing one or by typing a brand name we look up
+// (and create if not found). The new row joins the same globalProductId
+// cluster so all the sources appear together on the product.
+export async function addPurchaseSourceToCluster(input: {
+  // Any product row in the target cluster (we read its globalProductId +
+  // parent linkage from the row itself, so the new source slots in at the
+  // correct nesting level — part vs config — without the caller needing
+  // to know).
+  anchorPartId: number;
+  supplier:
+    | { kind: "existing"; supplierId: number }
+    | {
+        kind: "new";
+        name: string;
+        website: string | null;
+        email: string | null;
+      };
+  productUrl: string;
+  // Optional — defaults to the anchor's name/code so the new row reads as
+  // "the same product, different vendor" instead of a generic placeholder.
+  name?: string;
+  productCode?: string | null;
+}): Promise<{ id: number }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: missing supplier-view permission");
+  }
+  if (!canEdit(profile)) {
+    throw new Error("Unauthorized: missing edit permission");
+  }
+  await ensureSupplierInventorySchema();
+
+  const url = input.productUrl.trim();
+  if (!url) throw new Error("Product URL is required");
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("Product URL must start with http:// or https://");
+  }
+
+  // Read the anchor row so we know the cluster id + nesting level.
+  const [anchor] = await db
+    .select({
+      id: supplierProducts.id,
+      globalProductId: supplierProducts.globalProductId,
+      parentProductId: supplierProducts.parentProductId,
+      name: supplierProducts.name,
+      productCode: supplierProducts.productCode,
+      category: supplierProducts.category,
+    })
+    .from(supplierProducts)
+    .where(eq(supplierProducts.id, input.anchorPartId))
+    .limit(1);
+  if (!anchor) throw new Error("Anchor product not found");
+  if (!anchor.globalProductId) {
+    throw new Error("Anchor product has no cluster id");
+  }
+
+  // Resolve supplier — existing id or fresh create.
+  let supplierId: number;
+  if (input.supplier.kind === "existing") {
+    supplierId = input.supplier.supplierId;
+  } else {
+    const created = await createSupplierForExtraction({
+      name: input.supplier.name,
+      website: input.supplier.website,
+      email: input.supplier.email,
+    });
+    supplierId = created.id;
+  }
+
+  // Reject duplicate (same supplier already has a row in this cluster).
+  const [existing] = await db
+    .select({ id: supplierProducts.id })
+    .from(supplierProducts)
+    .where(
+      and(
+        eq(supplierProducts.globalProductId, anchor.globalProductId),
+        eq(supplierProducts.supplierId, supplierId),
+        eq(supplierProducts.archived, false),
+      ),
+    )
+    .limit(1);
+  if (existing) {
+    // Update the existing row's URL instead of creating a duplicate.
+    await db
+      .update(supplierProducts)
+      .set({ productUrl: url, updatedAt: new Date() })
+      .where(eq(supplierProducts.id, existing.id));
+    revalidatePath("/suppliers");
+    return { id: existing.id };
+  }
+
+  // Insert the new source.
+  const [row] = await db
+    .insert(supplierProducts)
+    .values({
+      supplierId,
+      parentProductId: anchor.parentProductId,
+      globalProductId: anchor.globalProductId,
+      isPrimarySupplier: false,
+      name: input.name?.trim() || anchor.name,
+      productCode: input.productCode?.trim() ?? anchor.productCode,
+      category: anchor.category,
+      productUrl: url,
+      createdByRole: "lightbase",
+      createdByClerkId: profile.clerkUserId,
+    })
+    .returning({ id: supplierProducts.id });
+
+  revalidatePath("/suppliers");
+  return { id: row.id };
 }
 
 export async function createSupplierForExtraction(input: {

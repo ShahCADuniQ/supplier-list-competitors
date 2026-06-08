@@ -14,6 +14,7 @@ import FileViewerModal, { forceDownloadFile } from "@/components/FileViewerModal
 import {
   type SupplierProductWithAttachments,
   type SupplierWithProductCount,
+  addPurchaseSourceToCluster,
   addSupplierProductAttachment,
   createSupplierProduct,
   deleteSupplierProduct,
@@ -1559,6 +1560,7 @@ function AlternativeSuppliersBlock({
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [linking, setLinking] = useState(false);
+  const [addingSource, setAddingSource] = useState(false);
 
   function reload() {
     listAlternativeSuppliersForPart({ partId })
@@ -1643,37 +1645,56 @@ function AlternativeSuppliersBlock({
               color: "var(--lb-text-3)",
             }}
           >
-            {isConfig ? "Alternative configurations" : "Alternative products"}
+            {isConfig ? "Purchase sources — configurations" : "Purchase sources"}
           </div>
           <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>
             {alts === null
               ? "Loading…"
-              : alts.length <= 1
-                ? isConfig
-                  ? "No alternative configurations linked. Pick another configuration from the catalogue and link it as a backup variant."
-                  : "No alternatives linked. Pick another existing product from the catalogue and link it as a backup."
-                : primary
-                  ? `${backups.length} backup${backups.length === 1 ? "" : "s"} on file. Demote the primary, promote a backup, or link more.`
-                  : `${alts.length} ${isConfig ? "configuration" : "product"}${alts.length === 1 ? "" : "s"} in this cluster — none marked primary yet. Pick one to set as primary.`}
+              : alts.length === 0
+                ? "No sources yet."
+                : alts.length === 1
+                  ? "One source on file. Add another vendor below — give a URL and the supplier name, and the cluster shows every place to buy."
+                  : primary
+                    ? `${alts.length} sources on file (1 primary, ${backups.length} backup${backups.length === 1 ? "" : "s"}).`
+                    : `${alts.length} sources on file — none marked primary yet. Pick one below.`}
           </div>
         </div>
         {canEdit && (
-          <button
-            type="button"
-            onClick={() => setLinking(true)}
-            style={{
-              padding: "6px 14px",
-              fontSize: 12.5,
-              fontWeight: 700,
-              borderRadius: 999,
-              background: "var(--lb-accent)",
-              border: "1px solid var(--lb-accent)",
-              color: "var(--lb-accent-fg)",
-              cursor: "pointer",
-            }}
-          >
-            {isConfig ? "+ Link alternative configuration" : "+ Link alternative product"}
-          </button>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => setAddingSource(true)}
+              style={{
+                padding: "6px 14px",
+                fontSize: 12.5,
+                fontWeight: 700,
+                borderRadius: 999,
+                background: "var(--lb-accent)",
+                border: "1px solid var(--lb-accent)",
+                color: "var(--lb-accent-fg)",
+                cursor: "pointer",
+              }}
+            >
+              + Add purchase source
+            </button>
+            <button
+              type="button"
+              onClick={() => setLinking(true)}
+              title="Pick an existing catalogue product (from another supplier) to link as an alternative on this cluster."
+              style={{
+                padding: "6px 14px",
+                fontSize: 12.5,
+                fontWeight: 700,
+                borderRadius: 999,
+                background: "var(--lb-bg-elev)",
+                border: "1px solid var(--lb-border)",
+                color: "var(--lb-text-2)",
+                cursor: "pointer",
+              }}
+            >
+              {isConfig ? "+ Link catalogue configuration" : "+ Link catalogue product"}
+            </button>
+          </div>
         )}
       </div>
 
@@ -1760,6 +1781,30 @@ function AlternativeSuppliersBlock({
                       {a.modelCount > 0 && ` · ${a.modelCount} config${a.modelCount === 1 ? "" : "s"}`}
                       {a.attachmentCount > 0 && ` · ${a.attachmentCount} file${a.attachmentCount === 1 ? "" : "s"}`}
                     </div>
+                    {a.productUrl && (
+                      <a
+                        href={a.productUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={a.productUrl}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          marginTop: 6,
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          color: "var(--lb-accent)",
+                          textDecoration: "none",
+                          maxWidth: "100%",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        ↗ {a.productUrl.replace(/^https?:\/\//, "")}
+                      </a>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {!here && (
@@ -1862,7 +1907,251 @@ function AlternativeSuppliersBlock({
           }}
         />
       )}
+      {addingSource && (
+        <AddPurchaseSourceDialog
+          anchorPartId={partId}
+          onClose={() => setAddingSource(false)}
+          onAdded={() => {
+            setAddingSource(false);
+            reload();
+            onChanged();
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+// Quick form to add another vendor that sells the same product. Pick an
+// existing supplier or type a brand name (created on save), paste a URL,
+// and the new row joins the same cluster — visible to everyone as a
+// purchase source for that product.
+function AddPurchaseSourceDialog({
+  anchorPartId,
+  onClose,
+  onAdded,
+}: {
+  anchorPartId: number;
+  onClose: () => void;
+  onAdded: () => void;
+}) {
+  const [suppliers, setSuppliers] = useState<SupplierWithProductCount[] | null>(
+    null,
+  );
+  const [supplierKind, setSupplierKind] = useState<"existing" | "new">(
+    "existing",
+  );
+  const [supplierId, setSupplierId] = useState<number | null>(null);
+  const [supplierQuery, setSupplierQuery] = useState("");
+  const [newSupplierName, setNewSupplierName] = useState("");
+  const [newSupplierWebsite, setNewSupplierWebsite] = useState("");
+  const [productUrl, setProductUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    listSuppliersWithCatalog()
+      .then(setSuppliers)
+      .catch((e) => setErr(e instanceof Error ? e.message : "Load failed"));
+  }, []);
+
+  const filteredSuppliers = (suppliers ?? []).filter((s) => {
+    const q = supplierQuery.trim().toLowerCase();
+    return !q || s.name.toLowerCase().includes(q);
+  });
+
+  async function submit() {
+    setErr(null);
+    const url = productUrl.trim();
+    if (!url) {
+      setErr("Product URL is required.");
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      setErr("URL must start with http:// or https://");
+      return;
+    }
+    if (supplierKind === "existing" && supplierId == null) {
+      setErr("Pick a supplier (or switch to 'New supplier').");
+      return;
+    }
+    if (supplierKind === "new" && !newSupplierName.trim()) {
+      setErr("Supplier name is required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await addPurchaseSourceToCluster({
+        anchorPartId,
+        supplier:
+          supplierKind === "existing"
+            ? { kind: "existing", supplierId: supplierId! }
+            : {
+                kind: "new",
+                name: newSupplierName,
+                website: newSupplierWebsite.trim() || null,
+                email: null,
+              },
+        productUrl: url,
+      });
+      onAdded();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ModalShell title="Add purchase source" onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {err && (
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              background: "rgba(220,38,38,0.10)",
+              border: "1px solid rgba(220,38,38,0.40)",
+              color: "#dc2626",
+              fontSize: 12.5,
+            }}
+          >
+            {err}
+          </div>
+        )}
+        <Field label="Product URL *">
+          <input
+            value={productUrl}
+            onChange={(e) => setProductUrl(e.target.value)}
+            placeholder="https://www.brand.com/products/..."
+            style={INPUT_STYLE}
+            autoFocus
+          />
+        </Field>
+
+        {/* Kind toggle: existing supplier vs new */}
+        <div
+          role="tablist"
+          style={{
+            display: "flex",
+            gap: 6,
+            padding: 4,
+            background: "var(--lb-bg)",
+            border: "1px solid var(--lb-border)",
+            borderRadius: 999,
+            alignSelf: "flex-start",
+          }}
+        >
+          {(["existing", "new"] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              role="tab"
+              aria-selected={supplierKind === k}
+              onClick={() => setSupplierKind(k)}
+              style={{
+                padding: "5px 14px",
+                fontSize: 12.5,
+                fontWeight: 700,
+                borderRadius: 999,
+                border: "1px solid transparent",
+                background: supplierKind === k ? "var(--lb-bg-elev)" : "transparent",
+                color: supplierKind === k ? "var(--lb-text)" : "var(--lb-text-3)",
+                cursor: "pointer",
+              }}
+            >
+              {k === "existing" ? "Existing supplier" : "New supplier"}
+            </button>
+          ))}
+        </div>
+
+        {supplierKind === "existing" ? (
+          <Field label="Pick supplier *">
+            <input
+              type="search"
+              value={supplierQuery}
+              onChange={(e) => setSupplierQuery(e.target.value)}
+              placeholder="Search suppliers…"
+              style={INPUT_STYLE}
+            />
+            <div
+              style={{
+                marginTop: 6,
+                maxHeight: 160,
+                overflowY: "auto",
+                border: "1px solid var(--lb-border)",
+                borderRadius: 8,
+              }}
+            >
+              {suppliers === null ? (
+                <div style={{ padding: 10, fontSize: 12, color: "var(--lb-text-3)" }}>
+                  Loading suppliers…
+                </div>
+              ) : filteredSuppliers.length === 0 ? (
+                <div style={{ padding: 10, fontSize: 12, color: "var(--lb-text-3)" }}>
+                  No matches.
+                </div>
+              ) : (
+                filteredSuppliers.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setSupplierId(s.id)}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 10px",
+                      background:
+                        s.id === supplierId ? "var(--lb-bg-elev)" : "transparent",
+                      color: "var(--lb-text)",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: 13,
+                    }}
+                  >
+                    {s.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </Field>
+        ) : (
+          <>
+            <Field label="Supplier name *">
+              <input
+                value={newSupplierName}
+                onChange={(e) => setNewSupplierName(e.target.value)}
+                placeholder="e.g. ACME Industrial"
+                style={INPUT_STYLE}
+              />
+            </Field>
+            <Field label="Supplier website (optional)">
+              <input
+                value={newSupplierWebsite}
+                onChange={(e) => setNewSupplierWebsite(e.target.value)}
+                placeholder="https://www.acme.com"
+                style={INPUT_STYLE}
+              />
+            </Field>
+          </>
+        )}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={MINI_BTN}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={busy}
+            style={{ ...PRIMARY_BTN, opacity: busy ? 0.6 : 1 }}
+          >
+            {busy ? "Saving…" : "Add source"}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
   );
 }
 
