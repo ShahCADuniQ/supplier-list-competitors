@@ -16,6 +16,7 @@ import {
 } from "./supplier-inventory-actions";
 import ProductDrawerLoader from "./ProductDrawerLoader";
 import { dedupeParts, type SupplierCatalogueScope } from "./_dedupe-parts";
+import AddProductDialog from "./AddProductDialog";
 
 export default function SupplierInventoryOverview({
   canEdit,
@@ -34,6 +35,7 @@ export default function SupplierInventoryOverview({
   // Scope controls deduplication. See dedupeParts above for the rule.
   const [scope, setScope] = useState<SupplierCatalogueScope>("all");
   const [openPart, setOpenPart] = useState<AggregateInventoryPart | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   function reload() {
     listAggregateSupplierInventory()
@@ -176,7 +178,25 @@ export default function SupplierInventoryOverview({
             alignSelf: "center",
           }}
         >
-          {/* Scope toggle — All vs Primary only. Sits right next to
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              style={{
+                padding: "6px 14px",
+                fontSize: 12.5,
+                fontWeight: 700,
+                borderRadius: 999,
+                border: "1px solid var(--lb-accent)",
+                background: "var(--lb-accent)",
+                color: "var(--lb-accent-fg)",
+                cursor: "pointer",
+              }}
+            >
+              + Add product
+            </button>
+          )}
+          {/* Scope toggle — All vs One per product. Sits right next to
               the count badge so the relationship between "what's
               shown" and "scope" reads instantly. */}
           <div
@@ -348,6 +368,15 @@ export default function SupplierInventoryOverview({
           onChanged={reload}
         />
       )}
+      <AddProductDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onCreated={() => reload()}
+        suppliers={suppliers}
+        preselectedSupplierId={
+          supplierFilter !== "all" ? Number(supplierFilter) : null
+        }
+      />
     </div>
   );
 }
