@@ -35,14 +35,15 @@ type FullSupplier = Supplier & {
 const SUB_TABS = [
   { key: "onboarding-requests", label: "Onboarding Request" },
   { key: "suppliers", label: "Suppliers" },
-  { key: "orders", label: "Orders (RFQ & PO)" },
   // Per-supplier catalog still lives inside each supplier's detail panel
-  // (the "Products" tab there). This top-level "Supplier Inventory" is
+  // (the "Products" tab there). This top-level "Supplier Catalogue" is
   // the cross-supplier overview that replaced the old Manufacturing
   // stub — every part across every supplier in the tenant, with project
-  // / product filters.
-  { key: "inventory", label: "Lightbase Inventory" },
+  // / product filters. Sits right next to Suppliers so the two related
+  // surfaces are adjacent in the nav.
   { key: "supplier-inventory", label: "Supplier Catalogue" },
+  { key: "orders", label: "Orders (RFQ & PO)" },
+  { key: "inventory", label: "Lightbase Inventory" },
   { key: "boms", label: "BOMs" },
   { key: "quality", label: "Quality" },
   { key: "maintenance", label: "Maintenance" },
