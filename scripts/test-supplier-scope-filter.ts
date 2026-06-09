@@ -54,19 +54,21 @@ expect(
 
 const parentsNoPrimary = filterForCatalogue(all, "parents", false);
 expect(
-  `parents/no-primary keeps both parents — got ${parentsNoPrimary
+  `parents/no-primary keeps both parents AND both standalones, hides configs — got ${parentsNoPrimary
     .map((r) => r.id)
     .sort()
     .join(",")}`,
-  parentsNoPrimary.length === 2 &&
-    parentsNoPrimary.every((r) => r.kind === "parent"),
+  parentsNoPrimary.length === 4 &&
+    parentsNoPrimary.every((r) => r.kind !== "configuration"),
 );
 
 const parentsPrimary = filterForCatalogue(all, "parents", true);
 expect(
-  `parents/primary keeps only parents with a primary config — got ${parentsPrimary
+  `parents/primary keeps parents with primary configs + standalones marked primary — got ${parentsPrimary
     .map((r) => r.id)
     .sort()
     .join(",")}`,
-  parentsPrimary.length === 1 && parentsPrimary[0].id === parentA.id,
+  parentsPrimary.length === 2 &&
+    parentsPrimary.some((r) => r.id === parentA.id) &&
+    parentsPrimary.some((r) => r.id === standaloneA.id),
 );

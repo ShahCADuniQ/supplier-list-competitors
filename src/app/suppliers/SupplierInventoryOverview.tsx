@@ -229,7 +229,7 @@ export default function SupplierInventoryOverview({
               aria-selected={viewMode === "parents"}
               onClick={() => setViewMode("parents")}
               style={SCOPE_PILL(viewMode === "parents")}
-              title="Only parts that have configurations grouped — the catalogue browsed by container."
+              title="Every top-level part — those with configurations grouped under them PLUS standalone parts. Configurations are hidden because they're represented by their parent."
             >
               Parent products
             </button>
@@ -379,7 +379,7 @@ export default function SupplierInventoryOverview({
             : primaryOnly && viewMode === "all"
               ? "No configurations or standalone parts marked as primary yet. Open any product card, scroll to 'Alternative products', and click 'Mark as primary' inside to promote a row into this view."
               : primaryOnly && viewMode === "parents"
-                ? "No parent products contain a primary configuration yet. Open a parent's card, open one of its configurations, and click 'Mark as primary' inside."
+                ? "No parts qualify yet — either a standalone marked as primary, or a parent with at least one configuration marked as primary. Open a product card and use the inline 'Mark primary' star to promote one."
                 : "No parts match the current filters."}
         </div>
       ) : (
