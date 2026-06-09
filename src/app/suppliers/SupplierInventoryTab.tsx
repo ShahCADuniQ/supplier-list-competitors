@@ -1662,7 +1662,7 @@ function AlternativeSuppliersBlock({
               color: "var(--lb-text-3)",
             }}
           >
-            {isConfig ? "Alternative suppliers — configurations" : "Alternative suppliers"}
+            {isConfig ? "Alternative products — configurations" : "Alternative products"}
           </div>
           <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>
             {alts === null
