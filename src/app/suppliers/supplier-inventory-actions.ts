@@ -435,6 +435,11 @@ export async function addSupplierProductAttachment(input: {
   // When set, the row is grouped under this label in the drawer's
   // "custom sections" area.
   customCategoryLabel?: string | null;
+  // Project routing — required when category === "project_doc". The
+  // project_num ties to supplier_project_entries.project_num so the panel
+  // can show project metadata next to the file.
+  projectNum?: string | null;
+  projectDocType?: "rfq" | "quote" | "po" | "pi" | "invoice" | null;
   name: string;
   url: string;
   blobPathname?: string;
@@ -456,12 +461,25 @@ export async function addSupplierProductAttachment(input: {
     throw new Error("A custom section name is required for this upload.");
   }
 
+  // Project routing validation — only meaningful for project_doc category.
+  let projectNum: string | null = null;
+  let projectDocType: "rfq" | "quote" | "po" | "pi" | "invoice" | null = null;
+  if (input.category === "project_doc") {
+    if (!input.projectDocType) {
+      throw new Error("Pick a document type (RFQ / Quote / PO / PI / Invoice).");
+    }
+    projectDocType = input.projectDocType;
+    projectNum = input.projectNum?.trim().slice(0, 64) || null;
+  }
+
   const [row] = await db
     .insert(supplierProductAttachments)
     .values({
       productId: input.productId,
       category: input.category,
       customCategoryLabel: customLabel,
+      projectNum,
+      projectDocType,
       name: input.name.trim(),
       url: input.url,
       blobPathname: input.blobPathname ?? null,
@@ -1576,4 +1594,185 @@ export async function createSupplierForExtraction(input: {
 
   revalidatePath("/suppliers");
   return { id: row.id };
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-product project routing
+// Used by the "Projects" sidebar bucket on the product drawer. The bucket
+// replaced the old "Quotes & Pricing" — every doc upload now sits inside a
+// project (RFQ / Quote / PO / PI / Invoice).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type SupplierProjectOption = {
+  projectNum: string;
+  status: string | null;
+  poNumber: string | null;
+  quoteDate: Date | null;
+  poDate: Date | null;
+  expectedDelivery: Date | null;
+  orderedQuantity: number;
+  quotedAmount: string;
+  currency: string | null;
+};
+
+// Pulls every project the supplier has been involved in — used by the
+// "+ Add to project" picker on a product. The picker shows the
+// supplier's own projects first so the user doesn't free-text a number
+// that already exists in the project tracker.
+export async function listSupplierProjectsForPicker(input: {
+  supplierId: number;
+}): Promise<SupplierProjectOption[]> {
+  await resolveReadAccess(input.supplierId);
+  await ensureSupplierInventorySchema();
+
+  const rows = await db
+    .select({
+      projectNum: supplierProjectEntries.projectNum,
+      status: supplierProjectEntries.status,
+      poNumber: supplierProjectEntries.poNumber,
+      quoteDate: supplierProjectEntries.quoteDate,
+      poDate: supplierProjectEntries.poDate,
+      expectedDelivery: supplierProjectEntries.expectedDelivery,
+      orderedQuantity: supplierProjectEntries.orderedQuantity,
+      quotedAmount: supplierProjectEntries.quotedAmount,
+      currency: supplierProjectEntries.currency,
+    })
+    .from(supplierProjectEntries)
+    .where(eq(supplierProjectEntries.supplierId, input.supplierId))
+    .orderBy(desc(supplierProjectEntries.createdAt));
+
+  // Drizzle returns dates as strings for date columns and numerics as
+  // strings — normalise to Date for the convenience of the UI.
+  return rows.map((r) => ({
+    projectNum: r.projectNum,
+    status: r.status,
+    poNumber: r.poNumber,
+    quoteDate: r.quoteDate ? new Date(r.quoteDate) : null,
+    poDate: r.poDate ? new Date(r.poDate) : null,
+    expectedDelivery: r.expectedDelivery ? new Date(r.expectedDelivery) : null,
+    orderedQuantity: r.orderedQuantity,
+    quotedAmount: r.quotedAmount,
+    currency: r.currency,
+  }));
+}
+
+export type ProductProjectDocCounts = {
+  rfq: number;
+  quote: number;
+  po: number;
+  pi: number;
+  invoice: number;
+};
+
+export type ProductProjectGroup = {
+  // null bucket for legacy uploads that don't have a project number set
+  // (e.g. migrated quote_pricing rows).
+  projectNum: string | null;
+  // Pulled from supplier_project_entries if the project exists for this
+  // supplier; null when the doc is attached to a project number that
+  // doesn't have a tracker entry yet.
+  status: string | null;
+  poNumber: string | null;
+  totalDocs: number;
+  countsByType: ProductProjectDocCounts;
+};
+
+// Aggregate the project_doc attachments on a product into one row per
+// project_num — used to render the Projects sidebar count + the panel
+// header summary.
+export async function listProductProjectGroups(input: {
+  productId: number;
+}): Promise<ProductProjectGroup[]> {
+  await resolveReadAccessForProduct(input.productId);
+  await ensureSupplierInventorySchema();
+
+  const rows = await db
+    .select({
+      projectNum: supplierProductAttachments.projectNum,
+      docType: supplierProductAttachments.projectDocType,
+    })
+    .from(supplierProductAttachments)
+    .where(
+      and(
+        eq(supplierProductAttachments.productId, input.productId),
+        eq(supplierProductAttachments.category, "project_doc"),
+      ),
+    );
+
+  // Group by projectNum (null is a real bucket = "No project").
+  const byProject = new Map<string | null, ProductProjectGroup>();
+  for (const r of rows) {
+    const key = r.projectNum ?? null;
+    let group = byProject.get(key);
+    if (!group) {
+      group = {
+        projectNum: key,
+        status: null,
+        poNumber: null,
+        totalDocs: 0,
+        countsByType: { rfq: 0, quote: 0, po: 0, pi: 0, invoice: 0 },
+      };
+      byProject.set(key, group);
+    }
+    group.totalDocs += 1;
+    if (r.docType && r.docType in group.countsByType) {
+      const t = r.docType as keyof ProductProjectDocCounts;
+      group.countsByType[t] += 1;
+    }
+  }
+
+  // Decorate with status / PO number from supplier_project_entries.
+  const projectNums = Array.from(byProject.keys()).filter(
+    (k): k is string => k != null,
+  );
+  if (projectNums.length > 0) {
+    // We need the supplierId — look it up via the product row.
+    const [productRow] = await db
+      .select({ supplierId: supplierProducts.supplierId })
+      .from(supplierProducts)
+      .where(eq(supplierProducts.id, input.productId))
+      .limit(1);
+    if (productRow) {
+      const entries = await db
+        .select({
+          projectNum: supplierProjectEntries.projectNum,
+          status: supplierProjectEntries.status,
+          poNumber: supplierProjectEntries.poNumber,
+        })
+        .from(supplierProjectEntries)
+        .where(
+          and(
+            eq(supplierProjectEntries.supplierId, productRow.supplierId),
+            inArray(supplierProjectEntries.projectNum, projectNums),
+          ),
+        );
+      for (const e of entries) {
+        const group = byProject.get(e.projectNum);
+        if (group) {
+          group.status = e.status;
+          group.poNumber = e.poNumber;
+        }
+      }
+    }
+  }
+
+  // Sort: real projects first (alphabetical), then the null bucket last.
+  return Array.from(byProject.values()).sort((a, b) => {
+    if (a.projectNum == null) return 1;
+    if (b.projectNum == null) return -1;
+    return a.projectNum.localeCompare(b.projectNum);
+  });
+}
+
+// Same auth-check pattern as requireProductAccess but read-only — used
+// by the per-product project listing.
+async function resolveReadAccessForProduct(productId: number): Promise<void> {
+  const [row] = await db
+    .select({ supplierId: supplierProducts.supplierId })
+    .from(supplierProducts)
+    .where(eq(supplierProducts.id, productId))
+    .limit(1);
+  if (!row) throw new Error("Product not found");
+  await resolveReadAccess(row.supplierId);
 }

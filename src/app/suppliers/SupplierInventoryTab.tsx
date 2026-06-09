@@ -15,8 +15,12 @@ import {
   type SupplierProductWithAttachments,
   type SupplierWithProductCount,
   type PurchaseSource,
+  type SupplierProjectOption,
+  type ProductProjectGroup,
   addPurchaseSource,
   removePurchaseSource,
+  listProductProjectGroups,
+  listSupplierProjectsForPicker,
   addSupplierProductAttachment,
   createSupplierProduct,
   deleteSupplierProduct,
@@ -37,9 +41,11 @@ import {
   updateSupplierProductAttachment,
 } from "./supplier-inventory-actions";
 import {
+  PROJECT_DOC_TYPES,
   SUPPLIER_CATEGORIES,
   SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES,
   shortCategoryLabel,
+  type ProjectDocType,
   type SupplierProductAttachmentCategory,
 } from "./supplier-inventory-constants";
 import { deriveBrandFromUrl, deriveWebsiteFromUrl } from "@/lib/ai/url-brand";
@@ -1046,7 +1052,17 @@ export function ProductDrawer({ product, models, parentProduct, allProducts, can
           )}
         </nav>
         <div style={{ flex: 1, minWidth: 0, padding: 16 }}>
-          {tab.kind === "enum" ? (
+          {tab.kind === "enum" && tab.key === "project_doc" ? (
+            // Projects bucket is a 2-level structure (project → 5 doc slots).
+            // It needs its own panel rather than the flat CategoryPanel.
+            <ProjectsPanel
+              productId={product.id}
+              supplierId={product.supplierId}
+              attachments={grouped[tab.key]}
+              canEdit={canEdit}
+              onChanged={onChanged}
+            />
+          ) : tab.kind === "enum" ? (
             <CategoryPanel
               productId={product.id}
               productThumbnailUrl={product.thumbnailUrl}
@@ -3412,3 +3428,850 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </label>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ProjectsPanel — replaces the old "Quotes & Pricing" tab.
+// Two-level structure:
+//   1) Project list (groups every project_doc attachment by project_num).
+//      "+ Add to project" opens a picker driven by this supplier's existing
+//      supplier_project_entries; user picks one OR types a new project number.
+//   2) Project detail (5 doc slots: RFQ / Quote / PO / PI / Invoice). Each
+//      slot has an upload area + the list of existing files for that slot.
+// ─────────────────────────────────────────────────────────────────────────────
+function ProjectsPanel({
+  productId,
+  supplierId,
+  attachments,
+  canEdit,
+  onChanged,
+}: {
+  productId: number;
+  supplierId: number;
+  attachments: SupplierProductAttachment[];
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const [pickerProjects, setPickerProjects] = useState<
+    SupplierProjectOption[] | null
+  >(null);
+  const [view, setView] = useState<
+    | { kind: "list" }
+    | { kind: "detail"; projectNum: string | null }
+  >({ kind: "list" });
+  const [picking, setPicking] = useState(false);
+
+  useEffect(() => {
+    listSupplierProjectsForPicker({ supplierId })
+      .then(setPickerProjects)
+      .catch(() => setPickerProjects([]));
+  }, [supplierId]);
+
+  // Group attachments by project_num. The null bucket holds legacy quote
+  // uploads + anything the user added without picking a project number.
+  const groups = useMemo(() => {
+    const map = new Map<string | null, SupplierProductAttachment[]>();
+    for (const a of attachments) {
+      const key = (a.projectNum ?? null) as string | null;
+      const arr = map.get(key) ?? [];
+      arr.push(a);
+      map.set(key, arr);
+    }
+    return Array.from(map.entries())
+      .map(([projectNum, atts]) => ({ projectNum, attachments: atts }))
+      .sort((a, b) => {
+        if (a.projectNum == null) return 1;
+        if (b.projectNum == null) return -1;
+        return a.projectNum.localeCompare(b.projectNum);
+      });
+  }, [attachments]);
+
+  const pickerByNum = useMemo(() => {
+    const map = new Map<string, SupplierProjectOption>();
+    for (const p of pickerProjects ?? []) map.set(p.projectNum, p);
+    return map;
+  }, [pickerProjects]);
+
+  if (view.kind === "detail") {
+    const group =
+      groups.find((g) => g.projectNum === view.projectNum) ?? {
+        projectNum: view.projectNum,
+        attachments: [],
+      };
+    return (
+      <ProjectDetail
+        productId={productId}
+        projectNum={group.projectNum}
+        meta={
+          group.projectNum ? pickerByNum.get(group.projectNum) ?? null : null
+        }
+        attachments={group.attachments}
+        canEdit={canEdit}
+        onBack={() => setView({ kind: "list" })}
+        onChanged={onChanged}
+      />
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+            }}
+          >
+            Projects
+          </div>
+          <div
+            style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}
+          >
+            Track this product across projects. Each project holds five
+            documents — RFQ, Quote, PO, PI, Invoice. Pulled from this
+            supplier&apos;s project tracker.
+          </div>
+        </div>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              borderRadius: 999,
+              background: "var(--lb-accent)",
+              border: "1px solid var(--lb-accent)",
+              color: "var(--lb-accent-fg)",
+              cursor: "pointer",
+            }}
+          >
+            + Add to project
+          </button>
+        )}
+      </div>
+
+      {groups.length === 0 ? (
+        <div
+          style={{
+            padding: 20,
+            textAlign: "center",
+            fontSize: 13,
+            color: "var(--lb-text-3)",
+            border: "1px dashed var(--lb-border)",
+            borderRadius: 10,
+          }}
+        >
+          No projects yet. Click <strong>+ Add to project</strong> to attach
+          this product to a project and start uploading its RFQ, Quote, PO,
+          PI, and Invoice.
+        </div>
+      ) : (
+        <ul
+          style={{
+            listStyle: "none",
+            padding: 0,
+            margin: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          {groups.map((g) => (
+            <ProjectListRow
+              key={g.projectNum ?? "__no_project"}
+              projectNum={g.projectNum}
+              meta={g.projectNum ? pickerByNum.get(g.projectNum) ?? null : null}
+              attachments={g.attachments}
+              onOpen={() =>
+                setView({ kind: "detail", projectNum: g.projectNum })
+              }
+            />
+          ))}
+        </ul>
+      )}
+
+      {picking && (
+        <ProjectPickerDialog
+          supplierProjects={pickerProjects ?? []}
+          alreadyUsed={new Set(
+            groups
+              .map((g) => g.projectNum)
+              .filter((p): p is string => p != null),
+          )}
+          onClose={() => setPicking(false)}
+          onPicked={(projectNum) => {
+            setPicking(false);
+            setView({ kind: "detail", projectNum });
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// One-line summary of a project in the list view — project number,
+// status badge (from supplier_project_entries if known), doc-type
+// counts, click to drill in.
+function ProjectListRow({
+  projectNum,
+  meta,
+  attachments,
+  onOpen,
+}: {
+  projectNum: string | null;
+  meta: SupplierProjectOption | null;
+  attachments: SupplierProductAttachment[];
+  onOpen: () => void;
+}) {
+  const counts = useMemo(() => {
+    const c = { rfq: 0, quote: 0, po: 0, pi: 0, invoice: 0 } as Record<
+      ProjectDocType,
+      number
+    >;
+    for (const a of attachments) {
+      if (a.projectDocType && a.projectDocType in c) {
+        c[a.projectDocType as ProjectDocType] += 1;
+      }
+    }
+    return c;
+  }, [attachments]);
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        style={{
+          width: "100%",
+          padding: 12,
+          background: "var(--lb-bg)",
+          border: "1px solid var(--lb-border)",
+          borderRadius: 10,
+          color: "var(--lb-text)",
+          textAlign: "left",
+          cursor: "pointer",
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span
+              style={{
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontWeight: 800,
+                fontSize: 13.5,
+              }}
+            >
+              {projectNum ?? "— No project —"}
+            </span>
+            {meta?.status && (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 0.3,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  background: "var(--lb-bg-elev)",
+                  border: "1px solid var(--lb-border)",
+                  color: "var(--lb-text-2)",
+                }}
+              >
+                {meta.status}
+              </span>
+            )}
+            {meta?.poNumber && (
+              <span
+                style={{ fontSize: 11.5, color: "var(--lb-text-3)" }}
+              >
+                PO {meta.poNumber}
+              </span>
+            )}
+          </div>
+          <span style={{ color: "var(--lb-text-3)", fontSize: 14 }}>→</span>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            flexWrap: "wrap",
+            fontSize: 11.5,
+          }}
+        >
+          {PROJECT_DOC_TYPES.map((t) => (
+            <span
+              key={t.key}
+              style={{
+                padding: "2px 8px",
+                borderRadius: 6,
+                background:
+                  counts[t.key as ProjectDocType] > 0
+                    ? "color-mix(in srgb, var(--lb-accent) 12%, transparent)"
+                    : "var(--lb-bg-elev)",
+                color:
+                  counts[t.key as ProjectDocType] > 0
+                    ? "var(--lb-accent)"
+                    : "var(--lb-text-3)",
+                fontWeight: 700,
+                border: "1px solid var(--lb-border)",
+              }}
+            >
+              {t.label} {counts[t.key as ProjectDocType]}
+            </span>
+          ))}
+        </div>
+      </button>
+    </li>
+  );
+}
+
+// Project detail view — 5 slots, each independently uploadable + listable.
+function ProjectDetail({
+  productId,
+  projectNum,
+  meta,
+  attachments,
+  canEdit,
+  onBack,
+  onChanged,
+}: {
+  productId: number;
+  projectNum: string | null;
+  meta: SupplierProjectOption | null;
+  attachments: SupplierProductAttachment[];
+  canEdit: boolean;
+  onBack: () => void;
+  onChanged: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <button
+          type="button"
+          onClick={onBack}
+          style={{
+            ...MINI_BTN,
+            padding: "5px 10px",
+            fontSize: 12,
+          }}
+        >
+          ← Back to projects
+        </button>
+        <span
+          style={{
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontWeight: 800,
+            fontSize: 14,
+            color: "var(--lb-text)",
+          }}
+        >
+          {projectNum ?? "— No project —"}
+        </span>
+        {meta?.status && (
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "2px 8px",
+              borderRadius: 999,
+              background: "var(--lb-bg-elev)",
+              border: "1px solid var(--lb-border)",
+              color: "var(--lb-text-2)",
+            }}
+          >
+            {meta.status}
+          </span>
+        )}
+        {meta?.poNumber && (
+          <span style={{ fontSize: 12, color: "var(--lb-text-3)" }}>
+            PO {meta.poNumber}
+          </span>
+        )}
+      </div>
+
+      {PROJECT_DOC_TYPES.map((t) => {
+        const slotAttachments = attachments.filter(
+          (a) => a.projectDocType === t.key,
+        );
+        return (
+          <ProjectDocSlot
+            key={t.key}
+            productId={productId}
+            projectNum={projectNum}
+            docType={t.key as ProjectDocType}
+            docLabel={t.label}
+            docBlurb={t.blurb}
+            attachments={slotAttachments}
+            canEdit={canEdit}
+            onChanged={onChanged}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// One doc slot — header + upload area + list of files.
+function ProjectDocSlot({
+  productId,
+  projectNum,
+  docType,
+  docLabel,
+  docBlurb,
+  attachments,
+  canEdit,
+  onChanged,
+}: {
+  productId: number;
+  projectNum: string | null;
+  docType: ProjectDocType;
+  docLabel: string;
+  docBlurb: string;
+  attachments: SupplierProductAttachment[];
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function onPickFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setErr(null);
+    try {
+      for (const file of Array.from(files)) {
+        const safe = file.name
+          .replace(/[^A-Za-z0-9._-]+/g, "_")
+          .slice(0, 120);
+        const pathname = `suppliers/${productId}/project_doc/${
+          projectNum ?? "no-project"
+        }/${docType}/${crypto.randomUUID()}-${safe}`;
+        const up = await upload(pathname, file, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          contentType: file.type || undefined,
+        });
+        await addSupplierProductAttachment({
+          productId,
+          category: "project_doc",
+          projectNum,
+          projectDocType: docType,
+          name: file.name,
+          url: up.url,
+          blobPathname: up.pathname,
+          contentType: file.type || undefined,
+          size: file.size,
+        });
+      }
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function onDelete(id: number) {
+    if (!confirm("Delete this file? This can't be undone.")) return;
+    try {
+      await deleteSupplierProductAttachment({ id });
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
+  return (
+    <section
+      style={{
+        padding: 12,
+        borderRadius: 10,
+        background: "var(--lb-bg)",
+        border: "1px solid var(--lb-border)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <div>
+          <div
+            style={{ fontSize: 13, fontWeight: 800, color: "var(--lb-text)" }}
+          >
+            {docLabel}
+            {attachments.length > 0 && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  color: "var(--lb-text-3)",
+                }}
+              >
+                {attachments.length} file{attachments.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+          <div
+            style={{ fontSize: 11.5, color: "var(--lb-text-3)", marginTop: 2 }}
+          >
+            {docBlurb}
+          </div>
+        </div>
+        {canEdit && (
+          <label
+            style={{
+              ...MINI_BTN,
+              padding: "6px 12px",
+              fontSize: 12,
+              cursor: uploading ? "wait" : "pointer",
+              opacity: uploading ? 0.6 : 1,
+            }}
+          >
+            {uploading ? "Uploading…" : "Upload"}
+            <input
+              type="file"
+              hidden
+              multiple
+              onChange={(e) => onPickFiles(e.target.files)}
+              disabled={uploading}
+            />
+          </label>
+        )}
+      </div>
+
+      {err && (
+        <div
+          style={{
+            padding: 8,
+            borderRadius: 6,
+            background: "rgba(220,38,38,0.10)",
+            border: "1px solid rgba(220,38,38,0.40)",
+            color: "#dc2626",
+            fontSize: 12,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {attachments.length > 0 && (
+        <ul
+          style={{
+            listStyle: "none",
+            padding: 0,
+            margin: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          {attachments
+            .slice()
+            .sort(
+              (a, b) =>
+                new Date(b.uploadedAt).getTime() -
+                new Date(a.uploadedAt).getTime(),
+            )
+            .map((a) => (
+              <li
+                key={a.id}
+                style={{
+                  padding: "6px 10px",
+                  background: "var(--lb-bg-elev)",
+                  borderRadius: 6,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12.5,
+                }}
+              >
+                <a
+                  href={a.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    flex: 1,
+                    color: "var(--lb-accent)",
+                    textDecoration: "none",
+                    fontWeight: 600,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  ↗ {a.name}
+                </a>
+                <span style={{ fontSize: 11, color: "var(--lb-text-3)" }}>
+                  {fmtStamp(a.uploadedAt)}
+                </span>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => onDelete(a.id)}
+                    title="Delete"
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "var(--lb-text-3)",
+                      cursor: "pointer",
+                      fontSize: 12,
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </li>
+            ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// Picker dialog — pick a project from this supplier's existing entries
+// in supplier_project_entries OR type a new project number.
+function ProjectPickerDialog({
+  supplierProjects,
+  alreadyUsed,
+  onClose,
+  onPicked,
+}: {
+  supplierProjects: SupplierProjectOption[];
+  alreadyUsed: Set<string>;
+  onClose: () => void;
+  onPicked: (projectNum: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [newProject, setNewProject] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return supplierProjects;
+    return supplierProjects.filter(
+      (p) =>
+        p.projectNum.toLowerCase().includes(q) ||
+        (p.poNumber ?? "").toLowerCase().includes(q),
+    );
+  }, [supplierProjects, query]);
+
+  function pickNew() {
+    const v = newProject.trim();
+    if (!v) {
+      setErr("Type a project number");
+      return;
+    }
+    if (v.length > 64) {
+      setErr("Project number must be 64 characters or fewer");
+      return;
+    }
+    onPicked(v);
+  }
+
+  return (
+    <ModalShell title="Add this product to a project" onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {err && (
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              background: "rgba(220,38,38,0.10)",
+              border: "1px solid rgba(220,38,38,0.40)",
+              color: "#dc2626",
+              fontSize: 12.5,
+            }}
+          >
+            {err}
+          </div>
+        )}
+
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+              marginBottom: 6,
+            }}
+          >
+            Pick from this supplier&apos;s projects
+          </div>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search project number / PO number…"
+            style={INPUT_STYLE}
+          />
+          <div
+            style={{
+              marginTop: 6,
+              maxHeight: 220,
+              overflowY: "auto",
+              border: "1px solid var(--lb-border)",
+              borderRadius: 8,
+            }}
+          >
+            {supplierProjects.length === 0 ? (
+              <div
+                style={{
+                  padding: 10,
+                  fontSize: 12.5,
+                  color: "var(--lb-text-3)",
+                }}
+              >
+                This supplier has no project entries yet — use the
+                &quot;new project number&quot; field below.
+              </div>
+            ) : filtered.length === 0 ? (
+              <div
+                style={{
+                  padding: 10,
+                  fontSize: 12.5,
+                  color: "var(--lb-text-3)",
+                }}
+              >
+                No matches.
+              </div>
+            ) : (
+              filtered.map((p) => {
+                const used = alreadyUsed.has(p.projectNum);
+                return (
+                  <button
+                    key={p.projectNum}
+                    type="button"
+                    onClick={() => onPicked(p.projectNum)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      width: "100%",
+                      padding: "10px 12px",
+                      background: "transparent",
+                      color: "var(--lb-text)",
+                      border: "none",
+                      borderBottom: "1px solid var(--lb-border)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      fontSize: 13,
+                    }}
+                  >
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span
+                        style={{
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, monospace",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {p.projectNum}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 11.5,
+                          color: "var(--lb-text-3)",
+                        }}
+                      >
+                        {p.status ?? "—"}
+                        {p.poNumber ? ` · PO ${p.poNumber}` : ""}
+                      </span>
+                    </div>
+                    {used && (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: "var(--lb-text-3)",
+                        }}
+                      >
+                        already linked
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div
+          style={{
+            paddingTop: 8,
+            borderTop: "1px solid var(--lb-border)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+              marginBottom: 6,
+            }}
+          >
+            Or type a new project number
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={newProject}
+              onChange={(e) => setNewProject(e.target.value)}
+              placeholder="e.g. PRJ-2026-014"
+              style={{ ...INPUT_STYLE, flex: 1 }}
+            />
+            <button
+              type="button"
+              onClick={pickNew}
+              style={PRIMARY_BTN}
+            >
+              Use this
+            </button>
+          </div>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+

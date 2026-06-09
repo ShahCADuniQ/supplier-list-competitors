@@ -31,6 +31,15 @@ export function ensureSupplierInventorySchema(): Promise<void> {
       await db.execute(sql`ALTER TYPE "supplier_product_attachment_category" ADD VALUE IF NOT EXISTS 'ies_file'`);
       await db.execute(sql`ALTER TYPE "supplier_product_attachment_category" ADD VALUE IF NOT EXISTS 'drawing'`);
       await db.execute(sql`ALTER TYPE "supplier_product_attachment_category" ADD VALUE IF NOT EXISTS 'other_file'`);
+      // Migration 0040: "Quotes & Pricing" was replaced by a per-project
+      // doc bucket. Add the new category value + project doc-type enum,
+      // then migrate any existing quote_pricing rows over.
+      await db.execute(sql`ALTER TYPE "supplier_product_attachment_category" ADD VALUE IF NOT EXISTS 'project_doc'`);
+      await db.execute(sql`DO $$ BEGIN
+        CREATE TYPE "supplier_product_project_doc_type" AS ENUM (
+          'rfq', 'quote', 'po', 'pi', 'invoice'
+        );
+      EXCEPTION WHEN duplicate_object THEN null; END $$`);
 
       await db.execute(sql`
         CREATE TABLE IF NOT EXISTS "supplier_products" (
@@ -130,6 +139,23 @@ export function ensureSupplierInventorySchema(): Promise<void> {
       // place-to-buy does not spawn a new catalogue card. Schema of each
       // entry is defined in src/db/schema.ts > supplierProducts > purchaseSources.
       await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "purchase_sources" jsonb NOT NULL DEFAULT '[]'::jsonb`);
+
+      // Migration 0040: per-project document routing on attachments.
+      // project_num ties to supplier_project_entries.project_num so we can
+      // surface project metadata next to each upload.
+      await db.execute(sql`ALTER TABLE "supplier_product_attachments" ADD COLUMN IF NOT EXISTS "project_num" text`);
+      await db.execute(sql`ALTER TABLE "supplier_product_attachments" ADD COLUMN IF NOT EXISTS "project_doc_type" "supplier_product_project_doc_type"`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_product_attachments_project_num_idx" ON "supplier_product_attachments" ("project_num")`);
+      // One-time migration: any leftover quote_pricing rows become
+      // project_doc + quote, with no project assignment yet. The
+      // "No project" bucket in the UI surfaces them so users can
+      // re-assign them to a real project later.
+      await db.execute(sql`
+        UPDATE "supplier_product_attachments"
+          SET "category" = 'project_doc',
+              "project_doc_type" = 'quote'
+          WHERE "category" = 'quote_pricing'
+      `);
     } catch (e) {
       _ensured = null; // allow retry on next call if this somehow failed
       throw e;

@@ -545,13 +545,23 @@ export const supplierProductAttachmentCategory = pgEnum(
     "spec_datasheet",            // Specifications & Datasheet
     "ies_file",                  // IES Photometric Files
     "drawing",                   // Drawings (CAD / PDF)
-    "quote_pricing",             // Quotes & Pricing
+    "quote_pricing",             // (LEGACY — migrated to project_doc + quote)
     "contract_nda",              // Contracts & NDAs
     "certification_compliance",  // Certifications & Compliance
     "test_report_qc",            // Test Reports & QC
     "photo_media",               // Photos & Media
     "other_file",                // Other Files (with comment)
+    "project_doc",               // Projects bucket — file lives under a project_num + project_doc_type
   ],
+);
+
+// Per-project document type for attachments stored under the new
+// "Projects" sidebar bucket. Replaces the old single "quote_pricing"
+// category — every uploaded doc now sits inside a project and is
+// tagged with one of these five canonical types.
+export const supplierProductProjectDocType = pgEnum(
+  "supplier_product_project_doc_type",
+  ["rfq", "quote", "po", "pi", "invoice"],
 );
 
 export const supplierProductAttachments = pgTable(
@@ -567,6 +577,14 @@ export const supplierProductAttachments = pgTable(
     // user-defined section name is preserved here. NULL → not part of a
     // custom section. The UI groups custom-labeled rows by this column.
     customCategoryLabel: text("custom_category_label"),
+    // Project routing — set when category='project_doc'. The number ties
+    // back to supplier_project_entries.project_num so the Projects panel
+    // can show project metadata (PO #, status, dates) pulled from the
+    // existing supplier project tracker. NULL means "no project / ad-hoc".
+    projectNum: text("project_num"),
+    // Which of the 5 project document slots this file lives in. NULL for
+    // non-project attachments (every other category).
+    projectDocType: supplierProductProjectDocType("project_doc_type"),
     name: text("name").notNull(),
     url: text("url").notNull(),
     blobPathname: text("blob_pathname"),

@@ -213,7 +213,11 @@ export const SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES = [
   { key: "spec_datasheet",            label: "Specifications & Datasheet" },
   { key: "ies_file",                  label: "IES Photometric Files" },
   { key: "drawing",                   label: "Drawings (CAD / PDF)" },
-  { key: "quote_pricing",             label: "Quotes & Pricing" },
+  // "Projects" replaced the old single "Quotes & Pricing" bucket. The
+  // sidebar shows the unique-project count; clicking it opens a custom
+  // per-project panel (RFQ / Quote / PO / PI / Invoice slots) rather than
+  // the standard flat attachment list.
+  { key: "project_doc",               label: "Projects" },
   { key: "contract_nda",              label: "Contracts & NDAs" },
   { key: "certification_compliance",  label: "Certifications & Compliance" },
   { key: "test_report_qc",            label: "Test Reports & QC" },
@@ -221,7 +225,12 @@ export const SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES = [
 ] as const;
 
 export type SupplierProductAttachmentCategory =
-  (typeof SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES)[number]["key"];
+  (typeof SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES)[number]["key"]
+  // Legacy values kept for backward compatibility — the DB enum still
+  // contains them, so older rows in the wild can still be read. They're
+  // not surfaced in the sidebar list.
+  | "quote_pricing"
+  | "other_file";
 
 // Short label used in tight UI like card pills and table column headers.
 export function shortCategoryLabel(k: SupplierProductAttachmentCategory): string {
@@ -229,10 +238,25 @@ export function shortCategoryLabel(k: SupplierProductAttachmentCategory): string
     case "spec_datasheet":           return "Spec";
     case "ies_file":                 return "IES";
     case "drawing":                  return "Drawing";
+    case "project_doc":              return "Project";
     case "quote_pricing":            return "Quote";
     case "contract_nda":             return "Contract";
     case "certification_compliance": return "Cert.";
     case "test_report_qc":           return "QC";
     case "photo_media":              return "Media";
+    case "other_file":               return "Other";
   }
 }
+
+// The five canonical per-project document types. Order matches the
+// procurement lifecycle: RFQ → Quote → PO → PI → Invoice. The Projects
+// panel renders one slot per type.
+export const PROJECT_DOC_TYPES = [
+  { key: "rfq",      label: "RFQ",     blurb: "Request for Quotation sent to the supplier." },
+  { key: "quote",    label: "Quote",   blurb: "Supplier's pricing reply / quotation document." },
+  { key: "po",       label: "PO",      blurb: "Purchase Order issued to the supplier." },
+  { key: "pi",       label: "PI",      blurb: "Proforma Invoice from the supplier." },
+  { key: "invoice",  label: "Invoice", blurb: "Final / commercial invoice for accounting." },
+] as const;
+
+export type ProjectDocType = (typeof PROJECT_DOC_TYPES)[number]["key"];
