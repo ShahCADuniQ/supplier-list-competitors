@@ -12,13 +12,15 @@ import {
   type PendingProcurementDraft,
 } from "./rfq-email-actions";
 
-export default function ProcurementReviewQueue({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
+type Props =
+  | { open: boolean; embedded?: false; onClose: () => void }
+  | { embedded: true; onClose: () => void; open?: never };
+
+export default function ProcurementReviewQueue(props: Props) {
+  const { onClose } = props;
+  const embedded = props.embedded === true;
+  const open = embedded ? true : (props as { open: boolean }).open;
+
   const [drafts, setDrafts] = useState<PendingProcurementDraft[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -35,32 +37,8 @@ export default function ProcurementReviewQueue({
 
   if (!open) return null;
 
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.45)",
-        display: "grid",
-        placeItems: "center",
-        zIndex: 70,
-        padding: 24,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "var(--lb-bg-elev)",
-          border: "1px solid var(--lb-border)",
-          borderRadius: 14,
-          width: "min(880px, 100%)",
-          maxHeight: "90vh",
-          overflowY: "auto",
-          padding: 20,
-          color: "var(--lb-text)",
-        }}
-      >
+  const inner = (
+    <>
         <header
           style={{
             display: "flex",
@@ -71,7 +49,7 @@ export default function ProcurementReviewQueue({
         >
           <div>
             <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>
-              Procurement review queue
+              {embedded ? "Procurement review" : "Procurement review queue"}
             </h2>
             <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>
               RFQ email drafts awaiting approval before they go to suppliers.
@@ -80,9 +58,28 @@ export default function ProcurementReviewQueue({
           <button
             type="button"
             onClick={onClose}
-            style={{ background: "transparent", border: "none", color: "var(--lb-text-3)", fontSize: 20, cursor: "pointer" }}
+            style={
+              embedded
+                ? {
+                    padding: "6px 12px",
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    borderRadius: 999,
+                    border: "1px solid var(--lb-border)",
+                    background: "var(--lb-bg)",
+                    color: "var(--lb-text-2)",
+                    cursor: "pointer",
+                  }
+                : {
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--lb-text-3)",
+                    fontSize: 20,
+                    cursor: "pointer",
+                  }
+            }
           >
-            ×
+            {embedded ? "← Back" : "×"}
           </button>
         </header>
 
@@ -132,6 +129,54 @@ export default function ProcurementReviewQueue({
             ))}
           </ul>
         )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <section
+        style={{
+          padding: 20,
+          borderRadius: 12,
+          background: "var(--lb-bg-elev)",
+          border: "1px solid var(--lb-border)",
+          color: "var(--lb-text)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+        }}
+      >
+        {inner}
+      </section>
+    );
+  }
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "grid",
+        placeItems: "center",
+        zIndex: 70,
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--lb-bg-elev)",
+          border: "1px solid var(--lb-border)",
+          borderRadius: 14,
+          width: "min(880px, 100%)",
+          maxHeight: "90vh",
+          overflowY: "auto",
+          padding: 20,
+          color: "var(--lb-text)",
+        }}
+      >
+        {inner}
       </div>
     </div>
   );
@@ -151,8 +196,19 @@ function DraftCard({
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  // Imen picks how the supplier gets it on approve. Default to email so
+  // the queue's behaviour matches what the buyer would have done with a
+  // direct-to-supplier send.
+  const [deliverEmail, setDeliverEmail] = useState(true);
+  const [deliverPlatform, setDeliverPlatform] = useState(
+    draft.supplierId != null,
+  );
 
   async function approve() {
+    if (!deliverEmail && !deliverPlatform) {
+      onError("Pick at least one channel to send the supplier.");
+      return;
+    }
     setBusy(true);
     onError(null);
     try {
@@ -161,6 +217,8 @@ function DraftCard({
         finalSubject: subject,
         finalBody: body,
         reviewerNotes: notes || undefined,
+        deliverToSupplierEmail: deliverEmail,
+        deliverToSupplierPlatform: deliverPlatform,
       });
       onChanged();
     } catch (e) {
@@ -262,6 +320,55 @@ function DraftCard({
             placeholder="Tell the buyer what to fix before resubmitting…"
           />
         </label>
+      )}
+
+      {!rejecting && (
+        <div
+          style={{
+            padding: 8,
+            borderRadius: 8,
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10.5,
+              fontWeight: 800,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+              marginBottom: 4,
+            }}
+          >
+            Deliver to the supplier
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+            <input
+              type="checkbox"
+              checked={deliverPlatform}
+              disabled={draft.supplierId == null}
+              onChange={(e) => setDeliverPlatform(e.target.checked)}
+            />
+            Through the platform
+            {draft.supplierId == null && (
+              <span style={{ color: "var(--lb-text-3)", fontSize: 11.5 }}>
+                (supplier not registered yet)
+              </span>
+            )}
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+            <input
+              type="checkbox"
+              checked={deliverEmail}
+              onChange={(e) => setDeliverEmail(e.target.checked)}
+            />
+            By email to {draft.toEmail}
+          </label>
+        </div>
       )}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>

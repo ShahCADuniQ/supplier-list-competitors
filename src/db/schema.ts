@@ -2101,6 +2101,23 @@ export const rfqEmailDrafts = pgTable(
     // recipient (registered suppliers click into the vendor portal).
     includeMagicLink: boolean("include_magic_link").notNull().default(true),
     route: rfqEmailDraftRoute("route").notNull(),
+    // Delivery flags. These four toggles are mutually exclusive in pairs:
+    // the user picks EITHER deliver-to-supplier-* (send now) OR
+    // procurement-* (route through procurement first); never both. Within
+    // each pair both can be true → e.g. notify procurement on the platform
+    // AND email her at the same time.
+    deliverToSupplierEmail: boolean("deliver_to_supplier_email")
+      .notNull()
+      .default(false),
+    deliverToSupplierPlatform: boolean("deliver_to_supplier_platform")
+      .notNull()
+      .default(false),
+    procurementViaEmail: boolean("procurement_via_email")
+      .notNull()
+      .default(false),
+    procurementViaPlatform: boolean("procurement_via_platform")
+      .notNull()
+      .default(false),
     status: rfqEmailDraftStatus("status").notNull().default("draft"),
     // Audit trail: who composed, who reviewed, who sent.
     composedByClerkId: text("composed_by_clerk_id"),

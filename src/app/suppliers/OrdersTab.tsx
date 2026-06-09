@@ -58,7 +58,8 @@ type FullSupplier = Supplier & {
 type Mode =
   | { kind: "list" }
   | { kind: "create" }
-  | { kind: "detail"; rfqId: number };
+  | { kind: "detail"; rfqId: number }
+  | { kind: "procurement" };
 
 export default function OrdersTab({
   suppliers,
@@ -136,6 +137,7 @@ export default function OrdersTab({
           loading={loading}
           canEdit={canEdit}
           onCreate={() => setMode({ kind: "create" })}
+          onOpenProcurement={() => setMode({ kind: "procurement" })}
           onOpen={(id) => setMode({ kind: "detail", rfqId: id })}
           onDelete={async (id) => {
             if (!confirm("Delete this RFQ and all associated quotes? Cannot be undone.")) return;
@@ -177,6 +179,16 @@ export default function OrdersTab({
           refresh={refresh}
         />
       )}
+
+      {mode.kind === "procurement" && (
+        <ProcurementReviewQueue
+          embedded
+          onClose={() => {
+            setMode({ kind: "list" });
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -191,6 +203,7 @@ function ListView({
   canEdit,
   onCreate,
   onOpen,
+  onOpenProcurement,
   onDelete,
 }: {
   rfqs: RfqListRow[];
@@ -198,6 +211,7 @@ function ListView({
   canEdit: boolean;
   onCreate: () => void;
   onOpen: (id: number) => void;
+  onOpenProcurement: () => void;
   onDelete: (id: number) => void;
 }) {
   // Project filter + free-text search. "all" = show every project; any other
@@ -205,9 +219,6 @@ function ListView({
   // and matches against project number, project name, RFQ number, or niche.
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [search, setSearch] = useState<string>("");
-  // Procurement-review queue modal. Open from the header so Imen can pick
-  // up pending drafts without leaving the Orders tab.
-  const [procurementOpen, setProcurementOpen] = useState(false);
 
   const projectOptions = useMemo(() => {
     const seen = new Map<string, { num: string; name: string | null; count: number }>();
@@ -262,7 +273,7 @@ function ListView({
           {canEdit && (
             <button
               type="button"
-              onClick={() => setProcurementOpen(true)}
+              onClick={onOpenProcurement}
               style={{
                 ...btnPrimary,
                 background: "var(--lb-bg-elev)",
@@ -285,10 +296,6 @@ function ListView({
           )}
         </div>
       </header>
-      <ProcurementReviewQueue
-        open={procurementOpen}
-        onClose={() => setProcurementOpen(false)}
-      />
 
       <section
         style={{

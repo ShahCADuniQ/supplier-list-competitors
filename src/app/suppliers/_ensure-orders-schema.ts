@@ -451,6 +451,33 @@ export function ensureOrdersSchema(): Promise<void> {
         )`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "rfq_email_drafts_rfq_idx" ON "rfq_email_drafts" ("rfq_id")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "rfq_email_drafts_status_idx" ON "rfq_email_drafts" ("status")`);
+
+      // Delivery-flag columns (added in the same patch that introduced
+      // multi-select delivery options + procurement-vs-supplier mutual
+      // exclusion). Idempotent ADD COLUMN IF NOT EXISTS so re-runs are
+      // safe.
+      await db.execute(sql`ALTER TABLE "rfq_email_drafts" ADD COLUMN IF NOT EXISTS "deliver_to_supplier_email" boolean NOT NULL DEFAULT false`);
+      await db.execute(sql`ALTER TABLE "rfq_email_drafts" ADD COLUMN IF NOT EXISTS "deliver_to_supplier_platform" boolean NOT NULL DEFAULT false`);
+      await db.execute(sql`ALTER TABLE "rfq_email_drafts" ADD COLUMN IF NOT EXISTS "procurement_via_email" boolean NOT NULL DEFAULT false`);
+      await db.execute(sql`ALTER TABLE "rfq_email_drafts" ADD COLUMN IF NOT EXISTS "procurement_via_platform" boolean NOT NULL DEFAULT false`);
+      // Backfill existing rows from the legacy 'route' column so the new
+      // flags reflect their original intent. direct_to_supplier rows
+      // become email-only (the historical behaviour); via_procurement
+      // rows become email-only to procurement.
+      await db.execute(sql`
+        UPDATE "rfq_email_drafts"
+          SET "deliver_to_supplier_email" = true
+          WHERE "route" = 'direct_to_supplier'
+            AND "deliver_to_supplier_email" = false
+            AND "deliver_to_supplier_platform" = false
+      `);
+      await db.execute(sql`
+        UPDATE "rfq_email_drafts"
+          SET "procurement_via_email" = true
+          WHERE "route" = 'via_procurement'
+            AND "procurement_via_email" = false
+            AND "procurement_via_platform" = false
+      `);
     } catch (e) {
       console.warn(
         "[orders] ensureOrdersSchema failed — run `npm run db:apply` to apply migration 0024.",

@@ -12,9 +12,10 @@
 // exercised without real email delivery.
 
 import { revalidatePath } from "next/cache";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  erpNotifications,
   rfqEmailDrafts,
   rfqRecipients,
   rfqs,
@@ -36,6 +37,86 @@ const PROCUREMENT_NAME =
   process.env.PROCUREMENT_NAME || "Procurement (Imen)";
 
 export type RfqEmailDraftRoute = "direct_to_supplier" | "via_procurement";
+
+// In-app notification for the procurement reviewer (Imen/Itzel). Looks up
+// the user profile whose email matches PROCUREMENT_EMAIL and inserts an
+// erp_notifications row so their bell lights up.
+async function notifyProcurementInApp(input: {
+  title: string;
+  body?: string;
+  linkUrl?: string;
+  rfqId?: number;
+}): Promise<void> {
+  try {
+    const [profile] = await db
+      .select({ clerkUserId: userProfiles.clerkUserId })
+      .from(userProfiles)
+      .where(sql`LOWER(${userProfiles.email}) = ${PROCUREMENT_EMAIL.toLowerCase()}`)
+      .limit(1);
+    if (!profile) return;
+    await db.insert(erpNotifications).values({
+      targetClerkId: profile.clerkUserId,
+      kind: "rfq.sent",
+      title: input.title,
+      body: input.body ?? null,
+      linkUrl: input.linkUrl ?? null,
+      rfqId: input.rfqId ?? null,
+    });
+  } catch (e) {
+    console.warn("[rfq-email] notifyProcurementInApp failed:", e);
+  }
+}
+
+// In-app notification for the supplier. Mirrors the existing
+// notifySupplier flow in rfq-actions.ts: find every user profile whose
+// email matches a supplier_contacts row (or suppliers.email) and write a
+// row to erp_notifications.
+async function notifySupplierInApp(input: {
+  supplierId: number;
+  title: string;
+  body?: string;
+  linkUrl?: string;
+  rfqId?: number;
+}): Promise<void> {
+  try {
+    const emails = (await db.execute(sql`
+      SELECT LOWER(email) AS email FROM suppliers
+        WHERE id = ${input.supplierId} AND email IS NOT NULL
+      UNION
+      SELECT LOWER(email) AS email FROM supplier_contacts
+        WHERE supplier_id = ${input.supplierId}
+    `)) as unknown as { rows?: Array<{ email: string }> } | Array<{ email: string }>;
+    const list = Array.isArray(emails)
+      ? emails
+      : Array.isArray(emails?.rows)
+        ? emails.rows
+        : [];
+    const emailSet = list.map((r) => r.email).filter(Boolean);
+    if (emailSet.length === 0) return;
+    const recipients = await db
+      .select({ id: userProfiles.clerkUserId })
+      .from(userProfiles)
+      .where(
+        sql`${userProfiles.isSupplier} = true AND LOWER(${userProfiles.email}) IN (${sql.join(
+          emailSet.map((e) => sql`${e}`),
+          sql`, `,
+        )})`,
+      );
+    if (recipients.length === 0) return;
+    await db.insert(erpNotifications).values(
+      recipients.map((u) => ({
+        targetClerkId: u.id,
+        kind: "rfq.sent" as const,
+        title: input.title,
+        body: input.body ?? null,
+        linkUrl: input.linkUrl ?? null,
+        rfqId: input.rfqId ?? null,
+      })),
+    );
+  } catch (e) {
+    console.warn("[rfq-email] notifySupplierInApp failed:", e);
+  }
+}
 
 // ── Compose helpers ─────────────────────────────────────────────────────────
 
@@ -179,8 +260,37 @@ export type SaveRfqEmailDraftInput = {
   bodyText: string;
   aiSummary?: string | null;
   includeMagicLink?: boolean;
-  route: RfqEmailDraftRoute;
+  // Delivery flags. Mutual exclusion is UI-enforced too: if ANY of the
+  // procurement flags is true, BOTH supplier flags must be false (and
+  // vice versa). Otherwise this would create a weird half-routed flow.
+  deliverToSupplierEmail: boolean;
+  deliverToSupplierPlatform: boolean;
+  procurementViaEmail: boolean;
+  procurementViaPlatform: boolean;
 };
+
+function validateDeliveryFlags(input: {
+  deliverToSupplierEmail: boolean;
+  deliverToSupplierPlatform: boolean;
+  procurementViaEmail: boolean;
+  procurementViaPlatform: boolean;
+}): "direct_to_supplier" | "via_procurement" {
+  const supplierPicked =
+    input.deliverToSupplierEmail || input.deliverToSupplierPlatform;
+  const procurementPicked =
+    input.procurementViaEmail || input.procurementViaPlatform;
+  if (!supplierPicked && !procurementPicked) {
+    throw new Error(
+      "Pick at least one delivery option: send to the supplier, or route through procurement.",
+    );
+  }
+  if (supplierPicked && procurementPicked) {
+    throw new Error(
+      "Pick EITHER supplier delivery OR procurement routing — not both at once.",
+    );
+  }
+  return procurementPicked ? "via_procurement" : "direct_to_supplier";
+}
 
 export async function saveRfqEmailDraft(
   input: SaveRfqEmailDraftInput,
@@ -188,6 +298,7 @@ export async function saveRfqEmailDraft(
   const profile = await requireSupplierEditor();
   await ensureOrdersSchema();
 
+  const route = validateDeliveryFlags(input);
   const replyTo = profile.email ?? null;
 
   if (input.draftId) {
@@ -208,7 +319,11 @@ export async function saveRfqEmailDraft(
         bodyText: input.bodyText,
         aiSummary: input.aiSummary ?? null,
         includeMagicLink: input.includeMagicLink ?? true,
-        route: input.route,
+        route,
+        deliverToSupplierEmail: input.deliverToSupplierEmail,
+        deliverToSupplierPlatform: input.deliverToSupplierPlatform,
+        procurementViaEmail: input.procurementViaEmail,
+        procurementViaPlatform: input.procurementViaPlatform,
         replyToEmail: existing.replyToEmail ?? replyTo,
         updatedAt: new Date(),
       })
@@ -230,7 +345,11 @@ export async function saveRfqEmailDraft(
       bodyText: input.bodyText,
       aiSummary: input.aiSummary ?? null,
       includeMagicLink: input.includeMagicLink ?? true,
-      route: input.route,
+      route,
+      deliverToSupplierEmail: input.deliverToSupplierEmail,
+      deliverToSupplierPlatform: input.deliverToSupplierPlatform,
+      procurementViaEmail: input.procurementViaEmail,
+      procurementViaPlatform: input.procurementViaPlatform,
       status: "draft",
       composedByClerkId: profile.clerkUserId,
     })
@@ -240,10 +359,9 @@ export async function saveRfqEmailDraft(
   return { id: row.id };
 }
 
-// Submit a draft. If route === "direct_to_supplier" → sends now and marks
-// as 'sent'. If route === "via_procurement" → marks as
-// 'pending_procurement_review' and emails the procurement contact (Imen)
-// a short heads-up with a link to the review page.
+// Submit a draft. If the draft is routed through procurement → mark
+// pending and notify procurement per the procurement_via_* flags. If
+// the draft is direct → deliver per the deliver_to_supplier_* flags.
 export async function submitRfqEmailDraft(input: {
   draftId: number;
 }): Promise<{ sent: boolean; status: string }> {
@@ -260,10 +378,12 @@ export async function submitRfqEmailDraft(input: {
     throw new Error("This draft has already been sent");
 
   if (draft.route === "direct_to_supplier") {
-    return await deliverDraft(draft);
+    return await deliverDraftToSupplier(draft);
   }
 
-  // Procurement route — mark pending and notify procurement.
+  // Procurement route — mark pending and notify procurement on the
+  // selected channel(s). The actual RFQ goes to the supplier later, when
+  // procurement approves.
   await db
     .update(rfqEmailDrafts)
     .set({
@@ -272,52 +392,59 @@ export async function submitRfqEmailDraft(input: {
     })
     .where(eq(rfqEmailDrafts.id, draft.id));
 
-  // Notify procurement out of band so Imen knows there's something to
-  // review. We send to the same transport (Resend) — a thin meta-email,
-  // not the actual RFQ message. The actual RFQ goes out on approve.
   const baseAppUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
   const reviewUrl = `${baseAppUrl}/suppliers?procurement=${draft.id}`;
-  try {
-    await sendEmail({
-      to: { email: PROCUREMENT_EMAIL, name: PROCUREMENT_NAME },
-      replyTo: profile.email ?? undefined,
-      subject: `[Review] RFQ email draft to ${draft.toEmail}`,
-      text: [
-        `${profile.displayName ?? profile.email ?? "A buyer"} drafted an RFQ email and routed it through procurement for review.`,
-        "",
-        `Recipient: ${draft.toEmail}`,
-        `Subject:   ${draft.subject}`,
-        "",
-        `Review + approve / reject:`,
-        reviewUrl,
-        "",
-        "— CADuniQ",
-      ].join("\n"),
+  const composerName = profile.displayName ?? profile.email ?? "A buyer";
+
+  if (draft.procurementViaEmail) {
+    try {
+      await sendEmail({
+        to: { email: PROCUREMENT_EMAIL, name: PROCUREMENT_NAME },
+        replyTo: profile.email ?? undefined,
+        subject: `[Review] RFQ email draft to ${draft.toEmail}`,
+        text: [
+          `${composerName} drafted an RFQ email and routed it through procurement for review.`,
+          "",
+          `Recipient: ${draft.toEmail}`,
+          `Subject:   ${draft.subject}`,
+          "",
+          `Review + approve / reject:`,
+          reviewUrl,
+          "",
+          "— CADuniQ",
+        ].join("\n"),
+      });
+    } catch (e) {
+      console.warn("[rfq-email] procurement email notify failed:", e);
+    }
+  }
+  if (draft.procurementViaPlatform) {
+    await notifyProcurementInApp({
+      title: `[Review] RFQ ${draft.subject}`,
+      body: `${composerName} routed an RFQ email to you for review (recipient ${draft.toEmail}).`,
+      linkUrl: reviewUrl,
+      rfqId: draft.rfqId,
     });
-  } catch (e) {
-    // Logged but don't fail the submit — the draft is still queued for
-    // review and Imen will see it in the dashboard either way.
-    console.warn("[rfq-email] procurement notify failed:", e);
   }
 
   revalidatePath("/suppliers");
   return { sent: false, status: "pending_procurement_review" };
 }
 
-// Internal: actually send + flip status to 'sent'. Used by both the
-// direct-send path and the procurement-approval path.
-async function deliverDraft(
+// Internal: deliver a draft to the supplier and flip status to 'sent'.
+// Dispatches to email and/or in-app notification per the
+// deliver_to_supplier_* flags. Called by the direct-send submit path and
+// by the procurement-approval path (after Imen edits + approves).
+async function deliverDraftToSupplier(
   draft: RfqEmailDraft,
 ): Promise<{ sent: boolean; status: string }> {
-  // Compose the final body: bodyText + (optional) AI summary + magic
-  // link block when the supplier is registered.
-  const bodyParts: string[] = [draft.bodyText];
-  if (draft.aiSummary && draft.aiSummary.trim()) {
-    bodyParts.push("");
-    bodyParts.push("— RFQ summary —");
-    bodyParts.push(draft.aiSummary.trim());
-  }
-  if (draft.includeMagicLink && draft.recipientId != null) {
+  let providerMessageId: string | null = null;
+  let actuallySent = false;
+
+  // Compose the final email body: bodyText + (optional) AI summary +
+  // magic link block when the recipient has a portal token.
+  let recipientPortalUrl: string | null = null;
+  if (draft.recipientId != null) {
     const [recipient] = await db
       .select({ accessToken: rfqRecipients.accessToken })
       .from(rfqRecipients)
@@ -326,46 +453,80 @@ async function deliverDraft(
     if (recipient) {
       const baseAppUrl =
         process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
-      bodyParts.push("");
-      bodyParts.push("Submit your quote here (no account needed):");
-      bodyParts.push(`${baseAppUrl}/vendor/${recipient.accessToken}`);
+      recipientPortalUrl = `${baseAppUrl}/vendor/${recipient.accessToken}`;
     }
   }
 
-  const result = await sendEmail({
-    from: defaultFromAddress(),
-    to: draft.toName
-      ? { email: draft.toEmail, name: draft.toName }
-      : draft.toEmail,
-    replyTo: draft.replyToEmail ?? undefined,
-    subject: draft.subject,
-    text: bodyParts.join("\n"),
-  });
+  if (draft.deliverToSupplierEmail) {
+    const bodyParts: string[] = [draft.bodyText];
+    if (draft.aiSummary && draft.aiSummary.trim()) {
+      bodyParts.push("");
+      bodyParts.push("— RFQ summary —");
+      bodyParts.push(draft.aiSummary.trim());
+    }
+    if (draft.includeMagicLink && recipientPortalUrl) {
+      bodyParts.push("");
+      bodyParts.push("Submit your quote here (no account needed):");
+      bodyParts.push(recipientPortalUrl);
+    }
+    const result = await sendEmail({
+      from: defaultFromAddress(),
+      to: draft.toName
+        ? { email: draft.toEmail, name: draft.toName }
+        : draft.toEmail,
+      replyTo: draft.replyToEmail ?? undefined,
+      subject: draft.subject,
+      text: bodyParts.join("\n"),
+    });
+    providerMessageId = result.id;
+    actuallySent = actuallySent || result.sent;
+  }
+
+  if (draft.deliverToSupplierPlatform && draft.supplierId != null) {
+    await notifySupplierInApp({
+      supplierId: draft.supplierId,
+      title: `New RFQ: ${draft.subject}`,
+      body: draft.bodyText.slice(0, 200),
+      linkUrl: recipientPortalUrl ?? "/portal",
+      rfqId: draft.rfqId,
+    });
+    actuallySent = true;
+  }
 
   await db
     .update(rfqEmailDrafts)
     .set({
       status: "sent",
       sentAt: new Date(),
-      providerMessageId: result.id,
+      providerMessageId,
       updatedAt: new Date(),
     })
     .where(eq(rfqEmailDrafts.id, draft.id));
   revalidatePath("/suppliers");
-  return { sent: result.sent, status: "sent" };
+  return { sent: actuallySent, status: "sent" };
 }
 
 // ── Procurement review ──────────────────────────────────────────────────────
 
-// Approve a pending draft — optionally with edits — and deliver.
+// Approve a pending draft — optionally with edits — and deliver. Imen
+// picks which channel(s) the supplier gets the RFQ on (email, the
+// platform notification, or both). At least one is required.
 export async function approveAndSendRfqEmailDraft(input: {
   draftId: number;
   finalSubject?: string;
   finalBody?: string;
   reviewerNotes?: string;
+  deliverToSupplierEmail: boolean;
+  deliverToSupplierPlatform: boolean;
 }): Promise<{ sent: boolean }> {
   const profile = await requireSupplierEditor();
   await ensureOrdersSchema();
+
+  if (!input.deliverToSupplierEmail && !input.deliverToSupplierPlatform) {
+    throw new Error(
+      "Pick at least one delivery channel: email, platform notification, or both.",
+    );
+  }
 
   const [draft] = await db
     .select()
@@ -377,7 +538,7 @@ export async function approveAndSendRfqEmailDraft(input: {
     throw new Error("Draft is not awaiting review");
   }
 
-  // Apply Imen's edits before sending.
+  // Apply Imen's edits + the chosen delivery channels.
   const subject = input.finalSubject?.trim() || draft.subject;
   const bodyText = input.finalBody ?? draft.bodyText;
   await db
@@ -386,6 +547,8 @@ export async function approveAndSendRfqEmailDraft(input: {
       subject,
       bodyText,
       status: "approved",
+      deliverToSupplierEmail: input.deliverToSupplierEmail,
+      deliverToSupplierPlatform: input.deliverToSupplierPlatform,
       reviewedByClerkId: profile.clerkUserId,
       reviewedAt: new Date(),
       reviewerNotes: input.reviewerNotes?.trim() || null,
@@ -397,10 +560,12 @@ export async function approveAndSendRfqEmailDraft(input: {
     ...draft,
     subject,
     bodyText,
+    deliverToSupplierEmail: input.deliverToSupplierEmail,
+    deliverToSupplierPlatform: input.deliverToSupplierPlatform,
     status: "approved",
   };
 
-  return await deliverDraft(updated);
+  return await deliverDraftToSupplier(updated);
 }
 
 // Reject a pending draft. The composer gets a notification (their bell)

@@ -54,9 +54,28 @@ export default function RfqEmailDraftDialog({
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [includeMagicLink, setIncludeMagicLink] = useState(true);
   const [includeAiSummary, setIncludeAiSummary] = useState(!isRegistered);
-  const [route, setRoute] = useState<"direct_to_supplier" | "via_procurement">(
-    "direct_to_supplier",
-  );
+  // Four mutually-exclusive-in-pairs delivery flags. Supplier ones default
+  // to ON for registered suppliers (platform notification + email both
+  // checked); unregistered defaults to email-only. Procurement flags are
+  // off by default.
+  const [deliverToSupplierEmail, setDeliverToSupplierEmail] = useState(true);
+  const [deliverToSupplierPlatform, setDeliverToSupplierPlatform] =
+    useState(isRegistered);
+  const [procurementViaEmail, setProcurementViaEmail] = useState(false);
+  const [procurementViaPlatform, setProcurementViaPlatform] = useState(false);
+  const procurementChecked = procurementViaEmail || procurementViaPlatform;
+  const supplierChecked =
+    deliverToSupplierEmail || deliverToSupplierPlatform;
+  // Mutual exclusion: checking a procurement option clears supplier
+  // options, and vice versa. The effect runs whenever the user toggles
+  // any of the four checkboxes.
+  useEffect(() => {
+    if (procurementChecked && supplierChecked) {
+      setDeliverToSupplierEmail(false);
+      setDeliverToSupplierPlatform(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [procurementChecked]);
   const [transport, setTransport] = useState<{
     configured: boolean;
     fromAddress: string;
@@ -114,7 +133,10 @@ export default function RfqEmailDraftDialog({
         bodyText,
         aiSummary: includeAiSummary ? aiSummary : null,
         includeMagicLink: includeMagicLink && !!magicLinkUrl,
-        route,
+        deliverToSupplierEmail,
+        deliverToSupplierPlatform,
+        procurementViaEmail,
+        procurementViaPlatform,
       });
       const submit = await submitRfqEmailDraft({ draftId: save.id });
       onSent(submit.status);
@@ -278,36 +300,135 @@ export default function RfqEmailDraftDialog({
               )}
             </div>
 
-            <Field label="Routing">
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5 }}>
-                  <input
-                    type="radio"
-                    name="route"
-                    checked={route === "direct_to_supplier"}
-                    onChange={() => setRoute("direct_to_supplier")}
-                  />
-                  <div>
-                    <div style={{ fontWeight: 700 }}>Send direct to the supplier</div>
-                    <div style={{ color: "var(--lb-text-3)" }}>
-                      Email goes out now to {defaultToEmail}. Their reply lands in your inbox.
-                    </div>
+            <Field label="Delivery options">
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {/* Supplier group */}
+                <div
+                  style={{
+                    padding: 10,
+                    borderRadius: 8,
+                    background: procurementChecked
+                      ? "transparent"
+                      : "var(--lb-bg)",
+                    border: procurementChecked
+                      ? "1px dashed var(--lb-border)"
+                      : "1px solid var(--lb-border)",
+                    opacity: procurementChecked ? 0.45 : 1,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 800,
+                      letterSpacing: 0.6,
+                      textTransform: "uppercase",
+                      color: "var(--lb-text-3)",
+                      marginBottom: 6,
+                    }}
+                  >
+                    To the supplier
                   </div>
-                </label>
-                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5 }}>
-                  <input
-                    type="radio"
-                    name="route"
-                    checked={route === "via_procurement"}
-                    onChange={() => setRoute("via_procurement")}
-                  />
-                  <div>
-                    <div style={{ fontWeight: 700 }}>Route through Procurement (Imen)</div>
-                    <div style={{ color: "var(--lb-text-3)" }}>
-                      Imen reviews and approves before the email goes to the supplier. You&apos;ll get a notification on her decision.
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, marginBottom: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={deliverToSupplierPlatform}
+                      disabled={procurementChecked || !isRegistered}
+                      onChange={(e) =>
+                        setDeliverToSupplierPlatform(e.target.checked)
+                      }
+                    />
+                    <div>
+                      <div style={{ fontWeight: 700 }}>
+                        Through the platform
+                        {!isRegistered && (
+                          <span style={{ marginLeft: 6, fontWeight: 500, color: "var(--lb-text-3)" }}>
+                            (supplier isn&apos;t registered yet)
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ color: "var(--lb-text-3)" }}>
+                        Lights up their dashboard notification bell.
+                      </div>
                     </div>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5 }}>
+                    <input
+                      type="checkbox"
+                      checked={deliverToSupplierEmail}
+                      disabled={procurementChecked}
+                      onChange={(e) =>
+                        setDeliverToSupplierEmail(e.target.checked)
+                      }
+                    />
+                    <div>
+                      <div style={{ fontWeight: 700 }}>By email</div>
+                      <div style={{ color: "var(--lb-text-3)" }}>
+                        Sends to {defaultToEmail}. Replies land in your inbox.
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Procurement group */}
+                <div
+                  style={{
+                    padding: 10,
+                    borderRadius: 8,
+                    background: supplierChecked
+                      ? "transparent"
+                      : "var(--lb-bg)",
+                    border: supplierChecked
+                      ? "1px dashed var(--lb-border)"
+                      : "1px solid var(--lb-border)",
+                    opacity: supplierChecked ? 0.45 : 1,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 800,
+                      letterSpacing: 0.6,
+                      textTransform: "uppercase",
+                      color: "var(--lb-text-3)",
+                      marginBottom: 6,
+                    }}
+                  >
+                    Route through procurement
                   </div>
-                </label>
+                  <div style={{ fontSize: 11.5, color: "var(--lb-text-3)", marginBottom: 6 }}>
+                    Procurement reviews the draft first. On approve, they pick how it goes to the supplier (email, platform, or both).
+                  </div>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, marginBottom: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={procurementViaPlatform}
+                      disabled={supplierChecked}
+                      onChange={(e) =>
+                        setProcurementViaPlatform(e.target.checked)
+                      }
+                    />
+                    <div>
+                      <div style={{ fontWeight: 700 }}>
+                        Notify procurement through the platform
+                      </div>
+                    </div>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5 }}>
+                    <input
+                      type="checkbox"
+                      checked={procurementViaEmail}
+                      disabled={supplierChecked}
+                      onChange={(e) =>
+                        setProcurementViaEmail(e.target.checked)
+                      }
+                    />
+                    <div>
+                      <div style={{ fontWeight: 700 }}>
+                        Notify procurement by email
+                      </div>
+                    </div>
+                  </label>
+                </div>
               </div>
             </Field>
 
@@ -318,12 +439,17 @@ export default function RfqEmailDraftDialog({
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={busy || !subject.trim() || !bodyText.trim()}
+                disabled={
+                  busy ||
+                  !subject.trim() ||
+                  !bodyText.trim() ||
+                  (!supplierChecked && !procurementChecked)
+                }
                 style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }}
               >
                 {busy
                   ? "Sending…"
-                  : route === "via_procurement"
+                  : procurementChecked
                     ? "Send for review"
                     : "Send now"}
               </button>
