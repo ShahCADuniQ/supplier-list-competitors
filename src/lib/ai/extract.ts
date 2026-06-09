@@ -4,6 +4,7 @@ import { fetchUrlAsText, parseFile, type ParsedSource } from "./parsers";
 import { perplexityChat } from "./perplexity";
 import { claudeClient, CLAUDE_MODEL } from "./claude";
 import { tryFetchShopifyProduct } from "./shopify";
+import { scrapeHtmlProduct } from "./html-product";
 import { SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
 
 // AI extractor uses the same canonical category vocabulary the
@@ -969,6 +970,45 @@ export async function extractSupplierProductFromUrl(input: {
     };
   }
 
+  // 0.5) Direct HTML scrape. Most modern e-commerce platforms (PrestaShop,
+  //      Magento, WooCommerce, BigCommerce, Wix, Squarespace, etc.) expose a
+  //      schema.org/Product JSON-LD block AND og:image meta tags with the
+  //      canonical product hero. If we find a Product schema we can build
+  //      the entire card from it without Perplexity. Even when we DO fall
+  //      back to Perplexity, we keep the scrape's images as a safety net so
+  //      we don't end up with thumbnailUrl=null.
+  const scrape = await scrapeHtmlProduct(trimmed);
+  if (scrape && scrape.name && scrape.imageUrls.length > 0) {
+    // Strong enough — return without ever calling Perplexity / Claude.
+    let category: string | null = null;
+    if (categoryHint) {
+      const hit = SUPPLIER_CATEGORIES.find(
+        (c) => c.toLowerCase() === categoryHint.toLowerCase(),
+      );
+      if (hit) category = hit;
+    }
+    let supplierWebsite: string | null = null;
+    try {
+      const u = new URL(scrape.canonicalUrl ?? trimmed);
+      supplierWebsite = `${u.protocol}//${u.host}`;
+    } catch {
+      // ignore
+    }
+    return {
+      name: scrape.name,
+      productCode: scrape.productCode,
+      category,
+      description: scrape.description,
+      productUrl: scrape.canonicalUrl ?? trimmed,
+      thumbnailUrl: scrape.thumbnailUrl,
+      imageUrls: scrape.imageUrls.slice(1, 7),
+      supplierName: scrape.brand ?? supplierHint ?? null,
+      supplierWebsite,
+      supplierEmail: null,
+      configurations: [],
+    };
+  }
+
   // 1) Perplexity: read the page and return the visible product info.
   const pplxSystem =
     "You read product pages and report only what is visible on the page. Do not invent specs or codes that are not present.";
@@ -1089,5 +1129,27 @@ export async function extractSupplierProductFromUrl(input: {
   if (!parsed.name || !parsed.name.trim()) {
     throw new Error("Extraction missing required field: name");
   }
+
+  // Image safety net: if Perplexity + Claude didn't produce a thumbnail OR
+  // any usable image URLs, fall back to the HTML scrape's images. This is
+  // the "never give up on an image" guarantee — every page that has any
+  // image markup at all (og:image, JSON-LD image, itemprop="image", etc.)
+  // ends up with a thumbnailUrl.
+  if (!parsed.thumbnailUrl || parsed.imageUrls.length === 0) {
+    const safetyScrape = scrape ?? (await scrapeHtmlProduct(trimmed));
+    if (safetyScrape) {
+      if (!parsed.thumbnailUrl && safetyScrape.thumbnailUrl) {
+        parsed.thumbnailUrl = safetyScrape.thumbnailUrl;
+      }
+      if (parsed.imageUrls.length === 0 && safetyScrape.imageUrls.length > 0) {
+        // Skip the thumbnail in the extras list — we already use it as the
+        // hero — and grab up to 6 of the remaining images.
+        parsed.imageUrls = safetyScrape.imageUrls
+          .filter((u) => u !== parsed.thumbnailUrl)
+          .slice(0, 6);
+      }
+    }
+  }
+
   return parsed;
 }
