@@ -47,6 +47,7 @@ import {
 import IncotermSelect from "./IncotermSelect";
 import RfqEmailDraftDialog from "./RfqEmailDraftDialog";
 import ProcurementReviewQueue from "./ProcurementReviewQueue";
+import { sendInitialRfqDeliveries } from "./rfq-email-actions";
 
 type FullSupplier = Supplier & {
   isStarred?: boolean;
@@ -481,6 +482,26 @@ function CreateView({
   // supplier (supplierId set) or a brand-new email-only invite.
   const [stagedSuppliers, setStagedSuppliers] = useState<StagedSupplier[]>([]);
 
+  // Delivery routing for the initial RFQ outreach. Two mutually-exclusive
+  // pairs of toggles — pick how each staged supplier hears about the RFQ
+  // once the form is saved. Defaults to direct-to-supplier on BOTH email
+  // and platform; check a procurement option to flip the pair and route
+  // through Imen / Harsh for review instead.
+  const [deliverToSupplierEmail, setDeliverToSupplierEmail] = useState(true);
+  const [deliverToSupplierPlatform, setDeliverToSupplierPlatform] =
+    useState(true);
+  const [procurementViaEmail, setProcurementViaEmail] = useState(false);
+  const [procurementViaPlatform, setProcurementViaPlatform] = useState(false);
+  const procurementPicked = procurementViaEmail || procurementViaPlatform;
+  const supplierPicked = deliverToSupplierEmail || deliverToSupplierPlatform;
+  useEffect(() => {
+    if (procurementPicked && supplierPicked) {
+      setDeliverToSupplierEmail(false);
+      setDeliverToSupplierPlatform(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [procurementPicked]);
+
   // AI auto-fill state — buyer uploads an existing RFQ template (Excel
   // or PDF) and Claude extracts project info + line items into the form.
   const [extracting, setExtracting] = useState(false);
@@ -740,6 +761,7 @@ function CreateView({
         let lastUrl = "";
         let invitedSuppliers = 0;
         let invitedEmails = 0;
+        const allRecipientIds: number[] = [];
         for (const s of stagedSuppliers) {
           if (s.emails.length === 0) {
             ping(`${s.name} has no email — skipped`, true);
@@ -757,6 +779,8 @@ function CreateView({
             invitedEmails += res.invites.length;
             const last = res.invites[res.invites.length - 1];
             if (last) lastUrl = last.portalUrl;
+            for (const inv of res.invites)
+              allRecipientIds.push(inv.recipientId);
           } catch (err) {
             ping(`Invite to ${s.name} failed: ${err instanceof Error ? err.message : err}`, true);
           }
@@ -764,6 +788,33 @@ function CreateView({
         if (invitedSuppliers > 0 && lastUrl) {
           try { await navigator.clipboard.writeText(lastUrl); } catch {}
           ping(`RFQ created · ${invitedSuppliers} supplier${invitedSuppliers === 1 ? "" : "s"} (${invitedEmails} email${invitedEmails === 1 ? "" : "s"}) invited · last link copied`);
+        }
+        // Dispatch the first outreach per the chosen routing. Each
+        // recipient gets a draft saved + submitted; direct ones go out
+        // now, procurement-routed ones land in Imen/Harsh's queue.
+        if (allRecipientIds.length > 0 && (supplierPicked || procurementPicked)) {
+          try {
+            const out = await sendInitialRfqDeliveries({
+              rfqId: r.rfqId,
+              recipientIds: allRecipientIds,
+              deliverToSupplierEmail,
+              deliverToSupplierPlatform,
+              procurementViaEmail,
+              procurementViaPlatform,
+              includeAiSummary: false,
+            });
+            if (out.sentCount > 0)
+              ping(`Delivered ${out.sentCount} RFQ${out.sentCount === 1 ? "" : "s"} now`);
+            if (out.queuedCount > 0)
+              ping(`Queued ${out.queuedCount} draft${out.queuedCount === 1 ? "" : "s"} for procurement review`);
+            if (out.failures > 0)
+              ping(`${out.failures} delivery${out.failures === 1 ? "" : "ies"} failed — check server logs`, true);
+          } catch (err) {
+            ping(
+              `Delivery dispatch failed: ${err instanceof Error ? err.message : err}`,
+              true,
+            );
+          }
         }
         // Inventory dedup summary — only show when the RFQ linked to any
         // existing parts so the user knows the IFC didn't spawn dupes.
@@ -1106,8 +1157,125 @@ function CreateView({
           onChange={setStagedSuppliers}
         />
         <Hint>
-          Magic-link URLs are generated on save and the last one is copied to your clipboard. Paste it into your email to the supplier (outbound email auto-send is wired separately).
+          Magic-link URLs are generated on save and the last one is copied to your clipboard. The delivery options below decide what else happens — platform notification, email, or procurement review.
         </Hint>
+
+        {/* Delivery routing — mirrors the per-recipient ✉ Email dialog so
+            the buyer can pick how the FIRST outreach is sent at the same
+            time they invite suppliers. Procurement options are mutually
+            exclusive with supplier options. */}
+        <div
+          style={{
+            marginTop: 14,
+            paddingTop: 14,
+            borderTop: "1px dashed var(--lb-border)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+            }}
+          >
+            How should every invited supplier receive the RFQ?
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div
+              style={{
+                padding: 10,
+                borderRadius: 8,
+                background: procurementPicked ? "transparent" : "var(--lb-bg)",
+                border: procurementPicked
+                  ? "1px dashed var(--lb-border)"
+                  : "1px solid var(--lb-border)",
+                opacity: procurementPicked ? 0.45 : 1,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 800,
+                  letterSpacing: 0.6,
+                  textTransform: "uppercase",
+                  color: "var(--lb-text-3)",
+                  marginBottom: 6,
+                }}
+              >
+                To the supplier
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={deliverToSupplierPlatform}
+                  disabled={procurementPicked}
+                  onChange={(e) => setDeliverToSupplierPlatform(e.target.checked)}
+                />
+                Through the platform (dashboard notification)
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                <input
+                  type="checkbox"
+                  checked={deliverToSupplierEmail}
+                  disabled={procurementPicked}
+                  onChange={(e) => setDeliverToSupplierEmail(e.target.checked)}
+                />
+                By email (Resend → recipient inbox; reply lands in yours)
+              </label>
+            </div>
+
+            <div
+              style={{
+                padding: 10,
+                borderRadius: 8,
+                background: supplierPicked ? "transparent" : "var(--lb-bg)",
+                border: supplierPicked
+                  ? "1px dashed var(--lb-border)"
+                  : "1px solid var(--lb-border)",
+                opacity: supplierPicked ? 0.45 : 1,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 800,
+                  letterSpacing: 0.6,
+                  textTransform: "uppercase",
+                  color: "var(--lb-text-3)",
+                  marginBottom: 4,
+                }}
+              >
+                Route through procurement
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--lb-text-3)", marginBottom: 6 }}>
+                Procurement reviews each draft first; on approve they pick how it goes to the supplier.
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={procurementViaPlatform}
+                  disabled={supplierPicked}
+                  onChange={(e) => setProcurementViaPlatform(e.target.checked)}
+                />
+                Notify procurement through the platform
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                <input
+                  type="checkbox"
+                  checked={procurementViaEmail}
+                  disabled={supplierPicked}
+                  onChange={(e) => setProcurementViaEmail(e.target.checked)}
+                />
+                Notify procurement by email
+              </label>
+            </div>
+          </div>
+        </div>
       </section>
 
       {err && (

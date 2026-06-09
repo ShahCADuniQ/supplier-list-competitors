@@ -29,12 +29,17 @@ import { ensureOrdersSchema } from "./_ensure-orders-schema";
 import { sendEmail, defaultFromAddress } from "@/lib/email";
 import { claudeClient, CLAUDE_MODEL } from "@/lib/ai/claude";
 
-// Configurable elsewhere via env, but defaults to Imen so the team
-// doesn't have to set anything for the procurement route to work.
-const PROCUREMENT_EMAIL =
-  process.env.PROCUREMENT_EMAIL || "imendo@lightbase.ca";
-const PROCUREMENT_NAME =
-  process.env.PROCUREMENT_NAME || "Procurement (Imen)";
+// Procurement contacts. PROCUREMENT_EMAIL is comma-separated so multiple
+// people (e.g. Imen + Harsh) can receive every routed RFQ for review.
+// The helpers below fan out to all addresses in the list.
+const PROCUREMENT_EMAILS: string[] = (
+  process.env.PROCUREMENT_EMAIL ?? "imendo@lightbase.ca"
+)
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter((s) => s.includes("@"));
+const PROCUREMENT_EMAIL = PROCUREMENT_EMAILS[0] ?? "imendo@lightbase.ca";
+const PROCUREMENT_NAME = process.env.PROCUREMENT_NAME || "Procurement";
 
 export type RfqEmailDraftRoute = "direct_to_supplier" | "via_procurement";
 
@@ -47,21 +52,28 @@ async function notifyProcurementInApp(input: {
   linkUrl?: string;
   rfqId?: number;
 }): Promise<void> {
+  if (PROCUREMENT_EMAILS.length === 0) return;
   try {
-    const [profile] = await db
+    const profiles = await db
       .select({ clerkUserId: userProfiles.clerkUserId })
       .from(userProfiles)
-      .where(sql`LOWER(${userProfiles.email}) = ${PROCUREMENT_EMAIL.toLowerCase()}`)
-      .limit(1);
-    if (!profile) return;
-    await db.insert(erpNotifications).values({
-      targetClerkId: profile.clerkUserId,
-      kind: "rfq.sent",
-      title: input.title,
-      body: input.body ?? null,
-      linkUrl: input.linkUrl ?? null,
-      rfqId: input.rfqId ?? null,
-    });
+      .where(
+        sql`LOWER(${userProfiles.email}) IN (${sql.join(
+          PROCUREMENT_EMAILS.map((e) => sql`${e}`),
+          sql`, `,
+        )})`,
+      );
+    if (profiles.length === 0) return;
+    await db.insert(erpNotifications).values(
+      profiles.map((p) => ({
+        targetClerkId: p.clerkUserId,
+        kind: "rfq.sent" as const,
+        title: input.title,
+        body: input.body ?? null,
+        linkUrl: input.linkUrl ?? null,
+        rfqId: input.rfqId ?? null,
+      })),
+    );
   } catch (e) {
     console.warn("[rfq-email] notifyProcurementInApp failed:", e);
   }
@@ -396,10 +408,13 @@ export async function submitRfqEmailDraft(input: {
   const reviewUrl = `${baseAppUrl}/suppliers?procurement=${draft.id}`;
   const composerName = profile.displayName ?? profile.email ?? "A buyer";
 
-  if (draft.procurementViaEmail) {
+  if (draft.procurementViaEmail && PROCUREMENT_EMAILS.length > 0) {
     try {
       await sendEmail({
-        to: { email: PROCUREMENT_EMAIL, name: PROCUREMENT_NAME },
+        to: PROCUREMENT_EMAILS.map((email) => ({
+          email,
+          name: PROCUREMENT_NAME,
+        })),
         replyTo: profile.email ?? undefined,
         subject: `[Review] RFQ email draft to ${draft.toEmail}`,
         text: [
@@ -666,6 +681,82 @@ export async function listRfqEmailDrafts(input: {
     .from(rfqEmailDrafts)
     .where(eq(rfqEmailDrafts.rfqId, input.rfqId))
     .orderBy(desc(rfqEmailDrafts.composedAt));
+}
+
+// Bulk fire-and-forget delivery for the create-RFQ-and-invite flow.
+// After the user batches invites at RFQ creation time, this is called
+// per recipient with the chosen delivery flags so each one gets the
+// outbound message immediately (direct) or routed to procurement.
+// Auto-builds the subject + body from the RFQ data.
+export async function sendInitialRfqDeliveries(input: {
+  rfqId: number;
+  recipientIds: number[];
+  deliverToSupplierEmail: boolean;
+  deliverToSupplierPlatform: boolean;
+  procurementViaEmail: boolean;
+  procurementViaPlatform: boolean;
+  includeAiSummary?: boolean;
+}): Promise<{ sentCount: number; queuedCount: number; failures: number }> {
+  await requireSupplierEditor();
+  await ensureOrdersSchema();
+
+  if (input.recipientIds.length === 0)
+    return { sentCount: 0, queuedCount: 0, failures: 0 };
+
+  const recipients = await db
+    .select({
+      id: rfqRecipients.id,
+      supplierId: rfqRecipients.supplierId,
+      toEmail: rfqRecipients.inviteEmail,
+      toName: rfqRecipients.inviteName,
+      accessToken: rfqRecipients.accessToken,
+    })
+    .from(rfqRecipients)
+    .where(inArray(rfqRecipients.id, input.recipientIds));
+
+  const baseAppUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
+  const aiSummary = input.includeAiSummary
+    ? await buildAiSummary({ rfqId: input.rfqId })
+    : null;
+
+  let sentCount = 0;
+  let queuedCount = 0;
+  let failures = 0;
+
+  for (const r of recipients) {
+    try {
+      const magicLinkUrl = `${baseAppUrl}/vendor/${r.accessToken}`;
+      const draft = await suggestRfqEmailBody({
+        rfqId: input.rfqId,
+        toName: r.toName,
+        includeMagicLink: true,
+        magicLinkUrl,
+      });
+      const save = await saveRfqEmailDraft({
+        rfqId: input.rfqId,
+        recipientId: r.id,
+        supplierId: r.supplierId,
+        toEmail: r.toEmail,
+        toName: r.toName,
+        subject: draft.subject,
+        bodyText: draft.body,
+        aiSummary,
+        includeMagicLink: true,
+        deliverToSupplierEmail: input.deliverToSupplierEmail,
+        deliverToSupplierPlatform: input.deliverToSupplierPlatform,
+        procurementViaEmail: input.procurementViaEmail,
+        procurementViaPlatform: input.procurementViaPlatform,
+      });
+      const submit = await submitRfqEmailDraft({ draftId: save.id });
+      if (submit.status === "sent") sentCount += 1;
+      else if (submit.status === "pending_procurement_review") queuedCount += 1;
+    } catch (e) {
+      console.warn("[rfq-email] sendInitialRfqDeliveries item failed:", e);
+      failures += 1;
+    }
+  }
+
+  return { sentCount, queuedCount, failures };
 }
 
 // Quick check: does this tenant have the email transport configured?
