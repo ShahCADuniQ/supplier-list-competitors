@@ -179,6 +179,64 @@ function asString(value: unknown): string | null {
   return null;
 }
 
+// Walk every JSON-LD block looking for the page-publisher's organization /
+// website name. Useful when there's no Product schema (manufacturer info
+// pages, WordPress + Yoast sites, etc.) — the Organization or WebSite
+// node still tells us the brand. Returns the first name we find.
+function findOrganizationName(html: string): string | null {
+  const rx =
+    /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  for (const m of Array.from(html.matchAll(rx))) {
+    const raw = m[1]?.trim();
+    if (!raw) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      try {
+        parsed = JSON.parse(raw.replace(/,\s*([\]}])/g, "$1"));
+      } catch {
+        continue;
+      }
+    }
+    const hit = findOrgInJsonLd(parsed);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function findOrgInJsonLd(node: unknown): string | null {
+  if (!node) return null;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const hit = findOrgInJsonLd(item);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof node !== "object") return null;
+  const obj = node as Record<string, unknown>;
+  const type = obj["@type"];
+  const isOrg = (t: unknown): boolean => {
+    if (t === "Organization" || t === "WebSite") return true;
+    if (Array.isArray(t)) return t.some((x) => x === "Organization" || x === "WebSite");
+    return false;
+  };
+  if (isOrg(type)) {
+    const name = asString(obj.name);
+    if (name) return name;
+  }
+  for (const key of Object.keys(obj)) {
+    if (key === "@type") continue;
+    const child = obj[key];
+    if (child && typeof child === "object") {
+      const hit = findOrgInJsonLd(child);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 // Best-effort name + image picker from raw HTML when JSON-LD isn't there.
 // Scans <link itemprop="image">, <img itemprop="image">, generic product
 // image classes, and twitter:image meta as a fallback.
@@ -285,6 +343,11 @@ export async function scrapeHtmlProduct(
       if (abs) imageSet.add(abs);
     }
   }
+
+  // Brand fallback chain when JSON-LD Product didn't have it (or there's
+  // no Product schema at all — e.g. WooCommerce/Yoast info pages).
+  if (!brand) brand = findMeta(html, "og:site_name") ?? null;
+  if (!brand) brand = findOrganizationName(html);
 
   // 2) og:image — this is almost always the canonical product hero photo
   //    on a product page. Add every og:image (some sites set multiple).

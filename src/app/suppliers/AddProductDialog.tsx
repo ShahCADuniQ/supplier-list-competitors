@@ -14,6 +14,7 @@ import {
   type StreamProgressEvent,
 } from "@/app/competitors/_progress";
 import { SUPPLIER_CATEGORIES } from "./supplier-inventory-constants";
+import { deriveBrandFromUrl, deriveWebsiteFromUrl } from "@/lib/ai/url-brand";
 import type {
   AddSupplierProductExtractResult,
   CommitSupplierProductInput,
@@ -605,8 +606,19 @@ function ConfirmExtraction({
 
   async function submit() {
     onError(null);
-    if (chosenSupplierId == null && !extraction.supplierName) {
-      onError("Pick a supplier (or extraction must include a supplier name).");
+    // Last-resort supplier name derivation. The server-side extractor
+    // already URL-fills this, but if state predates that fix, fall back
+    // to the URL's domain so the user never gets stuck.
+    const fallbackBrand =
+      extraction.supplierName?.trim() ||
+      deriveBrandFromUrl(sourcePageUrl) ||
+      null;
+    const fallbackWebsite =
+      extraction.supplierWebsite ?? deriveWebsiteFromUrl(sourcePageUrl) ?? null;
+    if (chosenSupplierId == null && !fallbackBrand) {
+      onError(
+        "Pick a supplier — could not derive a brand from the URL either.",
+      );
       return;
     }
     setBusy(true);
@@ -620,8 +632,8 @@ function ConfirmExtraction({
           ? ({ kind: "existing", supplierId: chosenSupplierId } as const)
           : ({
               kind: "new",
-              name: extraction.supplierName!,
-              website: extraction.supplierWebsite,
+              name: fallbackBrand!,
+              website: fallbackWebsite,
               email: extraction.supplierEmail,
             } as const);
       const body: CommitSupplierProductInput = {
@@ -743,11 +755,15 @@ function ConfirmExtraction({
             {c.name} ({c.matchKind} match)
           </option>
         ))}
-        {extraction.supplierName && (
-          <option value="__new">
-            + Create new supplier: {extraction.supplierName}
-          </option>
-        )}
+        {/* Always offer the create-new option. The label uses the extracted
+            supplier name when present; otherwise we fall back to the URL-
+            derived brand so the option never disappears. */}
+        <option value="__new">
+          + Create new supplier:{" "}
+          {extraction.supplierName ||
+            deriveBrandFromUrl(sourcePageUrl) ||
+            "from URL"}
+        </option>
         {suppliers
           .filter((s) => !supplierCandidates.some((c) => c.id === s.id))
           .map((s) => (

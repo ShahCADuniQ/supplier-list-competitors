@@ -5,6 +5,7 @@ import { perplexityChat } from "./perplexity";
 import { claudeClient, CLAUDE_MODEL } from "./claude";
 import { tryFetchShopifyProduct } from "./shopify";
 import { scrapeHtmlProduct } from "./html-product";
+import { deriveBrandFromUrl, deriveWebsiteFromUrl } from "./url-brand";
 import { SUPPLIER_CATEGORIES } from "@/app/suppliers/supplier-inventory-constants";
 
 // AI extractor uses the same canonical category vocabulary the
@@ -914,6 +915,29 @@ export type SupplierProductExtraction = {
   configurations: SupplierProductConfigurationExtraction[];
 };
 
+// Last-resort supplier-name fallback applied to every extraction return
+// path. If the upstream layers failed to surface a brand, we derive one
+// from the URL's domain. This guarantees the Add Product dialog never ends
+// up in a state where the user has no '+ Create new supplier' option.
+function normaliseExtraction(
+  result: SupplierProductExtraction,
+  sourceUrl: string,
+): SupplierProductExtraction {
+  if (!result.supplierName) {
+    const brand = deriveBrandFromUrl(sourceUrl);
+    if (brand) {
+      result.supplierName = brand;
+    }
+  }
+  if (!result.supplierWebsite) {
+    const site = deriveWebsiteFromUrl(sourceUrl);
+    if (site) {
+      result.supplierWebsite = site;
+    }
+  }
+  return result;
+}
+
 export async function extractSupplierProductFromUrl(input: {
   url: string;
   supplierHint?: string;
@@ -945,7 +969,7 @@ export async function extractSupplierProductFromUrl(input: {
     // points at the listing's default URL; per-variant URLs go on each
     // configuration below).
     const canonicalProductUrl = `${shopify.storefrontUrl}/products/${shopify.handle}`;
-    return {
+    return normaliseExtraction({
       name: shopify.title,
       productCode: code,
       category: category ?? categoryHint ?? null,
@@ -967,7 +991,7 @@ export async function extractSupplierProductFromUrl(input: {
           v.options.length > 1 ? v.options.join(" · ") : null,
         productUrl: `${canonicalProductUrl}?variant=${v.id}`,
       })),
-    };
+    }, trimmed);
   }
 
   // 0.5) Direct HTML scrape. Most modern e-commerce platforms (PrestaShop,
@@ -994,19 +1018,22 @@ export async function extractSupplierProductFromUrl(input: {
     } catch {
       // ignore
     }
-    return {
-      name: scrape.name,
-      productCode: scrape.productCode,
-      category,
-      description: scrape.description,
-      productUrl: scrape.canonicalUrl ?? trimmed,
-      thumbnailUrl: scrape.thumbnailUrl,
-      imageUrls: scrape.imageUrls.slice(1, 7),
-      supplierName: scrape.brand ?? supplierHint ?? null,
-      supplierWebsite,
-      supplierEmail: null,
-      configurations: [],
-    };
+    return normaliseExtraction(
+      {
+        name: scrape.name,
+        productCode: scrape.productCode,
+        category,
+        description: scrape.description,
+        productUrl: scrape.canonicalUrl ?? trimmed,
+        thumbnailUrl: scrape.thumbnailUrl,
+        imageUrls: scrape.imageUrls.slice(1, 7),
+        supplierName: scrape.brand ?? supplierHint ?? null,
+        supplierWebsite,
+        supplierEmail: null,
+        configurations: [],
+      },
+      trimmed,
+    );
   }
 
   // 1) Perplexity: read the page and return the visible product info.
@@ -1151,5 +1178,5 @@ export async function extractSupplierProductFromUrl(input: {
     }
   }
 
-  return parsed;
+  return normaliseExtraction(parsed, trimmed);
 }
