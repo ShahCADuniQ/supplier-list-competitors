@@ -50,10 +50,22 @@ const SUB_TABS = [
 ] as const;
 type TabKey = (typeof SUB_TABS)[number]["key"];
 
+// Tabs that are still in stub state — hidden from non-CADuniQ tenants
+// (i.e. every Lightbase user) so they don't see placeholder modules.
+// CADuniQ staff still see them so we can iterate on the placeholders
+// without a separate route.
+const STAFF_ONLY_TABS = new Set<TabKey>([
+  "boms",
+  "quality",
+  "maintenance",
+  "barcodes",
+]);
+
 export default function InventoryAndManufacturing({
   initialData,
   canEdit,
   registeredSupplierIds = [],
+  isCaduniqStaff = false,
 }: {
   initialData: FullSupplier[];
   canEdit: boolean;
@@ -62,7 +74,13 @@ export default function InventoryAndManufacturing({
   // portal and gone through onboarding. Drives the "Registered
   // suppliers" pill on the suppliers tab.
   registeredSupplierIds?: number[];
+  // CADuniQ staff (@caduniq.com) see the stub placeholder tabs; everyone
+  // else (every Lightbase user) does not.
+  isCaduniqStaff?: boolean;
 }) {
+  const visibleTabs = SUB_TABS.filter(
+    (t) => isCaduniqStaff || !STAFF_ONLY_TABS.has(t.key),
+  );
   // Every tenant member with supplier-view access (canViewSuppliers
   // OR role='admin') can approve / reject / merge — the server-side
   // gate is requireSupplierReviewer, not requireSupplierEditor — so
@@ -81,7 +99,7 @@ export default function InventoryAndManufacturing({
           borderBottom: "1px solid var(--lb-border)",
         }}
       >
-        {SUB_TABS.map((t) => {
+        {visibleTabs.map((t) => {
           const active = tab === t.key;
           return (
             <button
@@ -133,7 +151,7 @@ export default function InventoryAndManufacturing({
             registeredSupplierIds={registeredSupplierIds}
           />
         )}
-        {tab === "barcodes" && <BarcodeGenerator canEdit={canEdit} />}
+        {tab === "barcodes" && isCaduniqStaff && <BarcodeGenerator canEdit={canEdit} />}
         {tab === "inventory" && <InventoryTab canEdit={canEdit} />}
         {tab === "orders" && (
           <OrdersTab suppliers={initialData} canEdit={canEdit} />
@@ -141,7 +159,7 @@ export default function InventoryAndManufacturing({
         {tab === "supplier-inventory" && (
           <SupplierInventoryOverview canEdit={canEdit} />
         )}
-        {tab === "boms" && (
+        {tab === "boms" && isCaduniqStaff && (
           <StubTab
             title="Bills of Materials"
             description="Multi-level BOMs with versions, kits, and PLM-style change control."
@@ -156,7 +174,7 @@ export default function InventoryAndManufacturing({
             ]}
           />
         )}
-        {tab === "quality" && (
+        {tab === "quality" && isCaduniqStaff && (
           <StubTab
             title="Quality"
             description="QC inspections, returns, claims, and warranty tracking — connected to projects."
@@ -172,7 +190,7 @@ export default function InventoryAndManufacturing({
             ]}
           />
         )}
-        {tab === "maintenance" && (
+        {tab === "maintenance" && isCaduniqStaff && (
           <StubTab
             title="Maintenance"
             description="Preventive + corrective maintenance for equipment and tooling."

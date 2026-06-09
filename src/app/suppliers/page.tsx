@@ -13,6 +13,7 @@ import {
   getOrCreateProfile,
   canViewSuppliers,
   canEdit,
+  isCaduniqUser,
 } from "@/lib/permissions";
 import InventoryAndManufacturing from "./InventoryAndManufacturing";
 import { ensureSupplierColumns } from "./_ensure-schema";
@@ -101,6 +102,7 @@ export default async function SuppliersPage() {
       initialData={initialData}
       canEdit={canEdit(profile)}
       registeredSupplierIds={registeredSupplierIds}
+      isCaduniqStaff={isCaduniqUser(profile)}
     />
   );
 }
