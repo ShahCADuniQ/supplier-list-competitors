@@ -411,6 +411,46 @@ export function ensureOrdersSchema(): Promise<void> {
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "confirmed_qty" integer NOT NULL DEFAULT 0`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_kind_idx" ON "inventory_items" ("kind")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_parent_idx" ON "inventory_items" ("parent_assembly_id")`);
+
+      // ── RFQ email drafts (the "send via email" + procurement-routed
+      //    review queue feature) ────────────────────────────────────
+      await db.execute(sql`DO $$ BEGIN
+        CREATE TYPE "rfq_email_draft_status" AS ENUM (
+          'draft','pending_procurement_review','approved','rejected','sent'
+        );
+      EXCEPTION WHEN duplicate_object THEN null; END $$`);
+      await db.execute(sql`DO $$ BEGIN
+        CREATE TYPE "rfq_email_draft_route" AS ENUM (
+          'direct_to_supplier','via_procurement'
+        );
+      EXCEPTION WHEN duplicate_object THEN null; END $$`);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "rfq_email_drafts" (
+          "id" serial PRIMARY KEY,
+          "rfq_id" integer NOT NULL REFERENCES "rfqs"("id") ON DELETE CASCADE,
+          "recipient_id" integer REFERENCES "rfq_recipients"("id") ON DELETE SET NULL,
+          "supplier_id" integer REFERENCES "suppliers"("id") ON DELETE SET NULL,
+          "to_email" text NOT NULL,
+          "to_name" text,
+          "reply_to_email" text,
+          "subject" text NOT NULL,
+          "body_text" text NOT NULL,
+          "ai_summary" text,
+          "include_magic_link" boolean NOT NULL DEFAULT true,
+          "route" "rfq_email_draft_route" NOT NULL,
+          "status" "rfq_email_draft_status" NOT NULL DEFAULT 'draft',
+          "composed_by_clerk_id" text,
+          "composed_at" timestamp NOT NULL DEFAULT now(),
+          "reviewed_by_clerk_id" text,
+          "reviewed_at" timestamp,
+          "reviewer_notes" text,
+          "sent_at" timestamp,
+          "provider_message_id" text,
+          "created_at" timestamp NOT NULL DEFAULT now(),
+          "updated_at" timestamp NOT NULL DEFAULT now()
+        )`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "rfq_email_drafts_rfq_idx" ON "rfq_email_drafts" ("rfq_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "rfq_email_drafts_status_idx" ON "rfq_email_drafts" ("status")`);
     } catch (e) {
       console.warn(
         "[orders] ensureOrdersSchema failed — run `npm run db:apply` to apply migration 0024.",

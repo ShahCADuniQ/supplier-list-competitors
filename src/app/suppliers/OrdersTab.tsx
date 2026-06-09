@@ -45,6 +45,8 @@ import {
   fmtMoney,
 } from "./_orders-constants";
 import IncotermSelect from "./IncotermSelect";
+import RfqEmailDraftDialog from "./RfqEmailDraftDialog";
+import ProcurementReviewQueue from "./ProcurementReviewQueue";
 
 type FullSupplier = Supplier & {
   isStarred?: boolean;
@@ -203,6 +205,9 @@ function ListView({
   // and matches against project number, project name, RFQ number, or niche.
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [search, setSearch] = useState<string>("");
+  // Procurement-review queue modal. Open from the header so Imen can pick
+  // up pending drafts without leaving the Orders tab.
+  const [procurementOpen, setProcurementOpen] = useState(false);
 
   const projectOptions = useMemo(() => {
     const seen = new Map<string, { num: string; name: string | null; count: number }>();
@@ -253,16 +258,37 @@ function ListView({
             One workflow from RFQ to PO. Create an RFQ, invite suppliers (or just one if you're committed), let them submit quotes via the vendor portal, compare side-by-side, award, and auto-generate the PO. Every step pings the team.
           </p>
         </div>
-        {canEdit && (
-          <button
-            type="button"
-            onClick={onCreate}
-            style={btnPrimary}
-          >
-            + New RFQ
-          </button>
-        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => setProcurementOpen(true)}
+              style={{
+                ...btnPrimary,
+                background: "var(--lb-bg-elev)",
+                color: "var(--lb-text)",
+                border: "1px solid var(--lb-border)",
+              }}
+              title="Review RFQ emails routed through procurement for approval"
+            >
+              ⌛ Procurement review
+            </button>
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={onCreate}
+              style={btnPrimary}
+            >
+              + New RFQ
+            </button>
+          )}
+        </div>
       </header>
+      <ProcurementReviewQueue
+        open={procurementOpen}
+        onClose={() => setProcurementOpen(false)}
+      />
 
       <section
         style={{
@@ -1299,6 +1325,7 @@ function DetailView({
           <Empty>No suppliers invited yet.</Empty>
         ) : (
           <RecipientsTable
+            rfqId={data.rfq.id}
             recipients={recipients}
             quotes={data.quotes}
             canEdit={canEdit}
@@ -1842,18 +1869,31 @@ function Td({ children, style }: { children?: React.ReactNode; style?: React.CSS
 // ─────────────────────────────────────────────────────────────────────────────
 
 function RecipientsTable({
+  rfqId,
   recipients,
   quotes,
   canEdit,
   ping,
   onChanged,
 }: {
+  rfqId: number;
   recipients: RfqDetailPayload["recipients"];
   quotes: RfqDetailPayload["quotes"];
   canEdit: boolean;
   ping: (msg: string, err?: boolean) => void;
   onChanged: () => void;
 }) {
+  // Compose-dialog state. Per-recipient so multiple emails can be drafted
+  // sequentially without losing the previous form's content (the dialog
+  // is single-instance though — only one open at a time).
+  const [emailFor, setEmailFor] = useState<{
+    recipientId: number;
+    supplierId: number | null;
+    toEmail: string;
+    toName: string | null;
+    magicLinkUrl: string | null;
+    isRegistered: boolean;
+  } | null>(null);
   // Build a recipientId → declineReason lookup so we can show the reason
   // inline on the Invited table (the decline reason lives in the quote's
   // notes; we strip the "Declined: " prefix when displaying).
@@ -2019,6 +2059,26 @@ function RecipientsTable({
                           🚫 Revoke
                         </button>
                       )}
+                      {!isRevoked && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setEmailFor({
+                              recipientId: r.id,
+                              supplierId: r.supplierId,
+                              toEmail: r.inviteEmail,
+                              toName: r.inviteName,
+                              magicLinkUrl: r.portalUrl,
+                              isRegistered: r.supplierId != null,
+                            });
+                          }}
+                          style={miniBtnStyle("#2563eb")}
+                          title="Compose and send (or route through procurement) the RFQ email to this contact."
+                        >
+                          ✉ Email
+                        </button>
+                      )}
                       <button
                         type="button"
                         disabled={busy}
@@ -2043,6 +2103,24 @@ function RecipientsTable({
           })}
         </tbody>
       </table>
+      <RfqEmailDraftDialog
+        open={emailFor != null}
+        rfqId={rfqId}
+        recipientId={emailFor?.recipientId ?? null}
+        supplierId={emailFor?.supplierId ?? null}
+        defaultToEmail={emailFor?.toEmail ?? ""}
+        defaultToName={emailFor?.toName ?? null}
+        magicLinkUrl={emailFor?.magicLinkUrl ?? null}
+        isRegistered={emailFor?.isRegistered ?? false}
+        onClose={() => setEmailFor(null)}
+        onSent={(status) => {
+          setEmailFor(null);
+          if (status === "sent") ping("RFQ email sent");
+          else if (status === "pending_procurement_review")
+            ping("Sent for procurement review");
+          onChanged();
+        }}
+      />
     </div>
   );
 }

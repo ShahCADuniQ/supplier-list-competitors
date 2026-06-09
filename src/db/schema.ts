@@ -2046,6 +2046,83 @@ export const rfqRecipients = pgTable(
 
 export type RfqRecipient = typeof rfqRecipients.$inferSelect;
 
+// Drafted / sent outbound RFQ emails. Tracks the entire lifecycle:
+//   draft → pending_procurement_review → approved → sent
+//                                     → rejected
+// Direct sends skip 'pending_procurement_review' and go straight to 'sent'.
+// Procurement-routed drafts wait in the queue for Imen's review.
+export const rfqEmailDraftStatus = pgEnum("rfq_email_draft_status", [
+  "draft",
+  "pending_procurement_review",
+  "approved",
+  "rejected",
+  "sent",
+]);
+export const rfqEmailDraftRoute = pgEnum("rfq_email_draft_route", [
+  // Bypass procurement; goes straight to the supplier on send.
+  "direct_to_supplier",
+  // Routed through procurement (currently imendo@lightbase.ca) for
+  // review before any external message is sent.
+  "via_procurement",
+]);
+
+export const rfqEmailDrafts = pgTable(
+  "rfq_email_drafts",
+  {
+    id: serial("id").primaryKey(),
+    rfqId: integer("rfq_id")
+      .notNull()
+      .references(() => rfqs.id, { onDelete: "cascade" }),
+    // The RFQ recipient row this email is tied to. When the supplier is
+    // already registered we have a recipient (with magic-link token);
+    // when not, the recipient is still created so the supplier portal
+    // works once they click through.
+    recipientId: integer("recipient_id").references(() => rfqRecipients.id, {
+      onDelete: "set null",
+    }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, {
+      onDelete: "set null",
+    }),
+    // Final destination. We carry it separately from recipient so
+    // procurement re-routing can override (e.g. send to a different
+    // supplier email after review).
+    toEmail: text("to_email").notNull(),
+    toName: text("to_name"),
+    // Reply-to is the requesting user's real email so supplier replies
+    // land in their inbox (regardless of which sender address Resend uses).
+    replyToEmail: text("reply_to_email"),
+    subject: text("subject").notNull(),
+    bodyText: text("body_text").notNull(),
+    // Optional AI-generated summary used when the supplier isn't
+    // registered on the platform — gives them full context in plain
+    // language without a dashboard.
+    aiSummary: text("ai_summary"),
+    // Whether this email also includes the magic-link URL for the
+    // recipient (registered suppliers click into the vendor portal).
+    includeMagicLink: boolean("include_magic_link").notNull().default(true),
+    route: rfqEmailDraftRoute("route").notNull(),
+    status: rfqEmailDraftStatus("status").notNull().default("draft"),
+    // Audit trail: who composed, who reviewed, who sent.
+    composedByClerkId: text("composed_by_clerk_id"),
+    composedAt: timestamp("composed_at").defaultNow().notNull(),
+    reviewedByClerkId: text("reviewed_by_clerk_id"),
+    reviewedAt: timestamp("reviewed_at"),
+    // Procurement's comment when rejecting (or appended to the email
+    // when approving with edits).
+    reviewerNotes: text("reviewer_notes"),
+    sentAt: timestamp("sent_at"),
+    // Resend message id once delivered (or "dev-<uuid>" in dev mode).
+    providerMessageId: text("provider_message_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    rfqIdx: index("rfq_email_drafts_rfq_idx").on(t.rfqId),
+    statusIdx: index("rfq_email_drafts_status_idx").on(t.status),
+  }),
+);
+export type RfqEmailDraft = typeof rfqEmailDrafts.$inferSelect;
+
 export const supplierQuotes = pgTable(
   "supplier_quotes",
   {
