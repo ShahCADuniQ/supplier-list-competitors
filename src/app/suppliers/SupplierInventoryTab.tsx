@@ -957,6 +957,7 @@ export function ProductDrawer({ product, models, parentProduct, allProducts, can
           onOpenModel={(id) => onOpenSibling(id)}
           onAddModel={() => setCreatingModel(true)}
           onMoveExisting={() => setMovingExisting(true)}
+          onChanged={onChanged}
         />
       )}
 
@@ -1163,6 +1164,7 @@ function ModelsBlock({
   onOpenModel,
   onAddModel,
   onMoveExisting,
+  onChanged,
 }: {
   parentProduct: SupplierProductWithAttachments;
   models: SupplierProductWithAttachments[];
@@ -1172,7 +1174,34 @@ function ModelsBlock({
   // Open the "move existing parts into this part as configurations"
   // picker. Lets the admin promote a flat catalog into a single part.
   onMoveExisting: () => void;
+  // Called after a per-row mutation (mark/unmark primary) so the drawer
+  // refetches and re-renders. Same callback the rest of the drawer uses.
+  onChanged: () => void;
 }) {
+  // Per-row busy state for the inline primary toggle. Keyed by model id so
+  // only the row that's mutating shows the spinner.
+  const [primaryBusyId, setPrimaryBusyId] = useState<number | null>(null);
+  const [primaryErr, setPrimaryErr] = useState<string | null>(null);
+
+  async function togglePrimary(model: SupplierProductWithAttachments) {
+    setPrimaryBusyId(model.id);
+    setPrimaryErr(null);
+    try {
+      if (model.isPrimarySupplier) {
+        await unmarkPrimarySupplier({ partId: model.id });
+      } else {
+        await promoteToPrimarySupplier({ partId: model.id });
+      }
+      onChanged();
+    } catch (e) {
+      setPrimaryErr(
+        e instanceof Error ? e.message : "Failed to update primary",
+      );
+    } finally {
+      setPrimaryBusyId(null);
+    }
+  }
+
   return (
     <section
       style={{
@@ -1248,6 +1277,21 @@ function ModelsBlock({
         )}
       </div>
 
+      {primaryErr && (
+        <div
+          style={{
+            padding: 10,
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.10)",
+            border: "1px solid rgba(220,38,38,0.40)",
+            color: "#dc2626",
+            fontSize: 12.5,
+          }}
+        >
+          {primaryErr}
+        </div>
+      )}
+
       {models.length > 0 && (
         <ul
           style={{
@@ -1311,6 +1355,57 @@ function ModelsBlock({
                       </div>
                     )}
                   </div>
+                  {canEdit && (
+                    // Inline primary toggle — promotes / unmarks without
+                    // having to open the configuration. Filled green star
+                    // when this row is the primary, dashed outline star
+                    // otherwise. Stops propagation so the row's open-the-
+                    // drawer click doesn't also fire.
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      title={
+                        m.isPrimarySupplier
+                          ? "Unmark as primary"
+                          : "Mark this configuration as primary"
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (primaryBusyId === null) togglePrimary(m);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (primaryBusyId === null) togglePrimary(m);
+                        }
+                      }}
+                      aria-pressed={m.isPrimarySupplier}
+                      aria-disabled={primaryBusyId === m.id}
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 800,
+                        padding: "3px 9px",
+                        borderRadius: 999,
+                        background: m.isPrimarySupplier
+                          ? "#16a34a"
+                          : "transparent",
+                        color: m.isPrimarySupplier
+                          ? "white"
+                          : "var(--lb-text-3)",
+                        border: m.isPrimarySupplier
+                          ? "1px solid #16a34a"
+                          : "1px dashed var(--lb-border)",
+                        cursor:
+                          primaryBusyId === m.id ? "wait" : "pointer",
+                        opacity: primaryBusyId === m.id ? 0.6 : 1,
+                        userSelect: "none",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {m.isPrimarySupplier ? "★ Primary" : "☆ Mark primary"}
+                    </span>
+                  )}
                   <span
                     style={{
                       fontSize: 11,
