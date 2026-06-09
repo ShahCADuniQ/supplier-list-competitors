@@ -787,6 +787,22 @@ export function ProductDrawer({ product, models, parentProduct, allProducts, can
     return out;
   }, [product.attachments]);
 
+  // When viewing a configuration, also group the parent's attachments by
+  // category so each panel can surface them as a read-only "Inherited
+  // from parent" sub-section. The user expectation: configs see
+  // everything the parent has + their own.
+  const inheritedGrouped = useMemo(() => {
+    const out = Object.fromEntries(
+      SUPPLIER_PRODUCT_ATTACHMENT_CATEGORIES.map((c) => [c.key, [] as SupplierProductAttachment[]]),
+    ) as Record<SupplierProductAttachmentCategory, SupplierProductAttachment[]>;
+    if (!parentProduct) return out;
+    for (const a of parentProduct.attachments) {
+      const key = a.category as SupplierProductAttachmentCategory;
+      if (out[key]) out[key].push(a);
+    }
+    return out;
+  }, [parentProduct]);
+
   // Custom sections derived from the attachments themselves — group
   // category='other_file' rows by their customCategoryLabel
   // (case-insensitive). Empty drafts the supplier just created are
@@ -907,6 +923,13 @@ export function ProductDrawer({ product, models, parentProduct, allProducts, can
         productUrl={product.productUrl ?? null}
         supplierName={product.supplierName}
         sources={product.purchaseSources ?? []}
+        // Inheritance: configurations also surface their parent's
+        // primary listing + JSONB purchase sources as a read-only
+        // section so the user sees every place to buy this exact part
+        // without having to flip to the parent drawer.
+        inheritedParentUrl={parentProduct?.productUrl ?? null}
+        inheritedParentName={parentProduct?.name ?? null}
+        inheritedSources={parentProduct?.purchaseSources ?? []}
         canEdit={canEdit}
         onChanged={onChanged}
       />
@@ -1069,6 +1092,10 @@ export function ProductDrawer({ product, models, parentProduct, allProducts, can
               category={tab.key}
               customCategoryLabel={null}
               attachments={grouped[tab.key]}
+              inheritedAttachments={
+                parentProduct ? inheritedGrouped[tab.key] : undefined
+              }
+              inheritedFromLabel={parentProduct?.name}
               canEdit={canEdit}
               onChanged={onChanged}
             />
@@ -1963,6 +1990,9 @@ function PurchaseSourcesBlock({
   productUrl,
   supplierName,
   sources,
+  inheritedParentUrl,
+  inheritedParentName,
+  inheritedSources,
   canEdit,
   onChanged,
 }: {
@@ -1970,6 +2000,12 @@ function PurchaseSourcesBlock({
   productUrl: string | null;
   supplierName: string;
   sources: PurchaseSource[];
+  // When the product being viewed is a configuration, these carry the
+  // parent's primary listing + JSONB sources so they show up here too as
+  // read-only inherited rows. Null when there is no parent.
+  inheritedParentUrl?: string | null;
+  inheritedParentName?: string | null;
+  inheritedSources?: PurchaseSource[];
   canEdit: boolean;
   onChanged: () => void;
 }) {
@@ -1992,7 +2028,8 @@ function PurchaseSourcesBlock({
   }
 
   // Build the display list: primary listing first (if URL set), then every
-  // JSONB entry in insertion order.
+  // JSONB entry in insertion order. Inherited rows from the parent come
+  // last under their own header — they're read-only from this drawer.
   type Row = {
     key: string;
     name: string;
@@ -2000,6 +2037,7 @@ function PurchaseSourcesBlock({
     removable: boolean;
     sourceId?: string;
     primary?: boolean;
+    inherited?: boolean;
   };
   const rows: Row[] = [];
   if (productUrl) {
@@ -2019,6 +2057,30 @@ function PurchaseSourcesBlock({
       removable: true,
       sourceId: s.id,
     });
+  }
+  // Inherited rows from the parent. Dedupe by URL so the same Amazon
+  // listing on the parent doesn't double up if the config also has it.
+  const seenUrls = new Set(rows.map((r) => r.url.toLowerCase()));
+  if (inheritedParentUrl && !seenUrls.has(inheritedParentUrl.toLowerCase())) {
+    rows.push({
+      key: "inherited-primary",
+      name: `${inheritedParentName ?? "Parent"} (parent listing)`,
+      url: inheritedParentUrl,
+      removable: false,
+      inherited: true,
+    });
+    seenUrls.add(inheritedParentUrl.toLowerCase());
+  }
+  for (const s of inheritedSources ?? []) {
+    if (seenUrls.has(s.url.toLowerCase())) continue;
+    rows.push({
+      key: `inherited:${s.id}`,
+      name: `${s.name}`,
+      url: s.url,
+      removable: false,
+      inherited: true,
+    });
+    seenUrls.add(s.url.toLowerCase());
   }
 
   return (
@@ -2129,15 +2191,29 @@ function PurchaseSourcesBlock({
                     letterSpacing: 0.4,
                     padding: "2px 8px",
                     borderRadius: 999,
-                    background: r.primary ? "#16a34a" : "var(--lb-bg-elev)",
-                    color: r.primary ? "white" : "var(--lb-text-3)",
+                    background: r.primary
+                      ? "#16a34a"
+                      : r.inherited
+                        ? "transparent"
+                        : "var(--lb-bg-elev)",
+                    color: r.primary
+                      ? "white"
+                      : r.inherited
+                        ? "var(--lb-text-3)"
+                        : "var(--lb-text-3)",
                     border: r.primary
                       ? "1px solid #16a34a"
-                      : "1px solid var(--lb-border)",
+                      : r.inherited
+                        ? "1px dashed var(--lb-border)"
+                        : "1px solid var(--lb-border)",
                     flexShrink: 0,
                   }}
                 >
-                  {r.primary ? "★ PRIMARY" : "LINK"}
+                  {r.primary
+                    ? "★ PRIMARY"
+                    : r.inherited
+                      ? "INHERITED"
+                      : "LINK"}
                 </span>
                 <div style={{ flex: 1, minWidth: 200 }}>
                   <div
@@ -2943,7 +3019,7 @@ function ProductMetaBlock({ product, editing, onToggleEdit, onSaved, onDelete, c
   );
 }
 
-function CategoryPanel({ productId, productThumbnailUrl, category, customCategoryLabel, attachments, canEdit, onChanged, onDeleteCustomSection }: {
+function CategoryPanel({ productId, productThumbnailUrl, category, customCategoryLabel, attachments, inheritedAttachments, inheritedFromLabel, canEdit, onChanged, onDeleteCustomSection }: {
   productId: number;
   productThumbnailUrl: string | null;
   // Either one of the fixed enum sections OR "other_file" when uploading
@@ -2952,6 +3028,12 @@ function CategoryPanel({ productId, productThumbnailUrl, category, customCategor
   category: SupplierProductAttachmentCategory | "other_file";
   customCategoryLabel: string | null;
   attachments: SupplierProductAttachment[];
+  // Attachments inherited from the parent (only set when viewing a
+  // configuration drawer). Rendered as read-only rows under an
+  // "Inherited from parent" sub-header so the user can see + open them
+  // without having to navigate to the parent.
+  inheritedAttachments?: SupplierProductAttachment[];
+  inheritedFromLabel?: string;
   canEdit: boolean;
   onChanged: () => void;
   // Custom-only delete affordance. Provided by ProductDrawer; absent for
@@ -3085,7 +3167,7 @@ function CategoryPanel({ productId, productThumbnailUrl, category, customCategor
       )}
       {err && <div style={{ color: "#dc2626", fontSize: 12.5 }}>{err}</div>}
 
-      {attachments.length === 0 ? (
+      {attachments.length === 0 && (inheritedAttachments?.length ?? 0) === 0 ? (
         <div style={{ padding: 24, textAlign: "center", color: "var(--lb-text-3)", fontSize: 13, border: "1px dashed var(--lb-border)", borderRadius: 8 }}>
           No files in this category yet.
         </div>
@@ -3102,6 +3184,48 @@ function CategoryPanel({ productId, productThumbnailUrl, category, customCategor
               onDelete={() => onDelete(a.id)}
             />
           ))}
+          {inheritedAttachments && inheritedAttachments.length > 0 && (
+            <>
+              <div
+                style={{
+                  marginTop: attachments.length > 0 ? 8 : 0,
+                  paddingTop: 8,
+                  borderTop:
+                    attachments.length > 0 ? "1px dashed var(--lb-border)" : "none",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: 0.6,
+                  textTransform: "uppercase",
+                  color: "var(--lb-text-3)",
+                }}
+              >
+                Inherited from {inheritedFromLabel ?? "parent"}
+                <span
+                  style={{
+                    marginLeft: 8,
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    letterSpacing: 0,
+                    textTransform: "none",
+                    color: "var(--lb-text-3)",
+                  }}
+                >
+                  read-only — open the parent to edit
+                </span>
+              </div>
+              {inheritedAttachments.map((a) => (
+                <AttachmentRow
+                  key={`inherited:${a.id}`}
+                  attachment={a}
+                  canEdit={false}
+                  productId={productId}
+                  isCover={false}
+                  onChanged={onChanged}
+                  onDelete={() => undefined}
+                />
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

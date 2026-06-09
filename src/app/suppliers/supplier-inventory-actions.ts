@@ -959,17 +959,24 @@ export async function listAggregateSupplierInventory(): Promise<{
       supplierName: supplierNameById.get(c.supplierId) ?? "—",
       name: c.name,
       productCode: c.productCode,
-      category: c.category ?? parent.category,
-      description: c.description ?? parent.description,
-      productUrl: c.productUrl,
-      // Thumbnail inheritance: use config's own when set, else parent's.
-      thumbnailUrl: c.thumbnailUrl ?? parent.thumbnailUrl,
+      // Inheritance rule (per user requirement): "All information that is
+      // in the configuration should be the parent information + the
+      // information inside the configuration." Where there's a single
+      // value (category, description, thumbnail, productUrl) we prefer
+      // the PARENT's, falling back to the config's own. The parent
+      // represents the product family — its photo, its description, its
+      // category are the canonical product info; the config carries the
+      // specific variant code + any spec-sheet doc.
+      category: parent.category ?? c.category,
+      description: parent.description ?? c.description,
+      productUrl: parent.productUrl ?? c.productUrl,
+      thumbnailUrl: parent.thumbnailUrl ?? c.thumbnailUrl,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
       modelCount: 0,
       // File-count inheritance: configs roll up their parent's file count
       // alongside their own so the catalogue pill reads honestly. The
-      // drawer can still distinguish own vs. inherited attachments.
+      // drawer surfaces both buckets distinctly.
       attachmentCount: ownAttachmentCount + parentAttachmentCount,
       projectNums: Array.from(projectsBySupplier.get(c.supplierId) ?? []).sort(),
       globalProductId: c.globalProductId,
