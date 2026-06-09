@@ -676,6 +676,18 @@ export async function deleteSupplierProductCustomSection(input: {
 // filter dropdown).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// A small summary of one configuration under a parent. Used so the parent
+// card can list its configs by code/name and highlight the primary ones
+// without having to refetch.
+export type AggregateConfigSummary = {
+  id: number;
+  name: string;
+  productCode: string | null;
+  isPrimarySupplier: boolean;
+  attachmentCount: number;
+  thumbnailUrl: string | null;
+};
+
 export type AggregateInventoryPart = {
   id: number;
   supplierId: number;
@@ -698,6 +710,28 @@ export type AggregateInventoryPart = {
   // Number of other supplier_products rows that share the cluster
   // (excluding this one). Drives the "+N backup suppliers" badge.
   alternativeSupplierCount: number;
+  // ── New: catalogue classification ──────────────────────────────────────
+  // "standalone"   = top-level part with zero configurations
+  // "parent"       = top-level part with ≥ 1 configurations
+  // "configuration" = nested row (parent_product_id is set)
+  kind: "standalone" | "parent" | "configuration";
+  // Only set when kind === "configuration".
+  parentProductId: number | null;
+  parentName: string | null;
+  parentProductCode: string | null;
+  // Inherited thumbnail — for configurations that have no image of their
+  // own, the catalogue card falls back to the parent's thumbnail. Same
+  // semantics for inherited file counts (parent's attachments rolled
+  // into the config card's total).
+  parentThumbnailUrl: string | null;
+  parentAttachmentCount: number;
+  // Only set when kind === "parent". The lightweight list of its
+  // configurations so the card can display primary highlights inline.
+  configurations: AggregateConfigSummary[];
+  // Convenience pre-computed counters for the catalogue's "primary"
+  // toggles. For "parent" rows: how many of the configurations are
+  // marked primary. For "configuration" and "standalone": 0.
+  primaryConfigCount: number;
 };
 
 export async function listAggregateSupplierInventory(): Promise<{
@@ -727,8 +761,8 @@ export async function listAggregateSupplierInventory(): Promise<{
   const supplierIds = supplierRows.map((s) => s.id);
   const supplierNameById = new Map(supplierRows.map((s) => [s.id, s.name]));
 
-  // Parts only — configurations show up nested inside their part's
-  // drawer, not as separate cards on the overview.
+  // Parts (top-level rows). Each surfaces as a card on the catalogue
+  // either as a standalone (no configs) or as a parent (has configs).
   const parts = await db
     .select()
     .from(supplierProducts)
@@ -752,43 +786,13 @@ export async function listAggregateSupplierInventory(): Promise<{
     return { parts: [], projectNums: Array.from(projSet).sort() };
   }
   const partIds = parts.map((p) => p.id);
+  const partsById = new Map(parts.map((p) => [p.id, p]));
 
-  // Configuration counts — one row per parent_product_id.
+  // FULL configuration rows under these parts. We use these to (a) build
+  // separate catalogue cards in "All products" view, and (b) populate the
+  // configuration summary on parent cards in "Parent products" view.
   const configRows = await db
-    .select({
-      parentProductId: supplierProducts.parentProductId,
-      n: sql<number>`COUNT(*)::int`,
-    })
-    .from(supplierProducts)
-    .where(
-      and(
-        inArray(supplierProducts.parentProductId, partIds),
-        eq(supplierProducts.archived, false),
-      ),
-    )
-    .groupBy(supplierProducts.parentProductId);
-  const configCountByParent = new Map<number, number>();
-  for (const r of configRows) {
-    if (r.parentProductId != null) configCountByParent.set(r.parentProductId, r.n);
-  }
-
-  // Attachment counts — sum a part's own attachments PLUS every
-  // attachment on its configurations. The overview's "files" count
-  // reflects everything tied to the part as a whole.
-  const allProductIdsToCount: number[] = [
-    ...partIds,
-    ...configRows
-      .filter((r) => r.parentProductId != null)
-      .flatMap((r) => {
-        // We don't have model ids here yet, just counts. Pull them
-        // separately so we can sum attachments across both levels.
-        return [] as number[];
-      }),
-  ];
-  // Pull every model id under these parts so we can include their
-  // attachment counts too.
-  const modelIdRows = await db
-    .select({ id: supplierProducts.id, parentProductId: supplierProducts.parentProductId })
+    .select()
     .from(supplierProducts)
     .where(
       and(
@@ -796,14 +800,29 @@ export async function listAggregateSupplierInventory(): Promise<{
         eq(supplierProducts.archived, false),
       ),
     );
-  const modelIdsByParent = new Map<number, number[]>();
-  for (const r of modelIdRows) {
-    if (r.parentProductId == null) continue;
-    const arr = modelIdsByParent.get(r.parentProductId) ?? [];
-    arr.push(r.id);
-    modelIdsByParent.set(r.parentProductId, arr);
-    allProductIdsToCount.push(r.id);
+  const configsByParent = new Map<number, typeof configRows>();
+  const configCountByParent = new Map<number, number>();
+  const primaryConfigCountByParent = new Map<number, number>();
+  for (const c of configRows) {
+    if (c.parentProductId == null) continue;
+    const arr = configsByParent.get(c.parentProductId) ?? [];
+    arr.push(c);
+    configsByParent.set(c.parentProductId, arr);
+    configCountByParent.set(c.parentProductId, (configCountByParent.get(c.parentProductId) ?? 0) + 1);
+    if (c.isPrimarySupplier) {
+      primaryConfigCountByParent.set(
+        c.parentProductId,
+        (primaryConfigCountByParent.get(c.parentProductId) ?? 0) + 1,
+      );
+    }
   }
+
+  // Attachment counts — bulk fetch one row per product id (parts +
+  // configs) so we can compose each card's rollup count.
+  const allProductIdsToCount: number[] = [
+    ...partIds,
+    ...configRows.map((c) => c.id),
+  ];
   const attachmentCountRows = allProductIdsToCount.length > 0
     ? await db
         .select({
@@ -836,13 +855,20 @@ export async function listAggregateSupplierInventory(): Promise<{
   for (const r of projectRows) allProjectSet.add(r.projectNum);
 
   // Cluster sizes per globalProductId — drives the "+N alternative
-  // suppliers" badge on each card.
-  const globalIds = Array.from(
+  // suppliers" badge on each card. We compute clusters separately for
+  // top-level parts and for configurations because each level has its own
+  // sub-cluster (a config can be linked to alternative configs without
+  // dragging in the part-level cluster).
+  const partGlobalIds = Array.from(
     new Set(parts.map((p) => p.globalProductId).filter((g): g is string => !!g)),
   );
+  const configGlobalIds = Array.from(
+    new Set(configRows.map((c) => c.globalProductId).filter((g): g is string => !!g)),
+  );
   const clusterCountByGlobalId = new Map<string, number>();
-  if (globalIds.length > 0) {
-    const clusterRows = await db
+  async function loadClusterCounts(ids: string[], isParentLevel: boolean) {
+    if (ids.length === 0) return;
+    const rows = await db
       .select({
         globalProductId: supplierProducts.globalProductId,
         n: sql<number>`COUNT(*)::int`,
@@ -850,27 +876,42 @@ export async function listAggregateSupplierInventory(): Promise<{
       .from(supplierProducts)
       .where(
         and(
-          inArray(supplierProducts.globalProductId, globalIds),
-          sql`${supplierProducts.parentProductId} IS NULL`,
+          inArray(supplierProducts.globalProductId, ids),
+          isParentLevel
+            ? sql`${supplierProducts.parentProductId} IS NULL`
+            : sql`${supplierProducts.parentProductId} IS NOT NULL`,
           eq(supplierProducts.archived, false),
         ),
       )
       .groupBy(supplierProducts.globalProductId);
-    for (const r of clusterRows) {
+    for (const r of rows) {
       if (r.globalProductId) clusterCountByGlobalId.set(r.globalProductId, r.n);
     }
   }
+  await loadClusterCounts(partGlobalIds, true);
+  await loadClusterCounts(configGlobalIds, false);
 
-  const assembled: AggregateInventoryPart[] = parts.map((p) => {
-    const childIds = modelIdsByParent.get(p.id) ?? [];
+  const assembled: AggregateInventoryPart[] = [];
+
+  for (const p of parts) {
+    const childConfigs = configsByParent.get(p.id) ?? [];
+    // Rollup attachment count for the parent card = own + every child.
     let attachmentCount = attachmentCountByProduct.get(p.id) ?? 0;
-    for (const cid of childIds) {
-      attachmentCount += attachmentCountByProduct.get(cid) ?? 0;
+    for (const c of childConfigs) {
+      attachmentCount += attachmentCountByProduct.get(c.id) ?? 0;
     }
     const clusterSize = p.globalProductId
       ? clusterCountByGlobalId.get(p.globalProductId) ?? 1
       : 1;
-    return {
+    const configSummaries: AggregateConfigSummary[] = childConfigs.map((c) => ({
+      id: c.id,
+      name: c.name,
+      productCode: c.productCode,
+      isPrimarySupplier: c.isPrimarySupplier,
+      attachmentCount: attachmentCountByProduct.get(c.id) ?? 0,
+      thumbnailUrl: c.thumbnailUrl,
+    }));
+    assembled.push({
       id: p.id,
       supplierId: p.supplierId,
       supplierName: supplierNameById.get(p.supplierId) ?? "—",
@@ -888,8 +929,67 @@ export async function listAggregateSupplierInventory(): Promise<{
       globalProductId: p.globalProductId,
       isPrimarySupplier: p.isPrimarySupplier,
       alternativeSupplierCount: Math.max(0, clusterSize - 1),
-    };
-  });
+      kind: childConfigs.length > 0 ? "parent" : "standalone",
+      parentProductId: null,
+      parentName: null,
+      parentProductCode: null,
+      parentThumbnailUrl: null,
+      parentAttachmentCount: 0,
+      configurations: configSummaries,
+      primaryConfigCount: primaryConfigCountByParent.get(p.id) ?? 0,
+    });
+  }
+
+  // Now emit one row per CONFIGURATION as its own catalogue card. Each
+  // inherits its parent's thumbnail (when the config has none) and its
+  // parent's attachment count so the rolled-up file pill on the card is
+  // meaningful.
+  for (const c of configRows) {
+    if (c.parentProductId == null) continue;
+    const parent = partsById.get(c.parentProductId);
+    if (!parent) continue;
+    const ownAttachmentCount = attachmentCountByProduct.get(c.id) ?? 0;
+    const parentAttachmentCount = attachmentCountByProduct.get(parent.id) ?? 0;
+    const clusterSize = c.globalProductId
+      ? clusterCountByGlobalId.get(c.globalProductId) ?? 1
+      : 1;
+    assembled.push({
+      id: c.id,
+      supplierId: c.supplierId,
+      supplierName: supplierNameById.get(c.supplierId) ?? "—",
+      name: c.name,
+      productCode: c.productCode,
+      category: c.category ?? parent.category,
+      description: c.description ?? parent.description,
+      productUrl: c.productUrl,
+      // Thumbnail inheritance: use config's own when set, else parent's.
+      thumbnailUrl: c.thumbnailUrl ?? parent.thumbnailUrl,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+      modelCount: 0,
+      // File-count inheritance: configs roll up their parent's file count
+      // alongside their own so the catalogue pill reads honestly. The
+      // drawer can still distinguish own vs. inherited attachments.
+      attachmentCount: ownAttachmentCount + parentAttachmentCount,
+      projectNums: Array.from(projectsBySupplier.get(c.supplierId) ?? []).sort(),
+      globalProductId: c.globalProductId,
+      isPrimarySupplier: c.isPrimarySupplier,
+      alternativeSupplierCount: Math.max(0, clusterSize - 1),
+      kind: "configuration",
+      parentProductId: parent.id,
+      parentName: parent.name,
+      parentProductCode: parent.productCode,
+      parentThumbnailUrl: parent.thumbnailUrl,
+      parentAttachmentCount,
+      configurations: [],
+      primaryConfigCount: 0,
+    });
+  }
+
+  // Stable ordering: newest first across both kinds.
+  assembled.sort(
+    (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
+  );
 
   return { parts: assembled, projectNums: Array.from(allProjectSet).sort() };
 }
@@ -1274,7 +1374,27 @@ export async function promoteToPrimarySupplier(input: {
     throw new Error("Row has no globalProductId");
   }
 
+  // Server-side enforcement of the rule the UI already enforces: a part
+  // that has configurations cannot itself be marked primary — only its
+  // configurations can. The parent functions as a container.
   const isConfig = target.parentProductId != null;
+  if (!isConfig) {
+    const [{ n: childCount }] = await db
+      .select({ n: sql<number>`COUNT(*)::int` })
+      .from(supplierProducts)
+      .where(
+        and(
+          eq(supplierProducts.parentProductId, target.id),
+          eq(supplierProducts.archived, false),
+        ),
+      );
+    if (childCount > 0) {
+      throw new Error(
+        "This part has configurations — mark one of its configurations as primary instead.",
+      );
+    }
+  }
+
   // Demote every other row in the cluster (same nesting level only),
   // then promote this one.
   await db

@@ -15,7 +15,7 @@ import {
   type AggregateInventoryPart,
 } from "./supplier-inventory-actions";
 import ProductDrawerLoader from "./ProductDrawerLoader";
-import { filterByScope, type SupplierCatalogueScope } from "./_dedupe-parts";
+import { filterForCatalogue, type CatalogueViewMode } from "./_dedupe-parts";
 import AddProductDialog from "./AddProductDialog";
 
 export default function SupplierInventoryOverview({
@@ -32,8 +32,11 @@ export default function SupplierInventoryOverview({
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [partNameFilter, setPartNameFilter] = useState<string>("all");
-  // Scope controls deduplication. See dedupeParts above for the rule.
-  const [scope, setScope] = useState<SupplierCatalogueScope>("all");
+  // viewMode = which type of card is rendered (purchasable units vs.
+  // parent containers). primaryOnly is an independent filter inside each
+  // view. See filterForCatalogue for the rules.
+  const [viewMode, setViewMode] = useState<CatalogueViewMode>("all");
+  const [primaryOnly, setPrimaryOnly] = useState(false);
   const [openPart, setOpenPart] = useState<AggregateInventoryPart | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -88,10 +91,10 @@ export default function SupplierInventoryOverview({
         .toLowerCase();
       return hay.includes(q);
     };
-    // Scope filter first (cheap), then the field filters.
-    const scoped = filterByScope(data?.parts ?? [], scope);
+    // View mode + primary filter first (cheap), then the field filters.
+    const scoped = filterForCatalogue(data?.parts ?? [], viewMode, primaryOnly);
     return scoped.filter(matchesFilters);
-  }, [data, search, projectFilter, supplierFilter, partNameFilter, scope]);
+  }, [data, search, projectFilter, supplierFilter, partNameFilter, viewMode, primaryOnly]);
 
   if (err) {
     return (
@@ -124,7 +127,8 @@ export default function SupplierInventoryOverview({
     projectFilter !== "all" ||
     supplierFilter !== "all" ||
     partNameFilter !== "all" ||
-    scope !== "all";
+    viewMode !== "all" ||
+    primaryOnly;
 
   return (
     <div
@@ -193,12 +197,13 @@ export default function SupplierInventoryOverview({
               + Add product
             </button>
           )}
-          {/* Scope toggle — All vs One per product. Sits right next to
-              the count badge so the relationship between "what's
-              shown" and "scope" reads instantly. */}
+          {/* View-mode segmented — All products (every purchasable unit:
+              configurations + standalones) vs. Parent products (parts that
+              have configurations grouped). Primary-only is an INDEPENDENT
+              toggle next to it so the user can combine the two axes. */}
           <div
             role="tablist"
-            aria-label="Scope"
+            aria-label="View"
             style={{
               display: "flex",
               gap: 4,
@@ -211,23 +216,57 @@ export default function SupplierInventoryOverview({
             <button
               type="button"
               role="tab"
-              aria-selected={scope === "all"}
-              onClick={() => setScope("all")}
-              style={SCOPE_PILL(scope === "all")}
+              aria-selected={viewMode === "all"}
+              onClick={() => setViewMode("all")}
+              style={SCOPE_PILL(viewMode === "all")}
+              title="Every purchasable unit: configurations + standalone parts. Parent containers are hidden because each is represented by its configurations."
             >
               All products
             </button>
             <button
               type="button"
               role="tab"
-              aria-selected={scope === "primary"}
-              onClick={() => setScope("primary")}
-              style={SCOPE_PILL(scope === "primary", "#16a34a")}
-              title="Show only products explicitly marked as primary. Open a product card and click 'Mark as primary' inside to promote one."
+              aria-selected={viewMode === "parents"}
+              onClick={() => setViewMode("parents")}
+              style={SCOPE_PILL(viewMode === "parents")}
+              title="Only parts that have configurations grouped — the catalogue browsed by container."
             >
-              ★ Primary only
+              Parent products
             </button>
           </div>
+          <label
+            title={
+              viewMode === "all"
+                ? "Show only configurations + standalones explicitly marked as primary."
+                : "Show only parent containers whose configurations include a primary."
+            }
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              borderRadius: 999,
+              border: primaryOnly
+                ? "1px solid #16a34a"
+                : "1px solid var(--lb-border)",
+              background: primaryOnly
+                ? "color-mix(in srgb, #16a34a 14%, var(--lb-bg-elev))"
+                : "var(--lb-bg-elev)",
+              color: primaryOnly ? "#16a34a" : "var(--lb-text-2)",
+              fontSize: 12.5,
+              fontWeight: 700,
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={primaryOnly}
+              onChange={(e) => setPrimaryOnly(e.target.checked)}
+              style={{ margin: 0, accentColor: "#16a34a" }}
+            />
+            ★ Primary only
+          </label>
           <div
             style={{
               fontSize: 12,
@@ -313,7 +352,8 @@ export default function SupplierInventoryOverview({
                 setProjectFilter("all");
                 setSupplierFilter("all");
                 setPartNameFilter("all");
-                setScope("all");
+                setViewMode("all");
+                setPrimaryOnly(false);
               }}
               style={RESET_BTN}
             >
@@ -336,9 +376,11 @@ export default function SupplierInventoryOverview({
         >
           {data.parts.length === 0
             ? "No parts in any supplier's catalog yet. Use '+ Add product' above to add one."
-            : scope === "primary"
-              ? "No products marked as primary yet. Open any product card, scroll to 'Alternative products', and click 'Mark as primary' inside to promote a row into this view."
-              : "No parts match the current filters."}
+            : primaryOnly && viewMode === "all"
+              ? "No configurations or standalone parts marked as primary yet. Open any product card, scroll to 'Alternative products', and click 'Mark as primary' inside to promote a row into this view."
+              : primaryOnly && viewMode === "parents"
+                ? "No parent products contain a primary configuration yet. Open a parent's card, open one of its configurations, and click 'Mark as primary' inside."
+                : "No parts match the current filters."}
         </div>
       ) : (
         <div
@@ -350,8 +392,10 @@ export default function SupplierInventoryOverview({
         >
           {filtered.map((p) => (
             <PartCard
-              key={p.id}
+              key={`${p.kind}:${p.id}`}
               part={p}
+              viewMode={viewMode}
+              primaryOnly={primaryOnly}
               onClick={() => setOpenPart(p)}
             />
           ))}
@@ -568,12 +612,24 @@ function SearchableDropdown({
 
 function PartCard({
   part,
+  viewMode,
+  primaryOnly,
   onClick,
 }: {
   part: AggregateInventoryPart;
+  viewMode: CatalogueViewMode;
+  primaryOnly: boolean;
   onClick: () => void;
 }) {
-  const isPrimary = part.isPrimarySupplier;
+  // What counts as "primary" for the card border/badge depends on the
+  // card's kind. Configurations and standalones use their own
+  // isPrimarySupplier flag. Parent cards highlight as primary whenever ANY
+  // of their configurations are primary — they are containers, not
+  // themselves promotable, so this is the most useful signal.
+  const isPrimary =
+    part.kind === "parent"
+      ? part.primaryConfigCount > 0
+      : part.isPrimarySupplier;
   const idleBorder = isPrimary ? "#16a34a" : "var(--lb-border)";
   const idleBg = isPrimary
     ? "color-mix(in srgb, #16a34a 8%, var(--lb-bg-elev))"
@@ -760,6 +816,31 @@ function PartCard({
             {part.name}
           </div>
         )}
+        {/* Configuration cards show the parent name underneath so the user
+            can tell at a glance which part this variant belongs to. */}
+        {part.kind === "configuration" && part.parentName && (
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--lb-text-3)",
+              marginTop: 4,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            from{" "}
+            <span
+              style={{
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, monospace",
+                color: "var(--lb-text-2)",
+              }}
+            >
+              {part.parentProductCode || part.parentName}
+            </span>
+          </div>
+        )}
       </div>
       <div
         style={{
@@ -824,6 +905,90 @@ function PartCard({
           </span>
         )}
       </div>
+      {/* Parent cards in Parent-products view show a quick configuration
+          breakdown. When primaryOnly is on, primary configs render in
+          solid green; the rest are dimmed so the user can see at a glance
+          which variants are the chosen pick. */}
+      {part.kind === "parent" &&
+        viewMode === "parents" &&
+        part.configurations.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: "var(--lb-bg)",
+              border: "1px solid var(--lb-border)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 10.5,
+                fontWeight: 800,
+                letterSpacing: 0.6,
+                textTransform: "uppercase",
+                color: "var(--lb-text-3)",
+              }}
+            >
+              Configurations
+              {primaryOnly && (
+                <span style={{ marginLeft: 6, color: "#16a34a" }}>
+                  · {part.primaryConfigCount} of{" "}
+                  {part.configurations.length} primary
+                </span>
+              )}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 4,
+              }}
+            >
+              {part.configurations.slice(0, 6).map((c) => {
+                const cfgPrimary = c.isPrimarySupplier;
+                return (
+                  <span
+                    key={c.id}
+                    title={c.name}
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      fontFamily:
+                        "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      background: cfgPrimary
+                        ? "#16a34a"
+                        : "var(--lb-bg-elev)",
+                      color: cfgPrimary ? "white" : "var(--lb-text-3)",
+                      border: cfgPrimary
+                        ? "1px solid #16a34a"
+                        : "1px solid var(--lb-border)",
+                      opacity: primaryOnly && !cfgPrimary ? 0.4 : 1,
+                    }}
+                  >
+                    {cfgPrimary && "★ "}
+                    {c.productCode || c.name}
+                  </span>
+                );
+              })}
+              {part.configurations.length > 6 && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: "var(--lb-text-3)",
+                    alignSelf: "center",
+                  }}
+                >
+                  +{part.configurations.length - 6} more
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       {part.projectNums.length > 0 && (
         <div
           style={{

@@ -1841,26 +1841,53 @@ function AlternativeSuppliersBlock({
                         Open →
                       </button>
                     )}
-                    {canEdit && !a.isPrimarySupplier && (
-                      <button
-                        type="button"
-                        onClick={() => promote(a.id)}
-                        disabled={busyId === a.id}
-                        style={{
-                          padding: "5px 12px",
-                          fontSize: 11.5,
-                          fontWeight: 700,
-                          borderRadius: 999,
-                          background: "#16a34a",
-                          border: "1px solid #16a34a",
-                          color: "white",
-                          cursor: busyId === a.id ? "wait" : "pointer",
-                          opacity: busyId === a.id ? 0.6 : 1,
-                        }}
-                      >
-                        Mark as primary
-                      </button>
-                    )}
+                    {/* A part that has configurations is a CONTAINER — it
+                        cannot itself be marked primary. The user marks one
+                        of the configurations as primary instead. The catch
+                        only applies to part-level rows (modelCount > 0);
+                        config-level rows are themselves the unit of
+                        promotion and have modelCount = 0 by definition. */}
+                    {canEdit &&
+                      !a.isPrimarySupplier &&
+                      a.modelCount === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => promote(a.id)}
+                          disabled={busyId === a.id}
+                          style={{
+                            padding: "5px 12px",
+                            fontSize: 11.5,
+                            fontWeight: 700,
+                            borderRadius: 999,
+                            background: "#16a34a",
+                            border: "1px solid #16a34a",
+                            color: "white",
+                            cursor: busyId === a.id ? "wait" : "pointer",
+                            opacity: busyId === a.id ? 0.6 : 1,
+                          }}
+                        >
+                          Mark as primary
+                        </button>
+                      )}
+                    {canEdit &&
+                      !a.isPrimarySupplier &&
+                      a.modelCount > 0 && (
+                        <span
+                          title="This part has configurations — open a configuration and mark IT as primary."
+                          style={{
+                            padding: "5px 12px",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            borderRadius: 999,
+                            background: "transparent",
+                            border: "1px dashed var(--lb-border)",
+                            color: "var(--lb-text-3)",
+                            cursor: "help",
+                          }}
+                        >
+                          Mark a configuration instead
+                        </span>
+                      )}
                     {canEdit && a.isPrimarySupplier && (
                       <button
                         type="button"

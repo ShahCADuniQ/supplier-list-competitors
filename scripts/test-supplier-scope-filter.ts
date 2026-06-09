@@ -1,10 +1,20 @@
-// Smoke for filterByScope. Run: npx tsx scripts/test-supplier-scope-filter.ts
-import { filterByScope } from "../src/app/suppliers/_dedupe-parts";
+// Smoke for filterForCatalogue. Run: npx tsx scripts/test-supplier-scope-filter.ts
+import { filterForCatalogue } from "../src/app/suppliers/_dedupe-parts";
 
-type Row = { id: number; isPrimarySupplier: boolean };
+type Row = {
+  id: number;
+  kind: "standalone" | "parent" | "configuration";
+  isPrimarySupplier: boolean;
+  primaryConfigCount: number;
+};
 
-function row(id: number, isPrimary: boolean): Row {
-  return { id, isPrimarySupplier: isPrimary };
+function row(
+  id: number,
+  kind: Row["kind"],
+  isPrimary = false,
+  primaryConfigCount = 0,
+): Row {
+  return { id, kind, isPrimarySupplier: isPrimary, primaryConfigCount };
 }
 
 function expect(label: string, ok: boolean) {
@@ -12,32 +22,51 @@ function expect(label: string, ok: boolean) {
   if (!ok) process.exitCode = 1;
 }
 
-const rows = [
-  row(1, false),
-  row(2, true),
-  row(3, false),
-  row(4, true),
-  row(5, false),
-];
+const standaloneA = row(1, "standalone", true);
+const standaloneB = row(2, "standalone", false);
+const parentA = row(3, "parent", false, 1); // 1 of N configs primary
+const parentB = row(4, "parent", false, 0); // no primary configs
+const configA = row(5, "configuration", true);
+const configB = row(6, "configuration", false);
 
-const all = filterByScope(rows, "all");
-expect("all mode returns every row", all.length === 5);
+const all = [standaloneA, standaloneB, parentA, parentB, configA, configB];
 
-const primary = filterByScope(rows, "primary");
-const ids = primary.map((r) => r.id).sort((a, b) => a - b);
+// viewMode=all → hide parents, keep standalones + configurations.
+const allNoPrimary = filterForCatalogue(all, "all", false);
 expect(
-  `primary mode returns only rows with isPrimarySupplier=true — got ids ${ids.join(",")}`,
-  ids.length === 2 && ids[0] === 2 && ids[1] === 4,
+  `all/no-primary keeps 2 standalones + 2 configurations, hides 2 parents — got ${allNoPrimary
+    .map((r) => r.id)
+    .sort()
+    .join(",")}`,
+  allNoPrimary.length === 4 &&
+    allNoPrimary.every((r) => r.kind !== "parent"),
 );
 
-const emptyAll = filterByScope([], "all");
-expect("empty input, all → empty", emptyAll.length === 0);
-
-const emptyPrimary = filterByScope([], "primary");
-expect("empty input, primary → empty", emptyPrimary.length === 0);
-
-const nonePrimary = filterByScope([row(1, false), row(2, false)], "primary");
+const allPrimary = filterForCatalogue(all, "all", true);
 expect(
-  "no primaries marked → empty list (intentional, see empty-state copy)",
-  nonePrimary.length === 0,
+  `all/primary keeps only primary standalones + primary configs — got ${allPrimary
+    .map((r) => r.id)
+    .sort()
+    .join(",")}`,
+  allPrimary.length === 2 &&
+    allPrimary.every((r) => r.isPrimarySupplier && r.kind !== "parent"),
+);
+
+const parentsNoPrimary = filterForCatalogue(all, "parents", false);
+expect(
+  `parents/no-primary keeps both parents — got ${parentsNoPrimary
+    .map((r) => r.id)
+    .sort()
+    .join(",")}`,
+  parentsNoPrimary.length === 2 &&
+    parentsNoPrimary.every((r) => r.kind === "parent"),
+);
+
+const parentsPrimary = filterForCatalogue(all, "parents", true);
+expect(
+  `parents/primary keeps only parents with a primary config — got ${parentsPrimary
+    .map((r) => r.id)
+    .sort()
+    .join(",")}`,
+  parentsPrimary.length === 1 && parentsPrimary[0].id === parentA.id,
 );
