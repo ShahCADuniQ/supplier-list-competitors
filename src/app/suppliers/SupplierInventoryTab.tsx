@@ -19,6 +19,7 @@ import {
   type ProductProjectGroup,
   addPurchaseSource,
   removePurchaseSource,
+  setPrimaryPurchaseSource,
   listProductProjectGroups,
   listSupplierProjectsForPicker,
   addSupplierProductAttachment,
@@ -2122,9 +2123,32 @@ function PurchaseSourcesBlock({
     }
   }
 
-  // Build the display list: primary listing first (if URL set), then every
-  // JSONB entry in insertion order. Inherited rows from the parent come
-  // last under their own header — they're read-only from this drawer.
+  // Promote a source to primary (or pass null to restore the supplier
+  // listing as the implicit primary). The server demotes every other
+  // entry in one shot.
+  async function setPrimary(sourceId: string | null) {
+    setBusyId(sourceId ?? "__supplier-listing");
+    setErr(null);
+    try {
+      await setPrimaryPurchaseSource({ productId, sourceId });
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to update primary");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Which source is currently primary?
+  //   - If any JSONB source has isPrimary=true, that one wins.
+  //   - Otherwise the supplier listing (product.productUrl) is primary
+  //     by default — falling back to nothing when there's no URL.
+  const overridingPrimary = sources.find((s) => s.isPrimary === true) ?? null;
+
+  // Build the display list. Primary first (whichever source — supplier
+  // listing or an explicit override), then the remaining JSONB entries
+  // in insertion order. Inherited rows from the parent come last under
+  // their own header — they're read-only from this drawer.
   type Row = {
     key: string;
     name: string;
@@ -2132,19 +2156,45 @@ function PurchaseSourcesBlock({
     removable: boolean;
     sourceId?: string;
     primary?: boolean;
+    isSupplierListing?: boolean;
     inherited?: boolean;
   };
   const rows: Row[] = [];
-  if (productUrl) {
+  // 1) Primary row up top.
+  if (overridingPrimary) {
     rows.push({
-      key: "primary",
-      name: `${supplierName} (primary listing)`,
+      key: overridingPrimary.id,
+      name: overridingPrimary.name,
+      url: overridingPrimary.url,
+      removable: true,
+      sourceId: overridingPrimary.id,
+      primary: true,
+    });
+  } else if (productUrl) {
+    rows.push({
+      key: "supplier-listing",
+      name: `${supplierName} (supplier listing)`,
       url: productUrl,
       removable: false,
       primary: true,
+      isSupplierListing: true,
     });
   }
+  // 2) Supplier listing as a regular row when something else is primary,
+  //    so the user can still see / click it (and revert via the
+  //    "Restore supplier listing" action on the primary row).
+  if (overridingPrimary && productUrl) {
+    rows.push({
+      key: "supplier-listing",
+      name: `${supplierName} (supplier listing)`,
+      url: productUrl,
+      removable: false,
+      isSupplierListing: true,
+    });
+  }
+  // 3) Remaining JSONB sources, skipping whatever is already primary above.
   for (const s of sources) {
+    if (overridingPrimary && s.id === overridingPrimary.id) continue;
     rows.push({
       key: s.id,
       name: s.name,
@@ -2343,6 +2393,82 @@ function PurchaseSourcesBlock({
                     ↗ {r.url.replace(/^https?:\/\//, "")}
                   </a>
                 </div>
+                {/* Primary toggle. Three cases:
+                      1) Non-primary JSONB row → "Set as primary".
+                      2) Currently-primary JSONB row → "Use supplier
+                         listing" (clears the override).
+                      3) Supplier-listing row that is NOT primary
+                         (because something else overrode it) → "Restore
+                         as primary".
+                    Inherited (read-only) rows never get the toggle. */}
+                {canEdit && !r.inherited && !r.primary && r.sourceId && (
+                  <button
+                    type="button"
+                    onClick={() => setPrimary(r.sourceId!)}
+                    disabled={busyId === r.sourceId}
+                    title="Set this as the primary purchase source"
+                    style={{
+                      padding: "5px 10px",
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      borderRadius: 999,
+                      background: "transparent",
+                      border: "1px solid #16a34a",
+                      color: "#16a34a",
+                      cursor: busyId === r.sourceId ? "wait" : "pointer",
+                      opacity: busyId === r.sourceId ? 0.6 : 1,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    ★ Set primary
+                  </button>
+                )}
+                {canEdit && !r.inherited && !r.primary && r.isSupplierListing && (
+                  <button
+                    type="button"
+                    onClick={() => setPrimary(null)}
+                    disabled={busyId === "__supplier-listing"}
+                    title="Restore the supplier listing as the primary purchase source"
+                    style={{
+                      padding: "5px 10px",
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      borderRadius: 999,
+                      background: "transparent",
+                      border: "1px solid #16a34a",
+                      color: "#16a34a",
+                      cursor:
+                        busyId === "__supplier-listing" ? "wait" : "pointer",
+                      opacity: busyId === "__supplier-listing" ? 0.6 : 1,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    ★ Restore as primary
+                  </button>
+                )}
+                {canEdit && r.primary && r.sourceId && !r.inherited && (
+                  <button
+                    type="button"
+                    onClick={() => setPrimary(null)}
+                    disabled={busyId === "__supplier-listing"}
+                    title="Use the supplier listing as the primary source instead"
+                    style={{
+                      padding: "5px 10px",
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      borderRadius: 999,
+                      background: "transparent",
+                      border: "1px solid var(--lb-border)",
+                      color: "var(--lb-text-3)",
+                      cursor:
+                        busyId === "__supplier-listing" ? "wait" : "pointer",
+                      opacity: busyId === "__supplier-listing" ? 0.6 : 1,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Unmark primary
+                  </button>
+                )}
                 {canEdit && r.removable && r.sourceId && (
                   <button
                     type="button"

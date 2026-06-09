@@ -1583,6 +1583,12 @@ export type PurchaseSource = {
   notes?: string | null;
   addedAt: string;
   addedByClerkId?: string | null;
+  // When set, this purchase source overrules the product's own supplier
+  // listing (product.productUrl) as the primary "where to buy" row. At
+  // most ONE entry in the list should have isPrimary=true at any time;
+  // setPrimaryPurchaseSource enforces that invariant. Default is false /
+  // missing, in which case the supplier listing remains primary.
+  isPrimary?: boolean;
 };
 
 function normalisePurchaseSource(raw: unknown): PurchaseSource | null {
@@ -1599,6 +1605,7 @@ function normalisePurchaseSource(raw: unknown): PurchaseSource | null {
     notes: typeof r.notes === "string" ? r.notes : null,
     addedAt: typeof r.addedAt === "string" ? r.addedAt : new Date().toISOString(),
     addedByClerkId: typeof r.addedByClerkId === "string" ? r.addedByClerkId : null,
+    isPrimary: r.isPrimary === true,
   };
 }
 
@@ -1683,6 +1690,47 @@ export async function removePurchaseSource(input: {
   const next = (row.purchaseSources ?? [])
     .map(normalisePurchaseSource)
     .filter((s): s is PurchaseSource => s !== null && s.id !== input.sourceId);
+
+  await db
+    .update(supplierProducts)
+    .set({ purchaseSources: next, updatedAt: new Date() })
+    .where(eq(supplierProducts.id, input.productId));
+  revalidatePath("/suppliers");
+}
+
+// Mark one purchase source as the primary "where to buy" listing,
+// demoting any other source that was previously primary. Passing
+// sourceId=null clears every primary flag — in that state the
+// product's own supplier listing (product.productUrl) is implicitly
+// primary again.
+export async function setPrimaryPurchaseSource(input: {
+  productId: number;
+  sourceId: string | null;
+}): Promise<void> {
+  const { profile } = await requireProductAccess(input.productId);
+  if (!canEdit(profile)) {
+    throw new Error("Unauthorized: missing edit permission");
+  }
+  await ensureSupplierInventorySchema();
+
+  const [row] = await db
+    .select({ purchaseSources: supplierProducts.purchaseSources })
+    .from(supplierProducts)
+    .where(eq(supplierProducts.id, input.productId))
+    .limit(1);
+  if (!row) return;
+  const current = (row.purchaseSources ?? [])
+    .map(normalisePurchaseSource)
+    .filter((s): s is PurchaseSource => s !== null);
+
+  if (input.sourceId !== null && !current.some((s) => s.id === input.sourceId)) {
+    throw new Error("Purchase source not found on this product");
+  }
+
+  const next = current.map((s) => ({
+    ...s,
+    isPrimary: input.sourceId !== null && s.id === input.sourceId,
+  }));
 
   await db
     .update(supplierProducts)
