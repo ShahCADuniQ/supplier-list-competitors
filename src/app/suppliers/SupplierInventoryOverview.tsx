@@ -17,6 +17,7 @@ import {
 import ProductDrawerLoader from "./ProductDrawerLoader";
 import { filterForCatalogue, type CatalogueViewMode } from "./_dedupe-parts";
 import AddProductDialog from "./AddProductDialog";
+import PlaceOrderDialog from "./PlaceOrderDialog";
 
 export default function SupplierInventoryOverview({
   canEdit,
@@ -39,6 +40,10 @@ export default function SupplierInventoryOverview({
   const [primaryOnly, setPrimaryOnly] = useState(false);
   const [openPart, setOpenPart] = useState<AggregateInventoryPart | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [orderingPart, setOrderingPart] = useState<AggregateInventoryPart | null>(
+    null,
+  );
+  const [orderMsg, setOrderMsg] = useState<string | null>(null);
 
   function reload() {
     listAggregateSupplierInventory()
@@ -396,7 +401,9 @@ export default function SupplierInventoryOverview({
               part={p}
               viewMode={viewMode}
               primaryOnly={primaryOnly}
+              canOrder={canEdit}
               onClick={() => setOpenPart(p)}
+              onPlaceOrder={() => setOrderingPart(p)}
             />
           ))}
         </div>
@@ -420,6 +427,36 @@ export default function SupplierInventoryOverview({
           supplierFilter !== "all" ? Number(supplierFilter) : null
         }
       />
+      <PlaceOrderDialog
+        open={orderingPart !== null}
+        product={orderingPart}
+        onClose={() => setOrderingPart(null)}
+        onSent={(msg) => {
+          setOrderingPart(null);
+          setOrderMsg(msg);
+          setTimeout(() => setOrderMsg(null), 4000);
+          reload();
+        }}
+      />
+      {orderMsg && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            right: 24,
+            padding: "10px 16px",
+            borderRadius: 999,
+            background: "var(--lb-accent)",
+            color: "var(--lb-accent-fg)",
+            fontSize: 13,
+            fontWeight: 700,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+            zIndex: 100,
+          }}
+        >
+          {orderMsg}
+        </div>
+      )}
     </div>
   );
 }
@@ -614,12 +651,16 @@ function PartCard({
   part,
   viewMode,
   primaryOnly,
+  canOrder,
   onClick,
+  onPlaceOrder,
 }: {
   part: AggregateInventoryPart;
   viewMode: CatalogueViewMode;
   primaryOnly: boolean;
+  canOrder: boolean;
   onClick: () => void;
+  onPlaceOrder: () => void;
 }) {
   // What counts as "primary" for the card border/badge depends on the
   // card's kind. Configurations and standalones use their own
@@ -747,6 +788,45 @@ function PartCard({
             }}
           >
             {part.modelCount} config{part.modelCount === 1 ? "" : "s"}
+          </span>
+        )}
+        {canOrder && part.kind !== "parent" && (
+          // Parent containers can't be ordered directly — order a
+          // configuration instead. Standalones and configurations carry
+          // the buy CTA on the thumbnail bottom-right.
+          <span
+            role="button"
+            tabIndex={0}
+            title="Place an order for this product"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlaceOrder();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                onPlaceOrder();
+              }
+            }}
+            style={{
+              position: "absolute",
+              bottom: 6,
+              right: 6,
+              padding: "4px 10px",
+              borderRadius: 999,
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 0.2,
+              background: "rgba(15,23,42,0.85)",
+              color: "white",
+              backdropFilter: "blur(4px)",
+              cursor: "pointer",
+              userSelect: "none",
+              border: "1px solid rgba(255,255,255,0.2)",
+            }}
+          >
+            🛒 Order
           </span>
         )}
         {isPrimary && (

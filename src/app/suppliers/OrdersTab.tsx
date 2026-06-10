@@ -47,6 +47,8 @@ import {
 import IncotermSelect from "./IncotermSelect";
 import RfqEmailDraftDialog from "./RfqEmailDraftDialog";
 import ProcurementReviewQueue from "./ProcurementReviewQueue";
+import CataloguePickerDialog from "./CataloguePickerDialog";
+import type { CataloguePickerItem } from "./supplier-inventory-actions";
 import { sendInitialRfqDeliveries } from "./rfq-email-actions";
 
 type FullSupplier = Supplier & {
@@ -481,6 +483,40 @@ function CreateView({
   // Suppliers staged to receive the RFQ. Each entry is either an existing
   // supplier (supplierId set) or a brand-new email-only invite.
   const [stagedSuppliers, setStagedSuppliers] = useState<StagedSupplier[]>([]);
+
+  // Catalogue picker — clicking '📦 Pick from catalogue' on any item row
+  // opens this with the row's index so onPick can fill the right line.
+  const [pickerForIndex, setPickerForIndex] = useState<number | null>(null);
+  function fillFromCatalogue(idx: number, item: CataloguePickerItem) {
+    setItems((prev) => {
+      const next = [...prev];
+      const cur = next[idx];
+      next[idx] = {
+        ...cur,
+        productCode: item.productCode ?? cur.productCode ?? "",
+        description: item.name || cur.description || "",
+        productUrl: item.productUrl ?? cur.productUrl ?? "",
+        supplierProductId: item.id,
+      };
+      return next;
+    });
+    // Also auto-stage that product's supplier as a recipient (if not
+    // already) so the user doesn't have to add them by hand. We only
+    // add the supplier; the user provides email + contact.
+    setStagedSuppliers((prev) => {
+      if (prev.some((s) => s.supplierId === item.supplierId)) return prev;
+      return [
+        ...prev,
+        {
+          key: `auto-${item.supplierId}-${Date.now()}`,
+          supplierId: item.supplierId,
+          name: item.supplierName,
+          emails: [],
+        },
+      ];
+    });
+    setPickerForIndex(null);
+  }
 
   // Delivery routing for the initial RFQ outreach. Two mutually-exclusive
   // pairs of toggles — pick how each staged supplier hears about the RFQ
@@ -1010,6 +1046,67 @@ function CreateView({
                 gap: 8,
               }}
             >
+              {/* Catalogue link controls. Pick from catalogue auto-fills
+                  productCode / description / productUrl + records the
+                  supplier_products id so PO send-time can update
+                  catalogue + inventory directly. */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setPickerForIndex(i)}
+                  style={{
+                    padding: "5px 12px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    borderRadius: 999,
+                    border: it.supplierProductId
+                      ? "1px solid #16a34a"
+                      : "1px solid var(--lb-border)",
+                    background: it.supplierProductId
+                      ? "color-mix(in srgb, #16a34a 12%, transparent)"
+                      : "var(--lb-bg-elev)",
+                    color: it.supplierProductId
+                      ? "#16a34a"
+                      : "var(--lb-text-2)",
+                    cursor: "pointer",
+                  }}
+                >
+                  📦 {it.supplierProductId ? "Linked to catalogue" : "Pick from catalogue"}
+                </button>
+                {it.supplierProductId && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateLine(i, { supplierProductId: null })
+                    }
+                    style={{
+                      padding: "5px 8px",
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      borderRadius: 999,
+                      border: "1px solid var(--lb-border)",
+                      background: "transparent",
+                      color: "var(--lb-text-3)",
+                      cursor: "pointer",
+                    }}
+                    title="Unlink — line will become a free-form description again"
+                  >
+                    Unlink
+                  </button>
+                )}
+                <span style={{ fontSize: 11.5, color: "var(--lb-text-3)" }}>
+                  {it.supplierProductId
+                    ? "PO send will update this product in the catalogue + Lightbase Inventory."
+                    : "Optional. Linking auto-fills code / description / URL and auto-stages the supplier as a recipient."}
+                </span>
+              </div>
               <div style={gridCols(6)}>
                 <Field label="Lightbase Ref.">
                   <input
@@ -1288,6 +1385,13 @@ function CreateView({
           {busy ? "Creating…" : stagedSuppliers.length > 0 ? `Create RFQ & invite ${stagedSuppliers.length} supplier${stagedSuppliers.length === 1 ? "" : "s"}` : "Create RFQ"}
         </button>
       </div>
+      <CataloguePickerDialog
+        open={pickerForIndex !== null}
+        onClose={() => setPickerForIndex(null)}
+        onPick={(item) => {
+          if (pickerForIndex !== null) fillFromCatalogue(pickerForIndex, item);
+        }}
+      />
     </>
   );
 }

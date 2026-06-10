@@ -256,6 +256,11 @@ export type RfqItemInput = {
   // isometric used for the part's own inventory card.
   assemblyThumbnailUrl?: string;
   assemblyThumbnailPathname?: string;
+  // Catalogue linkage. When the buyer picked a product from the supplier
+  // catalogue via the picker, this links the resulting rfq_items row to
+  // that supplier_products row. Carried through RFQ → quote → PO so PO
+  // send-time can update the catalogue + inventory automatically.
+  supplierProductId?: number | null;
 };
 
 export async function createRfq(input: {
@@ -441,6 +446,7 @@ export async function createRfq(input: {
         notes: it.notes?.trim() || null,
         lightbaseRef: inv.code,
         inventoryItemId: inv.id,
+        supplierProductId: it.supplierProductId ?? null,
       })
       .returning({ id: rfqItems.id });
     // Persist any staged photos / docs against the freshly-created item.
@@ -1304,10 +1310,12 @@ async function generatePoFromQuote(input: {
       qty: it.qty,
       unitPrice: String(unit),
       totalPrice: String(total),
-      // Carry inventory linkage from RFQ → PO so the per-part history
-      // includes both the original RFQ AND the resulting PO.
+      // Carry inventory + catalogue linkage from RFQ → PO so the per-
+      // part history includes both the original RFQ AND the resulting
+      // PO, and PO send-time can update the supplier catalogue too.
       lightbaseRef: it.lightbaseRef ?? null,
       inventoryItemId: it.inventoryItemId ?? null,
+      supplierProductId: it.supplierProductId ?? null,
       _total: total,
     });
   }
@@ -1351,6 +1359,9 @@ async function generatePoFromQuote(input: {
         qty: l.qty,
         unitPrice: l.unitPrice,
         totalPrice: l.totalPrice,
+        lightbaseRef: l.lightbaseRef ?? null,
+        inventoryItemId: l.inventoryItemId ?? null,
+        supplierProductId: l.supplierProductId ?? null,
       })),
     );
   }
@@ -1388,23 +1399,53 @@ export async function sendPo(poId: number): Promise<void> {
     .where(eq(purchaseOrders.id, poId));
 
   if (!alreadySent) {
-    // Flip every linked part from pending_qty → confirmed_qty.
+    // Flip every linked part from pending_qty → confirmed_qty, AND make
+    // sure every PO line lives in the supplier's catalogue (creating a
+    // standalone product row when the buyer didn't link one at RFQ time).
     const lines = await db
       .select({
         qty: purchaseOrderLines.qty,
+        description: purchaseOrderLines.description,
+        ref: purchaseOrderLines.ref,
         inventoryItemId: purchaseOrderLines.inventoryItemId,
+        supplierProductId: purchaseOrderLines.supplierProductId,
       })
       .from(purchaseOrderLines)
       .where(eq(purchaseOrderLines.poId, poId));
     const { confirmInventoryQty } = await import("./inventory-actions");
+    const { findOrCreateSupplierProduct } = await import(
+      "./supplier-inventory-actions"
+    );
     for (const ln of lines) {
-      if (!ln.inventoryItemId || ln.qty <= 0) continue;
-      try {
-        await confirmInventoryQty({ inventoryItemId: ln.inventoryItemId, qty: ln.qty });
-      } catch (e) {
-        // Non-fatal: PO still sends; counter discrepancy can be reconciled
-        // manually from the inventory tab.
-        console.warn("[rfq] confirmInventoryQty failed:", e);
+      if (ln.inventoryItemId && ln.qty > 0) {
+        try {
+          await confirmInventoryQty({
+            inventoryItemId: ln.inventoryItemId,
+            qty: ln.qty,
+          });
+        } catch (e) {
+          // Non-fatal: PO still sends; counter discrepancy can be
+          // reconciled manually from the inventory tab.
+          console.warn("[rfq] confirmInventoryQty failed:", e);
+        }
+      }
+      // Supplier-catalogue dispatch. If the buyer linked a product at
+      // RFQ creation, supplierProductId is already set — we trust it.
+      // Otherwise we look up by product code on this supplier; if no
+      // match, create a fresh standalone row so the catalogue reflects
+      // every product the team has actually ordered.
+      if (po.supplierId && ln.supplierProductId == null) {
+        try {
+          await findOrCreateSupplierProduct({
+            supplierId: po.supplierId,
+            productCode: ln.ref,
+            name: ln.description,
+            description: null,
+            category: null,
+          });
+        } catch (e) {
+          console.warn("[rfq] findOrCreateSupplierProduct failed:", e);
+        }
       }
     }
   }

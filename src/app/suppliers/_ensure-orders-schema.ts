@@ -460,6 +460,15 @@ export function ensureOrdersSchema(): Promise<void> {
       await db.execute(sql`ALTER TABLE "rfq_email_drafts" ADD COLUMN IF NOT EXISTS "deliver_to_supplier_platform" boolean NOT NULL DEFAULT false`);
       await db.execute(sql`ALTER TABLE "rfq_email_drafts" ADD COLUMN IF NOT EXISTS "procurement_via_email" boolean NOT NULL DEFAULT false`);
       await db.execute(sql`ALTER TABLE "rfq_email_drafts" ADD COLUMN IF NOT EXISTS "procurement_via_platform" boolean NOT NULL DEFAULT false`);
+
+      // Catalogue ↔ RFQ/PO linkage. Lets a buyer pick a product from the
+      // supplier catalogue when drafting an RFQ; carries through the
+      // RFQ → quote → PO pipeline so PO-send time can update the
+      // catalogue + inventory automatically.
+      await db.execute(sql`ALTER TABLE "rfq_items" ADD COLUMN IF NOT EXISTS "supplier_product_id" integer`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "rfq_items_supplier_product_idx" ON "rfq_items" ("supplier_product_id")`);
+      await db.execute(sql`ALTER TABLE "purchase_order_lines" ADD COLUMN IF NOT EXISTS "supplier_product_id" integer`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "purchase_order_lines_supplier_product_idx" ON "purchase_order_lines" ("supplier_product_id")`);
       // Backfill existing rows from the legacy 'route' column so the new
       // flags reflect their original intent. direct_to_supplier rows
       // become email-only (the historical behaviour); via_procurement

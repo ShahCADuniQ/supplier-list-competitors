@@ -1978,12 +1978,18 @@ export const rfqItems = pgTable(
     // (e.g. "LB-000123"); inventoryItemId is the FK that survives renames.
     lightbaseRef: text("lightbase_ref"),
     inventoryItemId: integer("inventory_item_id"),
+    // Catalogue linkage. When a buyer picks a product from the supplier
+    // catalogue to pre-fill an RFQ line, we keep the link so the PO →
+    // catalogue + inventory dispatch can find the product without
+    // string-matching codes.
+    supplierProductId: integer("supplier_product_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
     rfqIdx: index("rfq_items_rfq_idx").on(t.rfqId),
     lightbaseRefIdx: index("rfq_items_lightbase_ref_idx").on(t.lightbaseRef),
     inventoryItemIdx: index("rfq_items_inventory_item_idx").on(t.inventoryItemId),
+    supplierProductIdx: index("rfq_items_supplier_product_idx").on(t.supplierProductId),
   }),
 );
 
@@ -2332,12 +2338,17 @@ export const purchaseOrderLines = pgTable(
     // the inventory link survives RFQ → quote → PO.
     lightbaseRef: text("lightbase_ref"),
     inventoryItemId: integer("inventory_item_id"),
+    // Inherited from rfq_items.supplier_product_id when the RFQ line was
+    // picked from the catalogue. Drives the PO-send-time catalogue +
+    // inventory dispatch (feature B).
+    supplierProductId: integer("supplier_product_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
     poIdx: index("purchase_order_lines_po_idx").on(t.poId),
     lightbaseRefIdx: index("purchase_order_lines_lightbase_ref_idx").on(t.lightbaseRef),
     inventoryItemIdx: index("purchase_order_lines_inventory_item_idx").on(t.inventoryItemId),
+    supplierProductIdx: index("purchase_order_lines_supplier_product_idx").on(t.supplierProductId),
   }),
 );
 

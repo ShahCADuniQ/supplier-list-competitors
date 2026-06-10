@@ -1951,3 +1951,151 @@ async function resolveReadAccessForProduct(productId: number): Promise<void> {
   if (!row) throw new Error("Product not found");
   await resolveReadAccess(row.supplierId);
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Catalogue picker — used by the RFQ builder + the "Place order" flow on
+// the supplier catalogue to attach a supplier_products row to an RFQ
+// line so PO send-time can update the catalogue + inventory directly.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type CataloguePickerItem = {
+  id: number;
+  supplierId: number;
+  supplierName: string;
+  name: string;
+  productCode: string | null;
+  category: string | null;
+  description: string | null;
+  productUrl: string | null;
+  thumbnailUrl: string | null;
+  parentName: string | null;
+  isConfiguration: boolean;
+};
+
+export async function listCataloguePickerItems(input?: {
+  // Optional limit to a single supplier — used by the "Place order" flow
+  // when the user is already inside a supplier's catalogue.
+  supplierId?: number;
+}): Promise<CataloguePickerItem[]> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canViewSuppliers(profile)) {
+    throw new Error("Unauthorized: missing supplier-view permission");
+  }
+  await ensureSupplierInventorySchema();
+
+  const tenantClientId = profile.clientId ?? null;
+  const tenantSupplierFilter =
+    tenantClientId == null ? undefined : eq(suppliers.clientId, tenantClientId);
+
+  const rows = await db
+    .select({
+      id: supplierProducts.id,
+      supplierId: supplierProducts.supplierId,
+      supplierName: suppliers.name,
+      name: supplierProducts.name,
+      productCode: supplierProducts.productCode,
+      category: supplierProducts.category,
+      description: supplierProducts.description,
+      productUrl: supplierProducts.productUrl,
+      thumbnailUrl: supplierProducts.thumbnailUrl,
+      parentProductId: supplierProducts.parentProductId,
+    })
+    .from(supplierProducts)
+    .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
+    .where(
+      and(
+        eq(supplierProducts.archived, false),
+        input?.supplierId != null
+          ? eq(supplierProducts.supplierId, input.supplierId)
+          : undefined,
+        tenantSupplierFilter,
+      ),
+    )
+    .orderBy(desc(supplierProducts.updatedAt));
+
+  // Build parent-name lookup so configuration cards show "from {parent}".
+  const parentIds = Array.from(
+    new Set(rows.map((r) => r.parentProductId).filter((v): v is number => v != null)),
+  );
+  const parentNameById = new Map<number, string>();
+  if (parentIds.length > 0) {
+    const parents = await db
+      .select({ id: supplierProducts.id, name: supplierProducts.name })
+      .from(supplierProducts)
+      .where(inArray(supplierProducts.id, parentIds));
+    for (const p of parents) parentNameById.set(p.id, p.name);
+  }
+
+  return rows.map((r) => ({
+    id: r.id,
+    supplierId: r.supplierId,
+    supplierName: r.supplierName,
+    name: r.name,
+    productCode: r.productCode,
+    category: r.category,
+    description: r.description,
+    productUrl: r.productUrl,
+    thumbnailUrl: r.thumbnailUrl,
+    parentName:
+      r.parentProductId != null
+        ? parentNameById.get(r.parentProductId) ?? null
+        : null,
+    isConfiguration: r.parentProductId != null,
+  }));
+}
+
+// Find an existing supplier_products row for the given (supplierId,
+// code) pair, or create a fresh standalone product when nothing matches.
+// Used by the PO-send dispatcher (feature B) to ensure every PO line
+// lives in the supplier catalogue afterwards.
+export async function findOrCreateSupplierProduct(input: {
+  supplierId: number;
+  productCode: string | null;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+}): Promise<{ id: number; created: boolean }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Unauthorized: not signed in");
+  if (!canEdit(profile)) {
+    throw new Error("Unauthorized: missing edit permission");
+  }
+  await ensureSupplierInventorySchema();
+
+  const code = input.productCode?.trim() || null;
+  if (code) {
+    const [existing] = await db
+      .select({ id: supplierProducts.id })
+      .from(supplierProducts)
+      .where(
+        and(
+          eq(supplierProducts.supplierId, input.supplierId),
+          sql`LOWER(TRIM(${supplierProducts.productCode})) = LOWER(${code})`,
+          sql`${supplierProducts.parentProductId} IS NULL`,
+          eq(supplierProducts.archived, false),
+        ),
+      )
+      .limit(1);
+    if (existing) return { id: existing.id, created: false };
+  }
+
+  const globalProductId = `gp-${crypto.randomUUID()}`;
+  const [row] = await db
+    .insert(supplierProducts)
+    .values({
+      supplierId: input.supplierId,
+      parentProductId: null,
+      globalProductId,
+      isPrimarySupplier: true,
+      name: input.name.trim() || code || "Unnamed product",
+      productCode: code,
+      description: input.description?.trim() || null,
+      category: input.category?.trim() || null,
+      createdByRole: "lightbase",
+      createdByClerkId: profile.clerkUserId,
+    })
+    .returning({ id: supplierProducts.id });
+  return { id: row.id, created: true };
+}
