@@ -509,6 +509,58 @@ export async function archiveInventoryItem(input: {
   revalidatePath("/suppliers");
 }
 
+// Hard delete an inventory item (part or assembly). Use with care — this
+// is irreversible. To soft-remove a row from the list while keeping
+// historical RFQ / PO references intact, use archiveInventoryItem.
+//
+// References on rfq_items and purchase_order_lines are not enforced by
+// FK constraints (the columns intentionally have no .references in the
+// schema), so the delete succeeds even when historical orders point at
+// this id. Those rows are left pointing at a defunct id — same trade-off
+// the existing archive flow accepts. Children of an assembly are not
+// cascade-deleted by Postgres either; this action explicitly orphans
+// them (NULLs parent_assembly_id) unless deleteChildren is requested.
+export async function deleteInventoryItem(input: {
+  itemId: number;
+  // When the item is an assembly: should every child part be hard-
+  // deleted too? Default false (orphan them so their files / histories
+  // survive). True for assemblies that were created in error and have
+  // no other purpose.
+  deleteChildren?: boolean;
+}): Promise<{ deletedChildren: number }> {
+  await requireSupplierEditor();
+  await ensureOrdersSchema();
+
+  const [target] = await db
+    .select({ id: inventoryItems.id, kind: inventoryItems.kind })
+    .from(inventoryItems)
+    .where(eq(inventoryItems.id, input.itemId))
+    .limit(1);
+  if (!target) throw new Error("Inventory item not found");
+
+  let deletedChildren = 0;
+  if (target.kind === "assembly") {
+    if (input.deleteChildren) {
+      const res = await db
+        .delete(inventoryItems)
+        .where(eq(inventoryItems.parentAssemblyId, target.id))
+        .returning({ id: inventoryItems.id });
+      deletedChildren = res.length;
+    } else {
+      // Orphan the children so they keep showing in the parts list
+      // and stay attached to their RFQ / PO history.
+      await db
+        .update(inventoryItems)
+        .set({ parentAssemblyId: null, updatedAt: new Date() })
+        .where(eq(inventoryItems.parentAssemblyId, target.id));
+    }
+  }
+
+  await db.delete(inventoryItems).where(eq(inventoryItems.id, target.id));
+  revalidatePath("/suppliers");
+  return { deletedChildren };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // QTY LIFECYCLE
 //

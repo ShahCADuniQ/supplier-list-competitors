@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   archiveInventoryItem,
+  deleteInventoryItem,
   getInventoryItemHistory,
   listInventoryItems,
   updateInventoryItem,
@@ -254,7 +255,72 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
                     <Td style={{ color: "var(--lb-text-3)", fontSize: 11.5 }}>
                       {it.lastActivityAt ? new Date(it.lastActivityAt).toLocaleDateString() : "—"}
                     </Td>
-                    <Td style={{ textAlign: "right", color: "var(--lb-text-3)" }}>›</Td>
+                    <Td style={{ textAlign: "right" }}>
+                      <div
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                        }}
+                      >
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const isAssembly = it.kind === "assembly";
+                              const noun = isAssembly ? "assembly" : "part";
+                              if (
+                                !window.confirm(
+                                  `Delete ${noun} ${it.code}? This is permanent. ` +
+                                    (isAssembly
+                                      ? "Its child parts will be orphaned (kept in the list, no parent assembly)."
+                                      : "Historical RFQ / PO rows that linked here will still exist but lose the inventory link."),
+                                )
+                              )
+                                return;
+                              let deleteChildren = false;
+                              if (isAssembly) {
+                                deleteChildren = window.confirm(
+                                  "Also delete every child part of this assembly?\n\n" +
+                                    "OK = delete children too\n" +
+                                    "Cancel = orphan them (keep the children)",
+                                );
+                              }
+                              try {
+                                await deleteInventoryItem({
+                                  itemId: it.id,
+                                  deleteChildren,
+                                });
+                                reload();
+                              } catch (err) {
+                                window.alert(
+                                  err instanceof Error
+                                    ? err.message
+                                    : "Delete failed",
+                                );
+                              }
+                            }}
+                            style={{
+                              padding: "3px 9px",
+                              fontSize: 11.5,
+                              fontWeight: 700,
+                              borderRadius: 999,
+                              border: "1px solid rgba(220,38,38,0.4)",
+                              background: "transparent",
+                              color: "#dc2626",
+                              cursor: "pointer",
+                            }}
+                            title={`Delete this ${
+                              it.kind === "assembly" ? "assembly" : "part"
+                            } permanently`}
+                          >
+                            🗑 Delete
+                          </button>
+                        )}
+                        <span style={{ color: "var(--lb-text-3)" }}>›</span>
+                      </div>
+                    </Td>
                   </tr>
                 ))}
               </tbody>
