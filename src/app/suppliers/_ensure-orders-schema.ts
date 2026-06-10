@@ -469,6 +469,16 @@ export function ensureOrdersSchema(): Promise<void> {
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "rfq_items_supplier_product_idx" ON "rfq_items" ("supplier_product_id")`);
       await db.execute(sql`ALTER TABLE "purchase_order_lines" ADD COLUMN IF NOT EXISTS "supplier_product_id" integer`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "purchase_order_lines_supplier_product_idx" ON "purchase_order_lines" ("supplier_product_id")`);
+
+      // "Used for" linkage — every order can be tagged with the Lightbase
+      // assembly it's being procured for. Lets the team see every
+      // part / consumable that's been ordered to build a given finished
+      // product. Inventory item id (kind='assembly' on the inventory
+      // side); nullable.
+      await db.execute(sql`ALTER TABLE "rfq_items" ADD COLUMN IF NOT EXISTS "for_inventory_item_id" integer`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "rfq_items_for_inventory_item_idx" ON "rfq_items" ("for_inventory_item_id")`);
+      await db.execute(sql`ALTER TABLE "purchase_order_lines" ADD COLUMN IF NOT EXISTS "for_inventory_item_id" integer`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "purchase_order_lines_for_inventory_item_idx" ON "purchase_order_lines" ("for_inventory_item_id")`);
       // Backfill existing rows from the legacy 'route' column so the new
       // flags reflect their original intent. direct_to_supplier rows
       // become email-only (the historical behaviour); via_procurement

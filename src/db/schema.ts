@@ -1983,6 +1983,14 @@ export const rfqItems = pgTable(
     // catalogue + inventory dispatch can find the product without
     // string-matching codes.
     supplierProductId: integer("supplier_product_id"),
+    // "Used for" linkage — which Lightbase assembly (inventory_items
+    // row, kind='assembly') is this line being procured for. Lets the
+    // team see every part / consumable that's been ordered to build a
+    // given finished product. Distinct from parent_assembly_id on the
+    // inventory item itself: parent_assembly_id is a fixed BOM
+    // hierarchy on the inventory side; for_inventory_item_id is the
+    // per-order "what's this order for" tag.
+    forInventoryItemId: integer("for_inventory_item_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
@@ -1990,6 +1998,7 @@ export const rfqItems = pgTable(
     lightbaseRefIdx: index("rfq_items_lightbase_ref_idx").on(t.lightbaseRef),
     inventoryItemIdx: index("rfq_items_inventory_item_idx").on(t.inventoryItemId),
     supplierProductIdx: index("rfq_items_supplier_product_idx").on(t.supplierProductId),
+    forInventoryItemIdx: index("rfq_items_for_inventory_item_idx").on(t.forInventoryItemId),
   }),
 );
 
@@ -2342,6 +2351,9 @@ export const purchaseOrderLines = pgTable(
     // picked from the catalogue. Drives the PO-send-time catalogue +
     // inventory dispatch (feature B).
     supplierProductId: integer("supplier_product_id"),
+    // Inherited from rfq_items.for_inventory_item_id — the assembly /
+    // product this order is being placed FOR.
+    forInventoryItemId: integer("for_inventory_item_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
@@ -2349,6 +2361,7 @@ export const purchaseOrderLines = pgTable(
     lightbaseRefIdx: index("purchase_order_lines_lightbase_ref_idx").on(t.lightbaseRef),
     inventoryItemIdx: index("purchase_order_lines_inventory_item_idx").on(t.inventoryItemId),
     supplierProductIdx: index("purchase_order_lines_supplier_product_idx").on(t.supplierProductId),
+    forInventoryItemIdx: index("purchase_order_lines_for_inventory_item_idx").on(t.forInventoryItemId),
   }),
 );
 

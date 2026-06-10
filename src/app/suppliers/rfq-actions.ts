@@ -261,6 +261,10 @@ export type RfqItemInput = {
   // that supplier_products row. Carried through RFQ → quote → PO so PO
   // send-time can update the catalogue + inventory automatically.
   supplierProductId?: number | null;
+  // "Used for" linkage — which Lightbase assembly is this line being
+  // procured for. Picker on the RFQ items grid + the Place Order dialog.
+  // Carried through to PO lines so the BOM history survives.
+  forInventoryItemId?: number | null;
 };
 
 export async function createRfq(input: {
@@ -447,6 +451,7 @@ export async function createRfq(input: {
         lightbaseRef: inv.code,
         inventoryItemId: inv.id,
         supplierProductId: it.supplierProductId ?? null,
+        forInventoryItemId: it.forInventoryItemId ?? null,
       })
       .returning({ id: rfqItems.id });
     // Persist any staged photos / docs against the freshly-created item.
@@ -1316,6 +1321,7 @@ async function generatePoFromQuote(input: {
       lightbaseRef: it.lightbaseRef ?? null,
       inventoryItemId: it.inventoryItemId ?? null,
       supplierProductId: it.supplierProductId ?? null,
+      forInventoryItemId: it.forInventoryItemId ?? null,
       _total: total,
     });
   }
@@ -1362,6 +1368,7 @@ async function generatePoFromQuote(input: {
         lightbaseRef: l.lightbaseRef ?? null,
         inventoryItemId: l.inventoryItemId ?? null,
         supplierProductId: l.supplierProductId ?? null,
+        forInventoryItemId: l.forInventoryItemId ?? null,
       })),
     );
   }

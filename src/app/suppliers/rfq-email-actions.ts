@@ -132,6 +132,62 @@ async function notifySupplierInApp(input: {
 
 // ── Compose helpers ─────────────────────────────────────────────────────────
 
+// Build the same subject + body the buyer would see in a draft, BUT
+// from arbitrary inputs (no RFQ row needed). Used by the Place Order
+// dialog to show a preview before committing the RFQ — so the user can
+// see + edit what procurement will actually receive.
+export type PreviewRfqEmailInput = {
+  projectNum: string;
+  projectName?: string;
+  toName?: string | null;
+  items: Array<{
+    lineNo: number;
+    description: string;
+    qty: number;
+    productCode?: string | null;
+  }>;
+  quoteDeadline?: string | null;
+};
+
+export async function previewRfqEmailBody(
+  input: PreviewRfqEmailInput,
+): Promise<{ subject: string; body: string }> {
+  await ensureOrdersSchema();
+  const subject = `RFQ ${input.projectName ? `for ${input.projectName}` : input.projectNum}`;
+  const lines: string[] = [];
+  lines.push(`Hi ${input.toName?.trim() || "team"},`);
+  lines.push("");
+  lines.push(
+    `We'd like to request a quote on the items below for ${
+      input.projectName
+        ? `project ${input.projectName} (${input.projectNum})`
+        : `project ${input.projectNum}`
+    }.`,
+  );
+  lines.push("");
+  if (input.items.length > 0) {
+    lines.push("Items:");
+    for (const it of input.items) {
+      const qtyPart = it.qty != null ? ` — qty ${it.qty}` : "";
+      const codePart = it.productCode ? ` (P/N ${it.productCode})` : "";
+      lines.push(
+        `  ${it.lineNo}. ${it.description || "(no description)"}${qtyPart}${codePart}`,
+      );
+    }
+    lines.push("");
+  }
+  if (input.quoteDeadline) {
+    lines.push(`Please respond by ${new Date(input.quoteDeadline).toLocaleDateString()}.`);
+    lines.push("");
+  }
+  lines.push(
+    "(A vendor-portal link is appended automatically when the email is sent.)",
+  );
+  lines.push("");
+  lines.push("Thanks,");
+  return { subject, body: lines.join("\n") };
+}
+
 export type ComposeRfqEmailInput = {
   rfqId: number;
   // Either point at an existing recipient row, OR pass to_email / to_name
@@ -696,6 +752,12 @@ export async function sendInitialRfqDeliveries(input: {
   procurementViaEmail: boolean;
   procurementViaPlatform: boolean;
   includeAiSummary?: boolean;
+  // Buyer-supplied subject + body that override the auto-generated text
+  // from suggestRfqEmailBody. Used by the Place Order dialog after the
+  // user previews + edits the email content. The vendor-portal link is
+  // still appended automatically at send time.
+  subjectOverride?: string | null;
+  bodyOverride?: string | null;
 }): Promise<{ sentCount: number; queuedCount: number; failures: number }> {
   await requireSupplierEditor();
   await ensureOrdersSchema();
@@ -738,8 +800,8 @@ export async function sendInitialRfqDeliveries(input: {
         supplierId: r.supplierId,
         toEmail: r.toEmail,
         toName: r.toName,
-        subject: draft.subject,
-        bodyText: draft.body,
+        subject: input.subjectOverride?.trim() || draft.subject,
+        bodyText: input.bodyOverride ?? draft.body,
         aiSummary,
         includeMagicLink: true,
         deliverToSupplierEmail: input.deliverToSupplierEmail,

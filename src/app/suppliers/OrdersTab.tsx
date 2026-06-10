@@ -50,6 +50,7 @@ import ProcurementReviewQueue from "./ProcurementReviewQueue";
 import CataloguePickerDialog from "./CataloguePickerDialog";
 import type { CataloguePickerItem } from "./supplier-inventory-actions";
 import { sendInitialRfqDeliveries } from "./rfq-email-actions";
+import AssemblyPicker from "./AssemblyPicker";
 
 type FullSupplier = Supplier & {
   isStarred?: boolean;
@@ -1106,6 +1107,16 @@ function CreateView({
                     ? "PO send will update this product in the catalogue + Lightbase Inventory."
                     : "Optional. Linking auto-fills code / description / URL and auto-stages the supplier as a recipient."}
                 </span>
+              </div>
+              <div style={{ marginTop: 4 }}>
+                <AssemblyPicker
+                  value={it.forInventoryItemId ?? null}
+                  label="For product / assembly (optional)"
+                  hint="Tag which Lightbase assembly this line is being procured for. Lets the team trace every part used to build a given product."
+                  onChange={(item) =>
+                    updateLine(i, { forInventoryItemId: item ? item.id : null })
+                  }
+                />
               </div>
               <div style={gridCols(6)}>
                 <Field label="Lightbase Ref.">

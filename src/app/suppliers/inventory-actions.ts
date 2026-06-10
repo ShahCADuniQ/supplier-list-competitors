@@ -7,7 +7,7 @@
 // in (typos must not silently create duplicate parts).
 
 import { revalidatePath } from "next/cache";
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   inventoryItems,
@@ -620,3 +620,60 @@ export async function findInventoryByCode(code: string): Promise<InventoryItem |
 // Suppress the unused-import lint — rfqRecipients is intentionally re-exported
 // to keep the schema-import barrel narrow but isn't called from this module.
 void rfqRecipients;
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "For product / assembly" picker
+// Used by Place Order + the RFQ create flow to tag each line with the
+// Lightbase assembly the order is being placed FOR. The picker pulls
+// every assembly (kind='assembly') plus, optionally, every part — the
+// caller decides whether to surface both.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AssemblyPickerItem = {
+  id: number;
+  code: string;
+  name: string | null;
+  description: string | null;
+  thumbnailUrl: string | null;
+  kind: "assembly" | "part";
+};
+
+export async function listAssembliesForPicker(input?: {
+  // Default false — only assemblies are returned. Set true to also
+  // include parts (rare: e.g. when the buyer is procuring spares for a
+  // specific part, not for an end product).
+  includeParts?: boolean;
+}): Promise<AssemblyPickerItem[]> {
+  await requireSupplierEditor();
+  await ensureOrdersSchema();
+
+  const rows = await db
+    .select({
+      id: inventoryItems.id,
+      code: inventoryItems.code,
+      name: inventoryItems.name,
+      description: inventoryItems.description,
+      thumbnailUrl: inventoryItems.thumbnailUrl,
+      kind: inventoryItems.kind,
+    })
+    .from(inventoryItems)
+    .where(
+      and(
+        eq(inventoryItems.archived, false),
+        input?.includeParts
+          ? undefined
+          : eq(inventoryItems.kind, "assembly"),
+      ),
+    )
+    .orderBy(desc(inventoryItems.updatedAt));
+
+  return rows.map((r) => ({
+    id: r.id,
+    code: r.code,
+    name: r.name,
+    description: r.description,
+    thumbnailUrl: r.thumbnailUrl,
+    kind: r.kind === "assembly" ? "assembly" : "part",
+  }));
+}

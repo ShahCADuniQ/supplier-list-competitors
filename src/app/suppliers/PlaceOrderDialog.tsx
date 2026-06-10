@@ -10,8 +10,10 @@ import { createRfq, inviteSupplierBatchToRfq } from "./rfq-actions";
 import {
   sendInitialRfqDeliveries,
   getEmailTransportStatus,
+  previewRfqEmailBody,
 } from "./rfq-email-actions";
 import type { AggregateInventoryPart } from "./supplier-inventory-actions";
+import AssemblyPicker from "./AssemblyPicker";
 
 type Props = {
   open: boolean;
@@ -39,6 +41,19 @@ export default function PlaceOrderDialog({
   const [transport, setTransport] = useState<{ configured: boolean } | null>(
     null,
   );
+  // "For product / assembly" — which Lightbase assembly is this order
+  // for? Optional; lets the team trace every part used to build a given
+  // product.
+  const [forInventoryItemId, setForInventoryItemId] = useState<number | null>(
+    null,
+  );
+  // Email preview / edit. Open the panel to see the auto-generated body
+  // procurement (or the supplier) will see; edit before sending.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewSubject, setPreviewSubject] = useState("");
+  const [previewBody, setPreviewBody] = useState("");
+  const [previewEdited, setPreviewEdited] = useState(false);
 
   // Routing flags — same shape as the create-RFQ panel.
   const [deliverToSupplierEmail, setDeliverToSupplierEmail] = useState(true);
@@ -70,6 +85,45 @@ export default function PlaceOrderDialog({
     }
     return product.name || product.productCode || "";
   }, [product]);
+
+  // Build / refresh the preview body whenever inputs change AND the
+  // user hasn't manually edited it yet. After the user types in the
+  // preview area we stop overwriting their edits.
+  useEffect(() => {
+    if (!previewOpen || previewEdited) return;
+    if (!product) return;
+    setPreviewLoading(true);
+    previewRfqEmailBody({
+      projectNum: projectNum.trim() || "(your project)",
+      projectName: projectName.trim() || undefined,
+      toName: contactName.trim() || null,
+      items: [
+        {
+          lineNo: 1,
+          description,
+          qty,
+          productCode: product.productCode ?? null,
+        },
+      ],
+      quoteDeadline: deliveryDate || null,
+    })
+      .then(({ subject, body }) => {
+        setPreviewSubject(subject);
+        setPreviewBody(body);
+      })
+      .catch(() => undefined)
+      .finally(() => setPreviewLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    previewOpen,
+    projectNum,
+    projectName,
+    qty,
+    contactName,
+    deliveryDate,
+    description,
+    product?.id,
+  ]);
 
   if (!open || !product) return null;
 
@@ -110,6 +164,7 @@ export default function PlaceOrderDialog({
             productUrl: product.productUrl ?? undefined,
             notes: notes.trim() || undefined,
             supplierProductId: product.id,
+            forInventoryItemId,
           },
         ],
       });
@@ -139,6 +194,11 @@ export default function PlaceOrderDialog({
           procurementViaEmail,
           procurementViaPlatform,
           includeAiSummary: false,
+          // Pass the edited preview content when the user opened +
+          // tweaked the panel. Otherwise null falls back to the
+          // auto-generated body so the existing behaviour is preserved.
+          subjectOverride: previewEdited ? previewSubject : null,
+          bodyOverride: previewEdited ? previewBody : null,
         });
         if (out.sentCount > 0)
           summary += ` · sent ${out.sentCount} RFQ${out.sentCount === 1 ? "" : "s"}`;
@@ -309,6 +369,14 @@ export default function PlaceOrderDialog({
               />
             </Field>
           </div>
+          <div style={{ gridColumn: "span 2" }}>
+            <AssemblyPicker
+              value={forInventoryItemId}
+              label="Used for product / assembly (optional)"
+              hint="Tag which Lightbase assembly this order goes into. The link lets the team see every part / consumable ordered for a given product."
+              onChange={(item) => setForInventoryItemId(item ? item.id : null)}
+            />
+          </div>
         </div>
 
         <div
@@ -366,6 +434,109 @@ export default function PlaceOrderDialog({
               },
             ]}
           />
+        </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            paddingTop: 14,
+            borderTop: "1px dashed var(--lb-border)",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setPreviewOpen((v) => !v)}
+            style={{
+              padding: "6px 12px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              borderRadius: 999,
+              border: "1px solid var(--lb-border)",
+              background: previewOpen
+                ? "color-mix(in srgb, var(--lb-accent) 10%, var(--lb-bg))"
+                : "var(--lb-bg)",
+              color: "var(--lb-text-2)",
+              cursor: "pointer",
+            }}
+          >
+            📄 {previewOpen ? "Hide preview" : "Preview & edit email"}
+          </button>
+          {previewOpen && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: 12,
+                borderRadius: 10,
+                background: "var(--lb-bg)",
+                border: "1px solid var(--lb-border)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--lb-text-3)",
+                }}
+              >
+                {procurementPicked
+                  ? "This is the email body Procurement will see in their review queue. Edit before sending."
+                  : "This is the email body the supplier will receive. Edit before sending."}
+                {previewLoading && " · rebuilding…"}
+              </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--lb-text-3)" }}>
+                  Subject
+                </span>
+                <input
+                  value={previewSubject}
+                  onChange={(e) => {
+                    setPreviewSubject(e.target.value);
+                    setPreviewEdited(true);
+                  }}
+                  style={input}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--lb-text-3)" }}>
+                  Body
+                </span>
+                <textarea
+                  value={previewBody}
+                  onChange={(e) => {
+                    setPreviewBody(e.target.value);
+                    setPreviewEdited(true);
+                  }}
+                  style={{ ...input, minHeight: 180, fontFamily: "inherit", resize: "vertical" }}
+                />
+              </label>
+              {previewEdited && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewEdited(false);
+                    setPreviewSubject("");
+                    setPreviewBody("");
+                  }}
+                  style={{
+                    alignSelf: "flex-start",
+                    padding: "4px 10px",
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    borderRadius: 999,
+                    border: "1px solid var(--lb-border)",
+                    background: "transparent",
+                    color: "var(--lb-text-3)",
+                    cursor: "pointer",
+                  }}
+                  title="Discard your edits and regenerate from form data"
+                >
+                  ↺ Reset to auto-generated
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
