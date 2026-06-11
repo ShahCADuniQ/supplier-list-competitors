@@ -108,6 +108,7 @@ export type PartRow = {
   standardName: string | null;
   name: string | null;
   description: string | null;
+  product: string | null;
   configurations: Configuration[];
   inventoryItemId: number | null;
   createdAt: string;
@@ -152,6 +153,7 @@ export async function listParts(): Promise<PartRow[]> {
       partOrAssembly: nomenclatureParts.partOrAssembly,
       name: nomenclatureParts.name,
       description: nomenclatureParts.description,
+      product: nomenclatureParts.product,
       configurations: nomenclatureParts.configurations,
       inventoryItemId: nomenclatureParts.inventoryItemId,
       createdAt: nomenclatureParts.createdAt,
@@ -181,6 +183,7 @@ export async function listParts(): Promise<PartRow[]> {
           : null,
       name: r.name ?? null,
       description: r.description ?? null,
+      product: r.product ?? null,
       configurations: normalizeConfigurations(r.configurations),
       inventoryItemId: r.inventoryItemId ?? null,
       createdAt: r.createdAt.toISOString(),
@@ -255,6 +258,7 @@ export async function saveHardwarePart(input: {
   nomenclature: string;
   name?: string | null;
   description?: string | null;
+  product?: string | null;
   configurations?: Configuration[];
 }): Promise<{ id: number; uniqueId: string; fullCode: string }> {
   const profile = await getOrCreateProfile();
@@ -298,6 +302,7 @@ export async function saveHardwarePart(input: {
       partOrAssembly,
       name: input.name ?? null,
       description: input.description ?? null,
+      product: input.product?.trim() || null,
       configurations: input.configurations ?? [],
       inventoryItemId: inventoryId,
       createdByClerkId: profile.clerkUserId,
@@ -345,6 +350,7 @@ export async function savePartCode(input: {
   kind?: "part" | "assembly";
   configurations?: Configuration[];
   parentPartId?: number | null;
+  product?: string | null;
   // PHS only — optional. When provided we also create a row in
   // supplier_products linking this part to the supplier's catalogue.
   supplierId?: number | null;
@@ -409,6 +415,7 @@ export async function savePartCode(input: {
       diameterMm: isCircular ? input.diameterMm ?? null : null,
       lengthMm: input.lengthMm ?? null,
       partOrAssembly: inventoryKind === "assembly" ? "A" : "P",
+      product: input.product?.trim() || null,
       configurations: input.configurations ?? [],
       inventoryItemId: inventoryId,
       parentPartId: input.parentPartId ?? null,
@@ -452,6 +459,7 @@ export async function updatePart(input: {
   id: number;
   name?: string | null;
   description?: string | null;
+  product?: string | null;
   configurations?: Configuration[];
 }): Promise<void> {
   const profile = await getOrCreateProfile();
@@ -462,6 +470,7 @@ export async function updatePart(input: {
     .set({
       name: input.name ?? null,
       description: input.description ?? null,
+      product: input.product?.trim() || null,
       configurations: input.configurations ?? [],
       updatedAt: new Date(),
     })
@@ -652,6 +661,70 @@ export type SupplierOption = {
   name: string;
   origin: string | null;
 };
+
+// Distinct product names from nomenclature_parts. Used by the
+// Database tab's product-view dropdown.
+export async function listProducts(): Promise<string[]> {
+  await ensureNomenclatureSchema();
+  const rows = await db
+    .select({ product: nomenclatureParts.product })
+    .from(nomenclatureParts);
+  const set = new Set<string>();
+  for (const r of rows) {
+    const p = (r.product ?? "").trim();
+    if (p) set.add(p);
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+// Link an existing inventory row to a supplier — creates a row in
+// supplier_products that points at the existing code. Idempotent: a
+// row with the same supplier+code already linked just returns it.
+export async function linkInventoryToSupplierAction(input: {
+  inventoryItemId: number;
+  supplierId: number;
+  productUrl?: string | null;
+}): Promise<{ supplierProductId: number }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  const [item] = await db
+    .select({
+      id: inventoryItems.id,
+      code: inventoryItems.code,
+      name: inventoryItems.name,
+      description: inventoryItems.description,
+    })
+    .from(inventoryItems)
+    .where(eq(inventoryItems.id, input.inventoryItemId))
+    .limit(1);
+  if (!item) throw new Error("Inventory row not found");
+  const existing = await db
+    .select({ id: supplierProducts.id })
+    .from(supplierProducts)
+    .where(
+      and(
+        eq(supplierProducts.supplierId, input.supplierId),
+        eq(supplierProducts.productCode, item.code),
+      ),
+    )
+    .limit(1);
+  if (existing.length) {
+    return { supplierProductId: existing[0].id };
+  }
+  const [sp] = await db
+    .insert(supplierProducts)
+    .values({
+      supplierId: input.supplierId,
+      name: item.name ?? item.code,
+      productCode: item.code,
+      description: item.description ?? null,
+      productUrl: input.productUrl ?? null,
+      createdByClerkId: profile.clerkUserId,
+    })
+    .returning({ id: supplierProducts.id });
+  return { supplierProductId: sp.id };
+}
 
 export async function listSupplierOptions(): Promise<SupplierOption[]> {
   const profile = await getOrCreateProfile();

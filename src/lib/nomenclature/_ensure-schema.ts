@@ -60,6 +60,10 @@ export function ensureNomenclatureSchema(): Promise<void> {
       // V80 — Circular shape support: DXXXX replaces WXXXX-HXXXX.
       await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "diameter_mm" integer`);
 
+      // V85 — Free-form product / line grouping (e.g. "Lightline-X").
+      await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "product" text`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "nomenclature_parts_product_idx" ON "nomenclature_parts" ("product")`);
+
       // V83 — assembly_bom: many-to-many edge table for the
       // assembly tree. Lazy-created here so the nomenclature page works
       // even when /suppliers hasn't been opened yet.

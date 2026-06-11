@@ -11,13 +11,14 @@
 //                       name + description + configurations, delete
 //                       (delete frees the unique ID for reuse)
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   addAssemblyChildAction,
   addUserStandard,
   deletePart,
   extractHardwareFromUrlAction,
   getAssemblyTree,
+  linkInventoryToSupplierAction,
   listInventoryPickerOptions,
   removeAssemblyChildAction,
   saveHardwarePart,
@@ -57,11 +58,13 @@ export default function NomenclatureGenerator({
   parts: initialParts,
   scanResult,
   supplierOptions,
+  productOptions,
 }: {
   standards: StandardRow[];
   parts: PartRow[];
   scanResult: ScanResult;
   supplierOptions: SupplierOption[];
+  productOptions: string[];
 }) {
   const [tab, setTab] = useState<Tab>("hardware");
   const [standards, setStandards] = useState<StandardRow[]>(initialStandards);
@@ -86,6 +89,7 @@ export default function NomenclatureGenerator({
       {tab === "hardware" && (
         <HardwareTab
           standards={standards}
+          productOptions={productOptions}
           onAddStandard={(s) => setStandards((prev) => [...prev, s])}
           onSaved={(p) => setParts((prev) => [p, ...prev])}
         />
@@ -93,12 +97,14 @@ export default function NomenclatureGenerator({
       {tab === "part" && (
         <PartIdTab
           supplierOptions={supplierOptions}
+          productOptions={productOptions}
           onSaved={(p) => setParts((prev) => [p, ...prev])}
         />
       )}
       {tab === "database" && (
         <DatabaseTab
           parts={parts}
+          supplierOptions={supplierOptions}
           onUpdate={(updated) =>
             setParts((prev) =>
               prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)),
@@ -345,10 +351,12 @@ function Tabs({
 
 function HardwareTab({
   standards,
+  productOptions,
   onAddStandard,
   onSaved,
 }: {
   standards: StandardRow[];
+  productOptions: string[];
   onAddStandard: (s: StandardRow) => void;
   onSaved: (p: PartRow) => void;
 }) {
@@ -433,7 +441,11 @@ function HardwareTab({
         </div>
 
         {selected && (
-          <HardwareForm standard={selected} onSaved={onSaved} />
+          <HardwareForm
+            standard={selected}
+            productOptions={productOptions}
+            onSaved={onSaved}
+          />
         )}
       </section>
     </div>
@@ -442,9 +454,11 @@ function HardwareTab({
 
 function HardwareForm({
   standard,
+  productOptions,
   onSaved,
 }: {
   standard: StandardRow;
+  productOptions: string[];
   onSaved: (p: PartRow) => void;
 }) {
   const [classification, setClassification] = useState<
@@ -454,6 +468,7 @@ function HardwareForm({
   const [nomenclature, setNomenclature] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [product, setProduct] = useState("");
   const [configurations, setConfigurations] = useState<Configuration[]>([]);
   const [url, setUrl] = useState("");
   const [aiNotes, setAiNotes] = useState<string | null>(null);
@@ -491,6 +506,7 @@ function HardwareForm({
           nomenclature,
           name: name.trim() || null,
           description: description.trim() || null,
+          product: product.trim() || null,
           configurations,
         });
         setGeneratedCode(r.fullCode);
@@ -504,6 +520,7 @@ function HardwareForm({
           standardName: standard.name,
           name: name.trim() || null,
           description: description.trim() || null,
+          product: product.trim() || null,
           configurations,
           inventoryItemId: null,
           createdAt: new Date().toISOString(),
@@ -660,6 +677,12 @@ function HardwareForm({
           />
         </label>
       </div>
+
+      <ProductInput
+        value={product}
+        onChange={setProduct}
+        productOptions={productOptions}
+      />
 
       <ConfigurationsEditor
         label="Configurations (optional)"
@@ -888,9 +911,11 @@ function NewFamilyButton({
 
 function PartIdTab({
   supplierOptions,
+  productOptions,
   onSaved,
 }: {
   supplierOptions: SupplierOption[];
+  productOptions: string[];
   onSaved: (p: PartRow) => void;
 }) {
   const [classification, setClassification] = useState<
@@ -899,6 +924,7 @@ function PartIdTab({
   const [shape, setShape] = useState<"rect" | "circ">("rect");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [product, setProduct] = useState("");
   const [width, setWidth] = useState<string>("");
   const [height, setHeight] = useState<string>("");
   const [diameter, setDiameter] = useState<string>("");
@@ -935,6 +961,7 @@ function PartIdTab({
           lengthMm: length.trim() ? Math.round(Number(length)) : null,
           kind,
           configurations,
+          product: product.trim() || null,
           supplierId:
             classification === "PHS" && typeof supplierId === "number"
               ? supplierId
@@ -955,12 +982,14 @@ function PartIdTab({
           standardName: null,
           name: name.trim() || null,
           description: description.trim() || null,
+          product: product.trim() || null,
           configurations,
           inventoryItemId: null,
           createdAt: new Date().toISOString(),
         });
         setName("");
         setDescription("");
+        setProduct("");
         setWidth("");
         setHeight("");
         setDiameter("");
@@ -1178,6 +1207,12 @@ function PartIdTab({
         />
       </label>
 
+      <ProductInput
+        value={product}
+        onChange={setProduct}
+        productOptions={productOptions}
+      />
+
       <ConfigurationsEditor
         label="Configurations (optional)"
         configs={configurations}
@@ -1205,48 +1240,122 @@ function PartIdTab({
 
 function DatabaseTab({
   parts,
+  supplierOptions,
   onUpdate,
   onDelete,
 }: {
   parts: PartRow[];
+  supplierOptions: SupplierOption[];
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
   onDelete: (id: number) => void;
 }) {
   const [filter, setFilter] = useState("");
+  const [productView, setProductView] = useState<string>("__all__");
+  const [dropError, setDropError] = useState<string | null>(null);
+  // After a drag-drop add we want the assembly tree section to refresh.
+  // We bump a counter and pass it down as a `refreshKey` prop so the
+  // section refetches its tree when the value changes.
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const productList = useMemo(() => {
+    const set = new Set<string>();
+    let hasNone = false;
+    for (const p of parts) {
+      const v = (p.product ?? "").trim();
+      if (v) set.add(v);
+      else hasNone = true;
+    }
+    return { products: Array.from(set).sort(), hasNone };
+  }, [parts]);
+
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return parts;
-    return parts.filter(
-      (p) =>
+    return parts.filter((p) => {
+      if (productView === "__none__") {
+        if ((p.product ?? "").trim()) return false;
+      } else if (productView !== "__all__") {
+        if ((p.product ?? "").trim() !== productView) return false;
+      }
+      if (!q) return true;
+      return (
         p.fullCode.toLowerCase().includes(q) ||
         (p.name ?? "").toLowerCase().includes(q) ||
         (p.description ?? "").toLowerCase().includes(q) ||
-        p.uniqueId.toLowerCase().includes(q),
-    );
-  }, [parts, filter]);
+        p.uniqueId.toLowerCase().includes(q)
+      );
+    });
+  }, [parts, filter, productView]);
+
+  async function handleDrop(args: {
+    draggedItemId: number;
+    targetItemId: number;
+  }) {
+    setDropError(null);
+    try {
+      await addAssemblyChildAction({
+        parentInventoryItemId: args.targetItemId,
+        childInventoryItemId: args.draggedItemId,
+        quantity: 1,
+      });
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setDropError(e instanceof Error ? e.message : "Drop failed");
+    }
+  }
 
   return (
     <section style={PANEL}>
       <div
         style={{
           display: "flex",
+          flexWrap: "wrap",
           justifyContent: "space-between",
           alignItems: "center",
+          gap: 12,
           marginBottom: 12,
         }}
       >
         <h2 style={SECTION_TITLE}>
           {parts.length === 0
             ? "No codes yet"
-            : `${parts.length} generated code${parts.length === 1 ? "" : "s"}`}
+            : `${filtered.length} of ${parts.length} code${parts.length === 1 ? "" : "s"}`}
         </h2>
-        <input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter by code, name, description…"
-          style={{ ...INPUT, maxWidth: 320 }}
-        />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select
+            value={productView}
+            onChange={(e) => setProductView(e.target.value)}
+            style={{ ...INPUT, minWidth: 220 }}
+            aria-label="Product view"
+          >
+            <option value="__all__">
+              All products ({parts.length})
+            </option>
+            {productList.hasNone && (
+              <option value="__none__">No product set</option>
+            )}
+            {productList.products.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter by code, name, description…"
+            style={{ ...INPUT, maxWidth: 320 }}
+          />
+        </div>
       </div>
+      <p style={{ fontSize: 12.5, color: "var(--lb-text-3)", margin: "0 0 12px" }}>
+        Tip: drag a card onto an assembly card to link it as a child.
+        Dropping onto a regular part promotes it to an assembly.
+      </p>
+      {dropError && (
+        <div style={{ marginBottom: 10 }}>
+          <ErrorBox message={dropError} />
+        </div>
+      )}
       {filtered.length === 0 ? (
         <div
           style={{
@@ -1266,6 +1375,9 @@ function DatabaseTab({
             <PartRowItem
               key={p.id}
               part={p}
+              supplierOptions={supplierOptions}
+              refreshKey={refreshKey}
+              onDrop={handleDrop}
               onUpdate={onUpdate}
               onDelete={onDelete}
             />
@@ -1278,19 +1390,31 @@ function DatabaseTab({
 
 function PartRowItem({
   part,
+  supplierOptions,
+  refreshKey,
+  onDrop,
   onUpdate,
   onDelete,
 }: {
   part: PartRow;
+  supplierOptions: SupplierOption[];
+  refreshKey: number;
+  onDrop: (args: {
+    draggedItemId: number;
+    targetItemId: number;
+  }) => void;
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
   onDelete: (id: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(part.name ?? "");
   const [description, setDescription] = useState(part.description ?? "");
+  const [product, setProduct] = useState(part.product ?? "");
   const [chips, setChips] = useState<Configuration[]>(part.configurations);
   const [busy, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
 
   function save() {
     setErr(null);
@@ -1300,12 +1424,14 @@ function PartRowItem({
           id: part.id,
           name: name.trim() || null,
           description: description.trim() || null,
+          product: product.trim() || null,
           configurations: chips,
         });
         onUpdate({
           id: part.id,
           name: name.trim() || null,
           description: description.trim() || null,
+          product: product.trim() || null,
           configurations: chips,
         });
         setEditing(false);
@@ -1347,12 +1473,58 @@ function PartRowItem({
       }}
     >
       <div
+        draggable={part.inventoryItemId != null}
+        onDragStart={(e) => {
+          if (part.inventoryItemId == null) return;
+          e.dataTransfer.setData(
+            "application/x-lb-inventory-item",
+            String(part.inventoryItemId),
+          );
+          e.dataTransfer.effectAllowed = "link";
+        }}
+        onDragOver={(e) => {
+          const id = e.dataTransfer.types.includes(
+            "application/x-lb-inventory-item",
+          );
+          if (!id || part.inventoryItemId == null) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "link";
+          if (!dragOver) setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (part.inventoryItemId == null) return;
+          const raw = e.dataTransfer.getData(
+            "application/x-lb-inventory-item",
+          );
+          const draggedItemId = Number(raw);
+          if (!draggedItemId || draggedItemId === part.inventoryItemId) {
+            return;
+          }
+          onDrop({
+            draggedItemId,
+            targetItemId: part.inventoryItemId,
+          });
+        }}
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: 12,
           flexWrap: "wrap",
+          padding: dragOver ? "6px 8px" : 0,
+          margin: dragOver ? "-6px -8px" : 0,
+          borderRadius: dragOver ? 8 : 0,
+          background: dragOver
+            ? "color-mix(in srgb, var(--lb-accent) 12%, transparent)"
+            : "transparent",
+          outline: dragOver
+            ? "2px dashed var(--lb-accent)"
+            : "none",
+          transition: "background 120ms ease, outline-color 120ms ease",
+          cursor: part.inventoryItemId != null ? "grab" : "default",
         }}
       >
         <div style={{ minWidth: 0 }}>
@@ -1373,6 +1545,7 @@ function PartRowItem({
               color: "var(--lb-text-3)",
               display: "flex",
               gap: 8,
+              flexWrap: "wrap",
             }}
           >
             <span>
@@ -1380,6 +1553,25 @@ function PartRowItem({
               <strong>{part.uniqueId}</strong>
             </span>
             {part.standardName && <span>· {part.standardName}</span>}
+            {part.product && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "1px 8px",
+                  borderRadius: 999,
+                  background:
+                    "color-mix(in srgb, var(--lb-accent) 14%, transparent)",
+                  color: "var(--lb-accent)",
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  letterSpacing: 0.4,
+                  textTransform: "uppercase",
+                }}
+              >
+                {part.product}
+              </span>
+            )}
             <span>· created {new Date(part.createdAt).toLocaleDateString()}</span>
           </div>
         </div>
@@ -1392,6 +1584,16 @@ function PartRowItem({
           >
             Copy
           </button>
+          {part.inventoryItemId != null && (
+            <button
+              type="button"
+              onClick={() => setLinkPickerOpen((v) => !v)}
+              style={LINK_BTN}
+              title="Link to a supplier catalogue entry"
+            >
+              {linkPickerOpen ? "Cancel" : "Link supplier"}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setEditing((v) => !v)}
@@ -1409,6 +1611,14 @@ function PartRowItem({
           </button>
         </div>
       </div>
+
+      {linkPickerOpen && part.inventoryItemId != null && (
+        <LinkToSupplierRow
+          inventoryItemId={part.inventoryItemId}
+          supplierOptions={supplierOptions}
+          onClose={() => setLinkPickerOpen(false)}
+        />
+      )}
 
       {!editing && (part.name || part.description || part.configurations.length > 0) && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -1480,7 +1690,10 @@ function PartRowItem({
       )}
 
       {part.partOrAssembly === "A" && part.inventoryItemId != null && (
-        <AssemblyContentsSection inventoryItemId={part.inventoryItemId} />
+        <AssemblyContentsSection
+          inventoryItemId={part.inventoryItemId}
+          refreshKey={refreshKey}
+        />
       )}
 
       {editing && (
@@ -1499,6 +1712,15 @@ function PartRowItem({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
+              style={INPUT}
+            />
+          </label>
+          <label style={FIELD}>
+            <span style={LABEL}>Product / line</span>
+            <input
+              value={product}
+              onChange={(e) => setProduct(e.target.value)}
+              placeholder="e.g. Lightline-X"
               style={INPUT}
             />
           </label>
@@ -1523,8 +1745,10 @@ function PartRowItem({
 
 function AssemblyContentsSection({
   inventoryItemId,
+  refreshKey,
 }: {
   inventoryItemId: number;
+  refreshKey: number;
 }) {
   const [open, setOpen] = useState(false);
   const [tree, setTree] = useState<AssemblyTreeNode | null>(null);
@@ -1548,6 +1772,13 @@ function AssemblyContentsSection({
     if (!open) reload();
     setOpen((v) => !v);
   }
+
+  // When the parent DatabaseTab bumps refreshKey (e.g. after a
+  // drag-drop link), reload if we're currently open.
+  useEffect(() => {
+    if (open) reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   return (
     <div
@@ -2030,6 +2261,158 @@ function ConfigurationsEditor({
         </button>
       </div>
     </label>
+  );
+}
+
+// Free-form product / line input with a datalist of known values so
+// users can either pick an existing label or type a brand new one.
+function ProductInput({
+  value,
+  onChange,
+  productOptions,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  productOptions: string[];
+}) {
+  const id = `products-${Math.abs(
+    Array.from(productOptions.join("|")).reduce(
+      (h, c) => (h * 31 + c.charCodeAt(0)) | 0,
+      productOptions.length,
+    ),
+  )}`;
+  return (
+    <label style={FIELD}>
+      <span style={LABEL}>Product / line (optional)</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        list={id}
+        placeholder="e.g. Lightline-X"
+        style={INPUT}
+      />
+      <datalist id={id}>
+        {productOptions.map((p) => (
+          <option key={p} value={p} />
+        ))}
+      </datalist>
+    </label>
+  );
+}
+
+// Inline supplier-link picker — opens under a row in the database
+// table. Choose a supplier, optionally paste a vendor URL, click Link
+// and we create a supplier_products row tying the inventory item to
+// the supplier's catalogue.
+function LinkToSupplierRow({
+  inventoryItemId,
+  supplierOptions,
+  onClose,
+}: {
+  inventoryItemId: number;
+  supplierOptions: SupplierOption[];
+  onClose: () => void;
+}) {
+  const [supplierId, setSupplierId] = useState<number | "">("");
+  const [url, setUrl] = useState("");
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  function run() {
+    if (typeof supplierId !== "number") {
+      setErr("Pick a supplier first");
+      return;
+    }
+    setErr(null);
+    start(async () => {
+      try {
+        await linkInventoryToSupplierAction({
+          inventoryItemId,
+          supplierId,
+          productUrl: url.trim() || null,
+        });
+        setDone(true);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Link failed");
+      }
+    });
+  }
+
+  return (
+    <div
+      style={{
+        padding: 12,
+        borderRadius: 10,
+        border: "1px solid var(--lb-accent)",
+        background:
+          "color-mix(in srgb, var(--lb-accent) 6%, transparent)",
+      }}
+    >
+      {done ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            fontSize: 13,
+            color: "#10b981",
+          }}
+        >
+          <span>Linked to supplier catalogue ✓</span>
+          <button type="button" onClick={onClose} style={LINK_BTN}>
+            Close
+          </button>
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr auto",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
+          <select
+            value={supplierId === "" ? "" : String(supplierId)}
+            onChange={(e) =>
+              setSupplierId(
+                e.target.value === "" ? "" : Number(e.target.value),
+              )
+            }
+            style={INPUT}
+          >
+            <option value="">Pick a supplier…</option>
+            {supplierOptions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+                {s.origin ? ` · ${s.origin}` : ""}
+              </option>
+            ))}
+          </select>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="Vendor URL (optional)"
+            style={INPUT}
+          />
+          <button
+            type="button"
+            onClick={run}
+            disabled={pending || supplierId === ""}
+            style={PRIMARY_BTN}
+          >
+            {pending ? "Linking…" : "Link"}
+          </button>
+        </div>
+      )}
+      {err && (
+        <div style={{ marginTop: 8 }}>
+          <ErrorBox message={err} />
+        </div>
+      )}
+    </div>
   );
 }
 

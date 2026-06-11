@@ -2817,6 +2817,10 @@ export const nomenclatureParts = pgTable(
     // Set when the part is circular — replaces WXXXX-HXXXX in the code
     // with a single DXXXX segment (D = diameter).
     diameterMm: integer("diameter_mm"),
+    // Free-form product / line name (e.g. "Lightline-X"). Used by the
+    // Database tab's product-view filter so the team can see every
+    // code that belongs to a given product. Optional.
+    product: text("product"),
     // 'P' for part, 'A' for assembly. Only populated for kind='hardware'
     // — the part/assembly generator uses inventory_items.kind for the
     // same distinction and doesn't embed P/A in the code itself.
