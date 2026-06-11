@@ -2814,6 +2814,10 @@ export const nomenclatureParts = pgTable(
     widthMm: integer("width_mm"),
     heightMm: integer("height_mm"),
     lengthMm: integer("length_mm"),
+    // 'P' for part, 'A' for assembly. Only populated for kind='hardware'
+    // — the part/assembly generator uses inventory_items.kind for the
+    // same distinction and doesn't embed P/A in the code itself.
+    partOrAssembly: text("part_or_assembly"),
     // Free-form chip strings ("Standard", "Long shank", "Cap-A").
     configurations: jsonb("configurations").$type<string[]>().default([]),
     // Link to the resolved inventory row. Null until the inventory

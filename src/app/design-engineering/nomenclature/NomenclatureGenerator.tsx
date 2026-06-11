@@ -18,10 +18,22 @@ import {
   extractHardwareFromUrlAction,
   saveHardwarePart,
   savePartCode,
+  suggestTemplateAction,
   updatePart,
   type PartRow,
   type StandardRow,
 } from "./actions";
+
+// Three fixed classification codes; every generated full-code starts
+// with one of these.
+const CLASSIFICATIONS: Array<{
+  value: "FAB" | "PHS" | "TLG";
+  label: string;
+}> = [
+  { value: "FAB", label: "FAB · Fabricated in-house" },
+  { value: "PHS", label: "PHS · Purchased" },
+  { value: "TLG", label: "TLG · Tooling" },
+];
 
 type ScanResult = {
   scanned: number;
@@ -409,6 +421,10 @@ function HardwareForm({
   standard: StandardRow;
   onSaved: (p: PartRow) => void;
 }) {
+  const [classification, setClassification] = useState<
+    "FAB" | "PHS" | "TLG"
+  >("PHS");
+  const [partOrAssembly, setPartOrAssembly] = useState<"P" | "A">("P");
   const [nomenclature, setNomenclature] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -429,7 +445,7 @@ function HardwareForm({
           standardId: standard.id,
           url,
         });
-        setNomenclature(r.nomenclature);
+        setNomenclature(r.nomenclature.toUpperCase());
         if (r.name && !name) setName(r.name);
         setAiNotes(r.notes ?? null);
       } catch (e) {
@@ -444,6 +460,8 @@ function HardwareForm({
       try {
         const r = await saveHardwarePart({
           standardId: standard.id,
+          classification,
+          partOrAssembly,
           nomenclature,
           name: name.trim() || null,
           description: description.trim() || null,
@@ -454,7 +472,8 @@ function HardwareForm({
           id: r.id,
           uniqueId: r.uniqueId,
           kind: "hardware",
-          classCode: standard.classCode,
+          classCode: classification,
+          partOrAssembly,
           fullCode: r.fullCode,
           standardName: standard.name,
           name: name.trim() || null,
@@ -508,6 +527,48 @@ function HardwareForm({
         </pre>
       </details>
 
+      <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr" }}>
+        <label style={FIELD}>
+          <span style={LABEL}>Class code</span>
+          <select
+            value={classification}
+            onChange={(e) =>
+              setClassification(e.target.value as "FAB" | "PHS" | "TLG")
+            }
+            style={INPUT}
+          >
+            {CLASSIFICATIONS.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={FIELD}>
+          <span style={LABEL}>Part or Assembly</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setPartOrAssembly("P")}
+              style={
+                partOrAssembly === "P" ? TOGGLE_ACTIVE : TOGGLE_INACTIVE
+              }
+            >
+              P · Part
+            </button>
+            <button
+              type="button"
+              onClick={() => setPartOrAssembly("A")}
+              style={
+                partOrAssembly === "A" ? TOGGLE_ACTIVE : TOGGLE_INACTIVE
+              }
+            >
+              A · Assembly
+            </button>
+          </div>
+        </label>
+      </div>
+
       <div style={ROW}>
         <label style={FIELD}>
           <span style={LABEL}>Paste product URL (AI fills below)</span>
@@ -533,13 +594,17 @@ function HardwareForm({
       <div style={ROW}>
         <label style={FIELD}>
           <span style={LABEL}>
-            Nomenclature ({standard.template})
+            Nomenclature — uppercase ({standard.template})
           </span>
           <input
             value={nomenclature}
-            onChange={(e) => setNomenclature(e.target.value)}
+            onChange={(e) => setNomenclature(e.target.value.toUpperCase())}
             placeholder={standard.template}
-            style={{ ...INPUT, fontFamily: "var(--lb-font-mono, monospace)" }}
+            style={{
+              ...INPUT,
+              fontFamily: "var(--lb-font-mono, monospace)",
+              textTransform: "uppercase",
+            }}
           />
           {aiNotes && (
             <div style={{ fontSize: 11.5, color: "var(--lb-text-3)", marginTop: 4 }}>
@@ -588,7 +653,9 @@ function HardwareForm({
           disabled={saving || !nomenclature.trim()}
           style={PRIMARY_BTN}
         >
-          {saving ? "Saving…" : `Generate ${standard.classCode} code`}
+          {saving
+            ? "Saving…"
+            : `Generate ${classification}-XXXX-${partOrAssembly} code`}
         </button>
       </div>
     </div>
@@ -607,8 +674,36 @@ function NewFamilyButton({
   const [specText, setSpecText] = useState(
     "TYPE\n? : ???\n\nMATERIAUX\nStainless Steel : SS\n\nEXEMPLES:\n",
   );
+  const [suggestUrl, setSuggestUrl] = useState("");
+  const [suggesting, startSuggest] = useTransition();
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
+
+  function runSuggest() {
+    setErr(null);
+    startSuggest(async () => {
+      try {
+        const r = await suggestTemplateAction({ url: suggestUrl });
+        if (r.name && !name) setName(r.name);
+        setTemplate(r.template);
+        setSpecText(r.specText);
+        // classCode in this dialog is the FAMILY abbreviation used
+        // inside the nomenclature's TYPE list — leave it for the user
+        // to confirm, but seed a guess from the first 2 chars of the
+        // family name if blank.
+        if (!classCode && r.name) {
+          setClassCode(
+            r.name
+              .replace(/[^A-Za-z]/g, "")
+              .slice(0, 2)
+              .toUpperCase(),
+          );
+        }
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Suggestion failed");
+      }
+    });
+  }
 
   if (!open) {
     return (
@@ -682,7 +777,30 @@ function NewFamilyButton({
         We&apos;ll save it to the database AND write a fresh
         <code> NOMENCLATURE_&lt;NAME&gt;.txt </code>
         into the OneDrive HARDWARES folder so the CAD team sees it.
+        Paste a representative product URL below and Claude will draft
+        a preliminary template + body for you to review.
       </p>
+      <div style={ROW}>
+        <label style={FIELD}>
+          <span style={LABEL}>Suggest from a product URL (optional)</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={suggestUrl}
+              onChange={(e) => setSuggestUrl(e.target.value)}
+              placeholder="https://vendor.com/cable-gland-product/"
+              style={INPUT}
+            />
+            <button
+              type="button"
+              disabled={suggesting || !suggestUrl.trim()}
+              onClick={runSuggest}
+              style={SECONDARY_BTN}
+            >
+              {suggesting ? "Drafting…" : "AI draft"}
+            </button>
+          </div>
+        </label>
+      </div>
       <div style={{ ...ROW, gridTemplateColumns: "2fr 1fr" }}>
         <label style={FIELD}>
           <span style={LABEL}>Display name</span>
@@ -694,7 +812,7 @@ function NewFamilyButton({
           />
         </label>
         <label style={FIELD}>
-          <span style={LABEL}>Class code (2–4 letters)</span>
+          <span style={LABEL}>Family abbreviation (2–4 letters)</span>
           <input
             value={classCode}
             onChange={(e) =>
@@ -747,7 +865,9 @@ function PartIdTab({
 }: {
   onSaved: (p: PartRow) => void;
 }) {
-  const [classCode, setClassCode] = useState("PART");
+  const [classification, setClassification] = useState<
+    "FAB" | "PHS" | "TLG"
+  >("FAB");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [width, setWidth] = useState<string>("");
@@ -764,7 +884,7 @@ function PartIdTab({
     start(async () => {
       try {
         const r = await savePartCode({
-          classCode,
+          classification,
           name: name.trim() || null,
           description: description.trim() || null,
           widthMm: width.trim() ? Math.round(Number(width)) : null,
@@ -778,7 +898,8 @@ function PartIdTab({
           id: r.id,
           uniqueId: r.uniqueId,
           kind: "part",
-          classCode: classCode.toUpperCase(),
+          classCode: classification,
+          partOrAssembly: kind === "assembly" ? "A" : "P",
           fullCode: r.fullCode,
           standardName: null,
           name: name.trim() || null,
@@ -811,14 +932,19 @@ function PartIdTab({
       <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr 1fr" }}>
         <label style={FIELD}>
           <span style={LABEL}>Class code</span>
-          <input
-            value={classCode}
+          <select
+            value={classification}
             onChange={(e) =>
-              setClassCode(e.target.value.toUpperCase().slice(0, 6))
+              setClassification(e.target.value as "FAB" | "PHS" | "TLG")
             }
-            placeholder="PART / ASSY / CFG"
-            style={{ ...INPUT, fontFamily: "var(--lb-font-mono, monospace)" }}
-          />
+            style={INPUT}
+          >
+            {CLASSIFICATIONS.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label style={FIELD}>
           <span style={LABEL}>Kind</span>
@@ -1400,6 +1526,28 @@ const LINK_BTN: React.CSSProperties = {
   borderRadius: 999,
   background: "transparent",
   color: "var(--lb-text-2)",
+  cursor: "pointer",
+};
+const TOGGLE_ACTIVE: React.CSSProperties = {
+  flex: 1,
+  padding: "9px 14px",
+  fontSize: 13,
+  fontWeight: 700,
+  borderRadius: 8,
+  background: "var(--lb-accent)",
+  color: "var(--lb-accent-fg)",
+  border: "1px solid var(--lb-accent)",
+  cursor: "pointer",
+};
+const TOGGLE_INACTIVE: React.CSSProperties = {
+  flex: 1,
+  padding: "9px 14px",
+  fontSize: 13,
+  fontWeight: 600,
+  borderRadius: 8,
+  background: "var(--lb-bg)",
+  color: "var(--lb-text-2)",
+  border: "1px solid var(--lb-border)",
   cursor: "pointer",
 };
 const CHIP_STYLE: React.CSSProperties = {

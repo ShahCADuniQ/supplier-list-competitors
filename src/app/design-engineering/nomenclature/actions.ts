@@ -36,7 +36,24 @@ import {
   writeNewStandardFile,
 } from "@/lib/nomenclature/folder-scanner";
 import { allocateUniqueId } from "@/lib/nomenclature/unique-id";
-import { extractHardwareFromUrl } from "@/lib/nomenclature/ai-extract";
+import {
+  extractHardwareFromUrl,
+  suggestTemplateFromUrl,
+} from "@/lib/nomenclature/ai-extract";
+
+// The three fixed class codes that prefix every generated code. FAB =
+// fabricated in-house, PHS = purchased, TLG = tooling. The previous
+// per-family code (SCR, NUT, …) is no longer used as a prefix — it
+// lives inside the nomenclature itself as part of the TYPE field.
+export type Classification = "FAB" | "PHS" | "TLG";
+const CLASSIFICATIONS = new Set<Classification>(["FAB", "PHS", "TLG"]);
+function assertClassification(v: string): Classification {
+  const up = v.toUpperCase() as Classification;
+  if (!CLASSIFICATIONS.has(up)) {
+    throw new Error("Class code must be FAB, PHS, or TLG");
+  }
+  return up;
+}
 
 // ── Reads ────────────────────────────────────────────────────────────────
 
@@ -70,7 +87,8 @@ export type PartRow = {
   id: number;
   uniqueId: string;
   kind: "hardware" | "part";
-  classCode: string;
+  classCode: string; // FAB | PHS | TLG
+  partOrAssembly: "P" | "A" | null;
   fullCode: string;
   standardName: string | null;
   name: string | null;
@@ -91,6 +109,7 @@ export async function listParts(): Promise<PartRow[]> {
       fullCode: nomenclatureParts.fullCode,
       standardId: nomenclatureParts.standardId,
       standardName: nomenclatureStandards.name,
+      partOrAssembly: nomenclatureParts.partOrAssembly,
       name: nomenclatureParts.name,
       description: nomenclatureParts.description,
       configurations: nomenclatureParts.configurations,
@@ -116,6 +135,10 @@ export async function listParts(): Promise<PartRow[]> {
       classCode: r.classCode,
       fullCode: r.fullCode,
       standardName: r.standardName ?? null,
+      partOrAssembly:
+        r.partOrAssembly === "A" || r.partOrAssembly === "P"
+          ? r.partOrAssembly
+          : null,
       name: r.name ?? null,
       description: r.description ?? null,
       configurations: Array.isArray(r.configurations)
@@ -180,6 +203,8 @@ async function upsertInventoryItem(args: {
 
 export async function saveHardwarePart(input: {
   standardId: number;
+  classification: string; // FAB | PHS | TLG
+  partOrAssembly: "P" | "A";
   nomenclature: string;
   name?: string | null;
   description?: string | null;
@@ -196,17 +221,22 @@ export async function saveHardwarePart(input: {
     .limit(1);
   if (!std) throw new Error("Standard not found");
 
-  const trimmedNom = input.nomenclature.trim();
+  const classification = assertClassification(input.classification);
+  const partOrAssembly: "P" | "A" =
+    input.partOrAssembly === "A" ? "A" : "P";
+  const trimmedNom = input.nomenclature.trim().toUpperCase();
   if (!trimmedNom) throw new Error("Nomenclature is required");
 
   const uniqueId = await allocateUniqueId();
-  const fullCode = `${std.classCode}-${uniqueId}-${trimmedNom}`;
+  // CLS-UNIQUE-P|A-NOMENCLATURE   (all uppercase)
+  const fullCode =
+    `${classification}-${uniqueId}-${partOrAssembly}-${trimmedNom}`.toUpperCase();
 
   const inventoryId = await upsertInventoryItem({
     code: fullCode,
     name: input.name ?? std.name,
     description: input.description ?? null,
-    kind: "part",
+    kind: partOrAssembly === "A" ? "assembly" : "part",
     createdByClerkId: profile.clerkUserId,
   });
 
@@ -215,9 +245,10 @@ export async function saveHardwarePart(input: {
     .values({
       uniqueId,
       kind: "hardware",
-      classCode: std.classCode,
+      classCode: classification,
       fullCode,
       standardId: std.id,
+      partOrAssembly,
       name: input.name ?? null,
       description: input.description ?? null,
       configurations: input.configurations ?? [],
@@ -226,7 +257,6 @@ export async function saveHardwarePart(input: {
     })
     .returning({ id: nomenclatureParts.id });
 
-  revalidatePath("/design-engineering/nomenclature");
   return { id: inserted.id, uniqueId, fullCode };
 }
 
@@ -250,7 +280,7 @@ function slugify(desc: string | null | undefined): string {
 }
 
 export async function savePartCode(input: {
-  classCode: string;
+  classification: string; // FAB | PHS | TLG
   name?: string | null;
   description?: string | null;
   widthMm?: number | null;
@@ -264,20 +294,18 @@ export async function savePartCode(input: {
   if (!profile) throw new Error("Sign in required");
   await ensureNomenclatureSchema();
 
-  const classCode = (input.classCode || "").toUpperCase().trim();
-  if (!/^[A-Z0-9]{2,6}$/.test(classCode)) {
-    throw new Error("Class code must be 2–6 uppercase letters / digits");
-  }
+  const classification = assertClassification(input.classification);
 
   const uniqueId = await allocateUniqueId();
   const wSeg = dimensionSegment("W", input.widthMm ?? null);
   const hSeg = dimensionSegment("H", input.heightMm ?? null);
   const lSeg = dimensionSegment("L", input.lengthMm ?? null);
   const descSeg = slugify(input.description);
-  const segments = [classCode, uniqueId, wSeg, hSeg, lSeg, descSeg].filter(
+  const segments = [classification, uniqueId, wSeg, hSeg, lSeg, descSeg].filter(
     Boolean,
   );
-  const fullCode = segments.join("-");
+  // CLS-UNIQUE-WXXXX-HXXXX-LXXXX-DESCRIPTION (all uppercase already)
+  const fullCode = segments.join("-").toUpperCase();
 
   const inventoryKind: "part" | "assembly" = input.kind ?? "part";
   const inventoryId = await upsertInventoryItem({
@@ -293,13 +321,14 @@ export async function savePartCode(input: {
     .values({
       uniqueId,
       kind: "part",
-      classCode,
+      classCode: classification,
       fullCode,
       name: input.name ?? null,
       description: input.description ?? null,
       widthMm: input.widthMm ?? null,
       heightMm: input.heightMm ?? null,
       lengthMm: input.lengthMm ?? null,
+      partOrAssembly: inventoryKind === "assembly" ? "A" : "P",
       configurations: input.configurations ?? [],
       inventoryItemId: inventoryId,
       parentPartId: input.parentPartId ?? null,
@@ -307,7 +336,6 @@ export async function savePartCode(input: {
     })
     .returning({ id: nomenclatureParts.id });
 
-  revalidatePath("/design-engineering/nomenclature");
   return { id: inserted.id, uniqueId, fullCode };
 }
 
@@ -447,6 +475,31 @@ export async function addUserStandard(input: {
     .returning({ id: nomenclatureStandards.id });
   revalidatePath("/design-engineering/nomenclature");
   return { id: inserted.id, sourcePath };
+}
+
+// ── AI template suggester (for the "New family" wizard) ────────────────
+//
+// Given a product URL, ask Claude to propose a preliminary nomenclature
+// template + spec body for a brand-new hardware family. The user
+// reviews + edits in the New Family modal before saving.
+
+export async function suggestTemplateAction(input: { url: string }): Promise<{
+  name: string;
+  template: string;
+  specText: string;
+}> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  const url = input.url.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("Paste a full http(s) URL");
+  }
+  const result = await suggestTemplateFromUrl({ url });
+  return {
+    name: result.name,
+    template: result.template,
+    specText: result.specText,
+  };
 }
 
 // ── AI URL extractor ────────────────────────────────────────────────────

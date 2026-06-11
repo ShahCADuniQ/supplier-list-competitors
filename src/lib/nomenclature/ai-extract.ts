@@ -57,6 +57,98 @@ export type AiExtractResult = {
   rawModelOutput: string;
 };
 
+export type AiTemplateSuggestion = {
+  // Suggested family name in title case (e.g. "Cable Glands").
+  name: string;
+  // Suggested template line, dash-joined, matching the existing
+  // NOMENCLATURE_*.txt shape (e.g. "TYPE-DIA-THREAD-(MATERIAU)").
+  template: string;
+  // Spec body — type list with abbreviations, materials list,
+  // examples — matching the existing .txt files' shape.
+  specText: string;
+  rawModelOutput: string;
+};
+
+// AI-suggested preliminary nomenclature template for a brand-new
+// hardware family. Used by the "New family" wizard so the user gets
+// a starting point instead of a blank template field. The user
+// reviews + edits before saving.
+export async function suggestTemplateFromUrl(args: {
+  url: string;
+}): Promise<AiTemplateSuggestion> {
+  const pageText = await fetchPlainText(args.url);
+
+  const system = [
+    "You are designing a nomenclature standard for an internal parts catalogue.",
+    "Look at the product page and propose a SHORT template + standard body.",
+    "Follow the existing convention: a dash-joined template line, then a body that lists TYPE choices (3-letter abbreviations), MATERIAUX choices (2-letter abbreviations), optional anchor/category lists, then EXEMPLES.",
+    "Substitute / with _ and . with , in dimensions.",
+    "ALL VALUES IN UPPERCASE.",
+    "Return ONLY a JSON object — no markdown fences.",
+  ].join(" ");
+
+  const user = [
+    "PRODUCT URL:",
+    args.url,
+    "",
+    "PAGE TEXT (truncated):",
+    pageText,
+    "",
+    "Return JSON shaped:",
+    `{"name": "<title-case family name>",`,
+    ` "template": "<dash-joined template line>",`,
+    ` "specText": "<the body, plain text>"}`,
+    "",
+    "Example body shape:",
+    "TYPE",
+    "Some Type : XYZ",
+    "Another Type : ABC",
+    "",
+    "MATERIAUX",
+    "Stainless Steel : SS",
+    "",
+    "EXEMPLES:",
+    "XYZ-10-(SS)",
+  ].join("\n");
+
+  const client = claudeClient();
+  const res = await client.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 1200,
+    temperature: 0.2,
+    system,
+    messages: [{ role: "user", content: user }],
+  });
+  const text = res.content
+    .map((c) => (c.type === "text" ? c.text : ""))
+    .join("")
+    .trim();
+  const cleaned = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  type Parsed = { name?: string; template?: string; specText?: string };
+  let parsed: Parsed;
+  try {
+    parsed = JSON.parse(cleaned) as Parsed;
+  } catch {
+    throw new Error(
+      `Claude returned non-JSON template suggestion. First 200 chars: ${text.slice(0, 200)}`,
+    );
+  }
+  if (!parsed.name || !parsed.template || !parsed.specText) {
+    throw new Error(
+      `Claude omitted required fields. Got: ${text.slice(0, 200)}`,
+    );
+  }
+  return {
+    name: parsed.name.trim(),
+    template: parsed.template.trim().toUpperCase(),
+    specText: parsed.specText.trim(),
+    rawModelOutput: text,
+  };
+}
+
 export async function extractHardwareFromUrl(args: {
   url: string;
   template: string;
