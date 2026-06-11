@@ -2724,3 +2724,125 @@ export const inventoryItems = pgTable(
   }),
 );
 export type InventoryItem = typeof inventoryItems.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOMENCLATURE GENERATOR  (Design & Engineering → Nomenclature)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Two generators live on the same page:
+//
+//   1. Hardware Generator. The user picks a hardware family (screw, nut,
+//      washer, rivet, anchor, spacer, cable-gland, …) and either fills in
+//      the template fields manually or pastes a product URL for the AI
+//      to populate. The full code follows the family's nomenclature
+//      standard (originally sourced from the OneDrive HARDWARES folder).
+//      Format:  <classCode>-<uniqueId>-<nomenclature>
+//
+//   2. Part / Assembly ID Generator. A unique alphanumeric is allocated
+//      and the user picks the kind (part, configuration, assembly).
+//      Format:  <classCode>-<uniqueId>-WXXXX-HXXXX-LXXXX-<description>
+//
+// Every generated entry writes a row to nomenclature_parts AND an
+// inventory_items row using the full code as the inventory code, so the
+// rest of the ERP (RFQs, POs, BOMs) can reference them immediately.
+// Deleting a nomenclature_part frees its unique_id for reuse + soft-
+// archives the linked inventory item.
+
+// One row per hardware family. Mirrors a NOMENCLATURE_*.txt file in the
+// OneDrive HARDWARES folder; loaded on demand by the self-heal scanner.
+// Users can also create new families (e.g. cable-gland) directly from
+// the UI — the scanner writes a fresh .txt back to the folder so the
+// CAD team's source of truth stays consistent with the app.
+export const nomenclatureStandards = pgTable(
+  "nomenclature_standards",
+  {
+    id: serial("id").primaryKey(),
+    // URL-friendly identifier ("screw", "cable-gland"). Stable across
+    // renames so URLs and FKs survive.
+    slug: text("slug").notNull(),
+    // Display name shown in the picker ("Screws", "Cable glands").
+    name: text("name").notNull(),
+    // Short uppercase prefix used in generated codes ("SCR", "CG").
+    classCode: text("class_code").notNull(),
+    // The template string from the .txt file (e.g.
+    //   "TYPE_TETE-CONDUITE-DIA-PITCH-LONGUEUR-…").
+    template: text("template").notNull(),
+    // Full free-form spec text — type enumerations, materials, anchors,
+    // examples. We don't try to parse the whole thing; we display it
+    // raw to the user and feed it to the AI extractor.
+    specText: text("spec_text").notNull(),
+    // Where the .txt lives on disk (only used by the OneDrive scanner).
+    sourcePath: text("source_path"),
+    // True when the user created it from inside the app instead of
+    // importing from the OneDrive folder.
+    userCreated: boolean("user_created").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    slugIdx: uniqueIndex("nomenclature_standards_slug_idx").on(t.slug),
+    classCodeIdx: index("nomenclature_standards_class_code_idx").on(
+      t.classCode,
+    ),
+  }),
+);
+export type NomenclatureStandard =
+  typeof nomenclatureStandards.$inferSelect;
+
+// One row per generated ID. uniqueId is the alphanumeric chunk that
+// shows up in every code (4 chars, A-Z + 0-9 — 1.6M unique values).
+// kind === 'hardware' → standardId points at the family, fullCode is
+// the assembled hardware nomenclature. kind === 'part' →
+// width/height/length + description fill the WXXXX-HXXXX-LXXXX-desc
+// pattern. Configurations is an array of free-form chip strings.
+export const nomenclatureParts = pgTable(
+  "nomenclature_parts",
+  {
+    id: serial("id").primaryKey(),
+    uniqueId: text("unique_id").notNull(),
+    kind: text("kind").notNull(), // 'hardware' | 'part'
+    classCode: text("class_code").notNull(),
+    fullCode: text("full_code").notNull(),
+    standardId: integer("standard_id").references(
+      () => nomenclatureStandards.id,
+      { onDelete: "set null" },
+    ),
+    name: text("name"),
+    description: text("description"),
+    // For 'part' kind only. Stored as integers in millimetres so they
+    // sort + filter cleanly. Optional — leave NULL to drop WXXXX etc.
+    widthMm: integer("width_mm"),
+    heightMm: integer("height_mm"),
+    lengthMm: integer("length_mm"),
+    // Free-form chip strings ("Standard", "Long shank", "Cap-A").
+    configurations: jsonb("configurations").$type<string[]>().default([]),
+    // Link to the resolved inventory row. Null until the inventory
+    // upsert runs; populated by the same server action that inserts
+    // the nomenclature_parts row.
+    inventoryItemId: integer("inventory_item_id").references(
+      () => inventoryItems.id,
+      { onDelete: "set null" },
+    ),
+    // Linkage to a parent assembly within nomenclature_parts itself, so
+    // a configuration row can point at the assembly it belongs to.
+    parentPartId: integer("parent_part_id"),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    uniqueIdIdx: uniqueIndex("nomenclature_parts_unique_id_idx").on(
+      t.uniqueId,
+    ),
+    fullCodeIdx: uniqueIndex("nomenclature_parts_full_code_idx").on(
+      t.fullCode,
+    ),
+    kindIdx: index("nomenclature_parts_kind_idx").on(t.kind),
+    standardIdx: index("nomenclature_parts_standard_idx").on(t.standardId),
+    inventoryIdx: index("nomenclature_parts_inventory_idx").on(
+      t.inventoryItemId,
+    ),
+    parentIdx: index("nomenclature_parts_parent_idx").on(t.parentPartId),
+  }),
+);
+export type NomenclaturePart = typeof nomenclatureParts.$inferSelect;

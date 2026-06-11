@@ -71,7 +71,11 @@ export default function SubNav({
   if (inDesign) {
     label = "Design & Engineering sections";
     tabs = [
-      { href: "/design-engineering", label: "Projects" },
+      {
+        href: "/design-engineering/nomenclature",
+        label: "Nomenclature Generator",
+      },
+      { href: "/design-engineering/projects", label: "Projects" },
       {
         href: "/design-engineering/software",
         label: "Software",
