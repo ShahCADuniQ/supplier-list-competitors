@@ -67,12 +67,14 @@ export default function NomenclatureGenerator({
   scanResult,
   supplierOptions,
   productOptions,
+  childItemIds,
 }: {
   standards: StandardRow[];
   parts: PartRow[];
   scanResult: ScanResult;
   supplierOptions: SupplierOption[];
   productOptions: string[];
+  childItemIds: number[];
 }) {
   const [tab, setTab] = useState<Tab>("hardware");
   const [standards, setStandards] = useState<StandardRow[]>(initialStandards);
@@ -124,6 +126,7 @@ export default function NomenclatureGenerator({
           parts={parts}
           supplierOptions={supplierOptions}
           productOptions={productOptions}
+          childItemIds={childItemIds}
           openDrawer={(id) => setDrawerItemId(id)}
           onUpdate={(updated) =>
             setParts((prev) =>
@@ -1272,6 +1275,7 @@ function DatabaseTab({
   parts,
   supplierOptions,
   productOptions,
+  childItemIds,
   openDrawer,
   onUpdate,
   onDelete,
@@ -1279,10 +1283,16 @@ function DatabaseTab({
   parts: PartRow[];
   supplierOptions: SupplierOption[];
   productOptions: string[];
+  childItemIds: number[];
   openDrawer: (inventoryItemId: number) => void;
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
   onDelete: (id: number) => void;
 }) {
+  // Items that appear as a child somewhere in assembly_bom. When a
+  // product-specific filter is active we hide these so only top-level
+  // master parents render — each master then shows its full tree
+  // expanded inside the card.
+  const childIdSet = useMemo(() => new Set(childItemIds), [childItemIds]);
   const [filter, setFilter] = useState("");
   const [productView, setProductView] = useState<string>("__all__");
   const [dropError, setDropError] = useState<string | null>(null);
@@ -1314,6 +1324,12 @@ function DatabaseTab({
     };
   }, [parts, productOptions]);
 
+  // True when the user picked a specific product (not "All" / "No
+  // product"). In that mode we render only master parents and each
+  // card auto-expands its Assembly Contents tree.
+  const productSpecific =
+    productView !== "__all__" && productView !== "__none__";
+
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return parts.filter((p) => {
@@ -1321,6 +1337,14 @@ function DatabaseTab({
         if (p.products.length > 0) return false;
       } else if (productView !== "__all__") {
         if (!p.products.includes(productView)) return false;
+        // Product-specific view: only master parents (items that
+        // aren't children of any other item).
+        if (
+          p.inventoryItemId != null &&
+          childIdSet.has(p.inventoryItemId)
+        ) {
+          return false;
+        }
       }
       if (!q) return true;
       return (
@@ -1331,7 +1355,7 @@ function DatabaseTab({
         p.products.some((pp) => pp.toLowerCase().includes(q))
       );
     });
-  }, [parts, filter, productView]);
+  }, [parts, filter, productView, childIdSet]);
 
   async function handleDrop(args: {
     draggedItemId: number;
@@ -1375,7 +1399,7 @@ function DatabaseTab({
             aria-label="Product view"
           >
             <option value="__all__">
-              All products ({parts.length})
+              All parts / assemblies / hardware ({parts.length})
             </option>
             {productList.hasNone && (
               <option value="__none__">No product set</option>
@@ -1518,6 +1542,7 @@ function DatabaseTab({
               supplierOptions={supplierOptions}
               productOptions={productList.products}
               refreshKey={refreshKey}
+              expandTreeByDefault={productSpecific}
               onDrop={handleDrop}
               onUpdate={onUpdate}
               onDelete={onDelete}
@@ -1535,6 +1560,7 @@ function PartRowItem({
   supplierOptions,
   productOptions,
   refreshKey,
+  expandTreeByDefault,
   onDrop,
   onUpdate,
   onDelete,
@@ -1544,6 +1570,7 @@ function PartRowItem({
   supplierOptions: SupplierOption[];
   productOptions: string[];
   refreshKey: number;
+  expandTreeByDefault: boolean;
   onDrop: (args: {
     draggedItemId: number;
     targetItemId: number;
@@ -1931,6 +1958,7 @@ function PartRowItem({
           inventoryItemId={part.inventoryItemId}
           refreshKey={refreshKey}
           openDrawer={openDrawer}
+          defaultOpen={expandTreeByDefault}
         />
       )}
 
@@ -1981,12 +2009,14 @@ function AssemblyContentsSection({
   inventoryItemId,
   refreshKey,
   openDrawer,
+  defaultOpen,
 }: {
   inventoryItemId: number;
   refreshKey: number;
   openDrawer: (id: number) => void;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!defaultOpen);
   const [tree, setTree] = useState<AssemblyTreeNode | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -2008,6 +2038,16 @@ function AssemblyContentsSection({
     if (!open) reload();
     setOpen((v) => !v);
   }
+
+  // Auto-load the tree when defaultOpen flips to true after mount
+  // (e.g. the user picks a product-specific filter).
+  useEffect(() => {
+    if (defaultOpen && !tree && !loading) {
+      reload();
+    }
+    if (defaultOpen) setOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultOpen]);
 
   // When the parent DatabaseTab bumps refreshKey (e.g. after a
   // drag-drop link), reload if we're currently open.

@@ -20,6 +20,7 @@ import {
 import { CLIENT_CONFIG } from "@/lib/client-config";
 import {
   importStandardsFromFolder,
+  listChildInventoryItemIds,
   listParts,
   listProducts,
   listStandards,
@@ -58,6 +59,7 @@ export default async function NomenclaturePage({
   const parts = await listParts();
   const supplierOptions = await listSupplierOptions();
   const productOptions = await listProducts();
+  const childItemIds = await listChildInventoryItemIds();
 
   return (
     <NomenclatureGenerator
@@ -66,6 +68,7 @@ export default async function NomenclaturePage({
       scanResult={scanResult}
       supplierOptions={supplierOptions}
       productOptions={productOptions}
+      childItemIds={childItemIds}
     />
   );
 }

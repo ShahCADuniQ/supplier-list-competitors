@@ -736,6 +736,18 @@ export type SupplierOption = {
   origin: string | null;
 };
 
+// All inventory_item ids that appear as a CHILD in any assembly_bom
+// row. Used by the Database tab to identify "master parents" — items
+// that aren't children of anything. The set is small (one int per
+// edge) so a single fetch is fine.
+export async function listChildInventoryItemIds(): Promise<number[]> {
+  await ensureNomenclatureSchema();
+  const rows = await db
+    .select({ id: assemblyBom.childItemId })
+    .from(assemblyBom);
+  return Array.from(new Set(rows.map((r) => r.id)));
+}
+
 // Distinct product names from nomenclature_parts. Used by the
 // Database tab's product-view dropdown.
 export async function listProducts(): Promise<string[]> {
