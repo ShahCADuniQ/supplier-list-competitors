@@ -31,6 +31,7 @@ import {
 } from "@/db/schema";
 import { getOrCreateProfile } from "@/lib/permissions";
 import { ensureNomenclatureSchema } from "@/lib/nomenclature/_ensure-schema";
+import { ensureOrdersSchema } from "@/app/suppliers/_ensure-orders-schema";
 import {
   scanHardwaresFolder,
   writeNewStandardFile,
@@ -196,6 +197,12 @@ async function upsertInventoryItem(args: {
   kind: "part" | "assembly";
   createdByClerkId: string | null;
 }): Promise<number> {
+  // The inventory_items table + its columns live behind the suppliers
+  // module's self-heal helper. Calling it here makes the nomenclature
+  // page work on a fresh DB even when the user hasn't opened
+  // /suppliers yet (the inventory upsert would otherwise hit a missing
+  // table or missing column).
+  await ensureOrdersSchema();
   const existing = await db
     .select({ id: inventoryItems.id })
     .from(inventoryItems)
@@ -221,6 +228,9 @@ async function upsertInventoryItem(args: {
       name: args.name,
       description: args.description,
       kind: args.kind,
+      // Every nomenclature-generated row is a top-level "parent" entry
+      // — never a child of an assembly.
+      parentAssemblyId: null,
       createdByClerkId: args.createdByClerkId,
     })
     .returning({ id: inventoryItems.id });
