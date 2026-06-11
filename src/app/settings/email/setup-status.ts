@@ -1,6 +1,4 @@
-"use server";
-
-// Surface to /settings/email which OAuth env vars are still missing,
+// Surface to /settings which OAuth env vars are still missing,
 // so the page can show a clear "needs setup" panel instead of letting
 // the user click Connect → 500. Reads-only, no secrets returned — just
 // booleans flagging which keys are blank.
