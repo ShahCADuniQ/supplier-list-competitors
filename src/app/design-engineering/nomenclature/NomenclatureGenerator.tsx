@@ -2146,9 +2146,9 @@ function AssemblyContentsSection({
           )}
           {err && <ErrorBox message={err} />}
           {tree && (
-            <AssemblyBrowser
+            <AssemblyTree
               rootTree={tree}
-              parentInventoryItemId={inventoryItemId}
+              rootInventoryItemId={inventoryItemId}
               openDrawer={openDrawer}
               onMutated={reload}
             />
@@ -2378,6 +2378,409 @@ function AssemblyBrowser({
 // only), or click Remove to detach. Mirrors the visual language of the
 // rest of the database list — code on top in mono, name below, kind
 // icon at the corner.
+// Visual tree of an assembly's contents. Renders every descendant
+// at once with CSS connector lines between parents and children, so
+// the user can see the whole hierarchy in one view instead of having
+// to drill in level by level. Each node is a compact card with its
+// own drop target + draggable handle + click-to-open-drawer.
+function AssemblyTree({
+  rootTree,
+  rootInventoryItemId,
+  openDrawer,
+  onMutated,
+}: {
+  rootTree: AssemblyTreeNode;
+  rootInventoryItemId: number;
+  openDrawer: (id: number) => void;
+  onMutated: () => void;
+}) {
+  async function dropOn(targetItemId: number, droppedItemId: number) {
+    if (droppedItemId === targetItemId) return;
+    try {
+      await addAssemblyChildAction({
+        parentInventoryItemId: targetItemId,
+        childInventoryItemId: droppedItemId,
+        quantity: 1,
+      });
+      onMutated();
+    } catch (e) {
+      console.warn("[nomenclature] drop on tree node failed:", e);
+    }
+  }
+
+  async function removeEdge(parentId: number, childId: number) {
+    try {
+      await removeAssemblyChildAction({
+        parentInventoryItemId: parentId,
+        childInventoryItemId: childId,
+      });
+      onMutated();
+    } catch (e) {
+      console.warn("[nomenclature] remove child failed:", e);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Style block for the connector lines. Scoped with the
+          .lb-tree class so it can't leak into other parts of the
+          page. */}
+      <style>{`
+        .lb-tree { display: flex; flex-direction: column; align-items: center; }
+        .lb-tree-children {
+          display: flex;
+          flex-wrap: nowrap;
+          justify-content: center;
+          gap: 24px;
+          position: relative;
+          padding-top: 28px;
+          margin-top: 0;
+        }
+        /* vertical drop from parent down to horizontal bar */
+        .lb-tree-children::before {
+          content: "";
+          position: absolute;
+          top: 0;
+          left: 50%;
+          width: 2px;
+          height: 14px;
+          background: var(--lb-border);
+          transform: translateX(-50%);
+        }
+        /* horizontal bar across all siblings (above their cards) */
+        .lb-tree-children::after {
+          content: "";
+          position: absolute;
+          top: 14px;
+          left: 24px;
+          right: 24px;
+          height: 2px;
+          background: var(--lb-border);
+        }
+        /* single-child case: drop the horizontal bar */
+        .lb-tree-children.lb-tree-single::after { display: none; }
+        /* vertical line going from horizontal bar down to each child card */
+        .lb-tree-child {
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+        .lb-tree-child::before {
+          content: "";
+          position: absolute;
+          top: -14px;
+          left: 50%;
+          width: 2px;
+          height: 14px;
+          background: var(--lb-border);
+          transform: translateX(-50%);
+        }
+      `}</style>
+
+      {/* Horizontal scroll wrapper so a wide tree doesn't blow out
+          the column width. */}
+      <div
+        style={{
+          overflowX: "auto",
+          padding: "8px 4px 12px",
+        }}
+      >
+        <div className="lb-tree" style={{ minWidth: "fit-content" }}>
+          <TreeNodeCard
+            node={rootTree}
+            parentInventoryItemId={null}
+            root
+            openDrawer={openDrawer}
+            onDropOn={dropOn}
+            onRemove={removeEdge}
+          />
+        </div>
+      </div>
+
+      <AddChildRow
+        parentInventoryItemId={rootInventoryItemId}
+        directChildren={rootTree.children}
+        onAdded={onMutated}
+      />
+    </div>
+  );
+}
+
+function TreeNodeCard({
+  node,
+  parentInventoryItemId,
+  root,
+  openDrawer,
+  onDropOn,
+  onRemove,
+}: {
+  node: AssemblyTreeNode;
+  parentInventoryItemId: number | null;
+  root?: boolean;
+  openDrawer: (id: number) => void;
+  onDropOn: (targetItemId: number, droppedItemId: number) => void;
+  onRemove: (parentItemId: number, childItemId: number) => void;
+}) {
+  const isAssembly = node.kind === "assembly";
+  const [dragOver, setDragOver] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const effectiveStock =
+    node.stock + (isAssembly ? node.buildableFromStock ?? 0 : 0);
+  const lacks = !root && node.quantity > 0 && effectiveStock < node.quantity;
+
+  const accent = root ? "#7c3aed" : "var(--lb-accent)";
+
+  return (
+    <>
+      <div
+        draggable={!root}
+        onDragStart={(e) => {
+          if (root) return;
+          e.dataTransfer.setData(
+            "application/x-lb-inventory-item",
+            String(node.itemId),
+          );
+          e.dataTransfer.effectAllowed = "link";
+          setIsDragging(true);
+          e.stopPropagation();
+        }}
+        onDragEnd={() => setIsDragging(false)}
+        onDragOver={(e) => {
+          if (
+            !e.dataTransfer.types.includes(
+              "application/x-lb-inventory-item",
+            )
+          ) {
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = "link";
+          if (!dragOver) setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (
+            !e.relatedTarget ||
+            !(e.relatedTarget instanceof Node) ||
+            !e.currentTarget.contains(e.relatedTarget)
+          ) {
+            setDragOver(false);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setDragOver(false);
+          const raw = e.dataTransfer.getData(
+            "application/x-lb-inventory-item",
+          );
+          const id = Number(raw);
+          if (!id) return;
+          onDropOn(node.itemId, id);
+        }}
+        onClick={(ev) => {
+          // Only fire the drawer open when the user clicks the card
+          // body itself, not its inner Remove button.
+          if (ev.target !== ev.currentTarget && ev.target instanceof Node) {
+            const tag = (ev.target as HTMLElement).tagName;
+            if (tag === "BUTTON") return;
+          }
+          openDrawer(node.itemId);
+        }}
+        title="Click to open details · drag onto another card to link"
+        style={{
+          position: "relative",
+          width: 240,
+          padding: 12,
+          borderRadius: 12,
+          border: dragOver
+            ? `2px solid ${accent}`
+            : lacks
+              ? "1px solid rgba(239,68,68,0.45)"
+              : root
+                ? `2px solid ${accent}`
+                : "1px solid var(--lb-border)",
+          background: dragOver
+            ? "color-mix(in srgb, var(--lb-accent) 10%, var(--lb-bg))"
+            : lacks
+              ? "rgba(239,68,68,0.04)"
+              : root
+                ? "color-mix(in srgb, #7c3aed 6%, var(--lb-bg))"
+                : "var(--lb-bg)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          cursor: root ? "pointer" : isDragging ? "grabbing" : "grab",
+          opacity: isDragging ? 0.5 : 1,
+          transform: dragOver
+            ? "translateY(-2px) scale(1.01)"
+            : "translateY(0) scale(1)",
+          boxShadow: dragOver
+            ? "0 12px 28px -10px color-mix(in srgb, var(--lb-accent) 50%, transparent), 0 0 0 4px color-mix(in srgb, var(--lb-accent) 18%, transparent)"
+            : root
+              ? "0 4px 14px -8px rgba(124,58,237,0.4)"
+              : "none",
+          transition:
+            "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 160ms ease, border-color 160ms ease, opacity 120ms ease",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 6,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              minWidth: 0,
+              flex: 1,
+            }}
+          >
+            <span style={{ fontSize: 14 }}>
+              {isAssembly ? "🧩" : "🔧"}
+            </span>
+            <code
+              style={{
+                fontSize: 10.5,
+                fontWeight: 700,
+                wordBreak: "break-all",
+              }}
+            >
+              {node.code}
+            </code>
+          </div>
+          {!root && (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 800,
+                color: "var(--lb-text-2)",
+                padding: "1px 7px",
+                borderRadius: 999,
+                background: "var(--lb-bg-elev)",
+                border: "1px solid var(--lb-border)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              × {node.quantity}
+            </span>
+          )}
+        </div>
+        {node.name && (
+          <div style={{ fontSize: 10.5, color: "var(--lb-text-2)" }}>
+            {node.name}
+          </div>
+        )}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontSize: 10,
+            color: lacks ? "#dc2626" : "var(--lb-text-3)",
+            marginTop: 2,
+          }}
+        >
+          <span>
+            Stock {node.stock}
+            {isAssembly && node.buildableFromStock != null && (
+              <span> · +{node.buildableFromStock}</span>
+            )}
+          </span>
+          {root &&
+            isAssembly &&
+            node.buildableFromStock != null && (
+              <span
+                style={{
+                  padding: "1px 8px",
+                  borderRadius: 999,
+                  background:
+                    node.buildableFromStock > 0
+                      ? "rgba(16,185,129,0.16)"
+                      : "rgba(239,68,68,0.14)",
+                  color:
+                    node.buildableFromStock > 0
+                      ? "#10b981"
+                      : "#dc2626",
+                  fontSize: 9.5,
+                  fontWeight: 800,
+                  letterSpacing: 0.4,
+                  textTransform: "uppercase",
+                }}
+              >
+                Build {node.buildableFromStock}
+              </span>
+            )}
+        </div>
+        {dragOver && (
+          <span
+            style={{
+              alignSelf: "flex-start",
+              padding: "2px 8px",
+              borderRadius: 999,
+              background: accent,
+              color: "#fff",
+              fontSize: 9.5,
+              fontWeight: 800,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+            }}
+          >
+            Drop here
+          </span>
+        )}
+        {!root && parentInventoryItemId != null && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!confirm(`Remove ${node.code} from this assembly?`)) return;
+              onRemove(parentInventoryItemId, node.itemId);
+            }}
+            draggable={false}
+            style={{
+              alignSelf: "flex-end",
+              fontSize: 10,
+              color: "#dc2626",
+              background: "transparent",
+              border: "1px solid rgba(239,68,68,0.3)",
+              borderRadius: 999,
+              padding: "1px 8px",
+              cursor: "pointer",
+            }}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+
+      {node.children.length > 0 && (
+        <div
+          className={`lb-tree-children${node.children.length === 1 ? " lb-tree-single" : ""}`}
+        >
+          {node.children.map((c) => (
+            <div className="lb-tree-child" key={c.itemId}>
+              <TreeNodeCard
+                node={c}
+                parentInventoryItemId={node.itemId}
+                openDrawer={openDrawer}
+                onDropOn={onDropOn}
+                onRemove={onRemove}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 function ChildCard({
   node,
   onOpen,
