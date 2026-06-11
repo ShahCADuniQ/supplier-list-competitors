@@ -989,6 +989,12 @@ export async function listSupplierCatalogueProductsAction(): Promise<
   const profile = await getOrCreateProfile();
   if (!profile) return [];
   await ensureOrdersSchema();
+  // Mirror exactly what /suppliers → catalogue shows as a "part card":
+  //   • parent_product_id IS NULL  → top-level rows only, never the
+  //     nested configuration models that hang off them
+  //   • archived = false           → no soft-deleted rows
+  // The picker is meant to be the SAME catalogue, not a raw dump of
+  // every supplier_products entry.
   const rows = await db
     .select({
       spId: supplierProducts.id,
@@ -1003,7 +1009,12 @@ export async function listSupplierCatalogueProductsAction(): Promise<
     })
     .from(supplierProducts)
     .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
-    .where(eq(supplierProducts.archived, false))
+    .where(
+      and(
+        eq(supplierProducts.archived, false),
+        isNull(supplierProducts.parentProductId),
+      ),
+    )
     .orderBy(asc(suppliers.name), asc(supplierProducts.name));
   return rows.map((r) => ({
     supplierProductId: r.spId,
