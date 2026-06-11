@@ -83,6 +83,11 @@ export async function listStandards(): Promise<StandardRow[]> {
   return rows.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export type Configuration = {
+  name: string;
+  description: string | null;
+};
+
 export type PartRow = {
   id: number;
   uniqueId: string;
@@ -93,10 +98,35 @@ export type PartRow = {
   standardName: string | null;
   name: string | null;
   description: string | null;
-  configurations: string[];
+  configurations: Configuration[];
   inventoryItemId: number | null;
   createdAt: string;
 };
+
+// Normalize either the new {name, description}[] shape OR the legacy
+// bare-string[] shape into a consistent Configuration[]. Old pre-V78
+// rows might still have string chips in the DB.
+function normalizeConfigurations(raw: unknown): Configuration[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Configuration[] = [];
+  for (const item of raw) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed) out.push({ name: trimmed, description: null });
+      continue;
+    }
+    if (item && typeof item === "object") {
+      const rec = item as { name?: unknown; description?: unknown };
+      const name = typeof rec.name === "string" ? rec.name.trim() : "";
+      const description =
+        typeof rec.description === "string" && rec.description.trim()
+          ? rec.description.trim()
+          : null;
+      if (name) out.push({ name, description });
+    }
+  }
+  return out;
+}
 
 export async function listParts(): Promise<PartRow[]> {
   await ensureNomenclatureSchema();
@@ -141,9 +171,7 @@ export async function listParts(): Promise<PartRow[]> {
           : null,
       name: r.name ?? null,
       description: r.description ?? null,
-      configurations: Array.isArray(r.configurations)
-        ? (r.configurations as string[])
-        : [],
+      configurations: normalizeConfigurations(r.configurations),
       inventoryItemId: r.inventoryItemId ?? null,
       createdAt: r.createdAt.toISOString(),
     }));
@@ -208,7 +236,7 @@ export async function saveHardwarePart(input: {
   nomenclature: string;
   name?: string | null;
   description?: string | null;
-  configurations?: string[];
+  configurations?: Configuration[];
 }): Promise<{ id: number; uniqueId: string; fullCode: string }> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");
@@ -287,7 +315,7 @@ export async function savePartCode(input: {
   heightMm?: number | null;
   lengthMm?: number | null;
   kind?: "part" | "assembly";
-  configurations?: string[];
+  configurations?: Configuration[];
   parentPartId?: number | null;
 }): Promise<{ id: number; uniqueId: string; fullCode: string }> {
   const profile = await getOrCreateProfile();
@@ -345,7 +373,7 @@ export async function updatePart(input: {
   id: number;
   name?: string | null;
   description?: string | null;
-  configurations?: string[];
+  configurations?: Configuration[];
 }): Promise<void> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");

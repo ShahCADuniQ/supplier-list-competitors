@@ -20,6 +20,7 @@ import {
   savePartCode,
   suggestTemplateAction,
   updatePart,
+  type Configuration,
   type PartRow,
   type StandardRow,
 } from "./actions";
@@ -270,7 +271,7 @@ function Tabs({
 }) {
   const tabs: Array<{ id: Tab; label: string; badge?: number }> = [
     { id: "hardware", label: "Hardware Generator" },
-    { id: "part", label: "Part ID Generator" },
+    { id: "part", label: "Part/Assembly ID Generator" },
     { id: "database", label: "Database", badge: parts.length },
   ];
   return (
@@ -428,7 +429,7 @@ function HardwareForm({
   const [nomenclature, setNomenclature] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [configurations, setConfigurations] = useState<string[]>([]);
+  const [configurations, setConfigurations] = useState<Configuration[]>([]);
   const [url, setUrl] = useState("");
   const [aiNotes, setAiNotes] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -635,10 +636,10 @@ function HardwareForm({
         </label>
       </div>
 
-      <ChipEditor
+      <ConfigurationsEditor
         label="Configurations (optional)"
-        chips={configurations}
-        setChips={setConfigurations}
+        configs={configurations}
+        setConfigs={setConfigurations}
       />
 
       {err && <ErrorBox message={err} />}
@@ -858,7 +859,7 @@ function NewFamilyButton({
   );
 }
 
-// ── Part ID Generator ────────────────────────────────────────────────────
+// ── Part/Assembly ID Generator ──────────────────────────────────────────
 
 function PartIdTab({
   onSaved,
@@ -874,7 +875,7 @@ function PartIdTab({
   const [height, setHeight] = useState<string>("");
   const [length, setLength] = useState<string>("");
   const [kind, setKind] = useState<"part" | "assembly">("part");
-  const [configurations, setConfigurations] = useState<string[]>([]);
+  const [configurations, setConfigurations] = useState<Configuration[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [saving, start] = useTransition();
@@ -1015,10 +1016,10 @@ function PartIdTab({
         />
       </label>
 
-      <ChipEditor
+      <ConfigurationsEditor
         label="Configurations (optional)"
-        chips={configurations}
-        setChips={setConfigurations}
+        configs={configurations}
+        setConfigs={setConfigurations}
       />
 
       {err && <ErrorBox message={err} />}
@@ -1125,7 +1126,7 @@ function PartRowItem({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(part.name ?? "");
   const [description, setDescription] = useState(part.description ?? "");
-  const [chips, setChips] = useState<string[]>(part.configurations);
+  const [chips, setChips] = useState<Configuration[]>(part.configurations);
   const [busy, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
 
@@ -1260,11 +1261,56 @@ function PartRowItem({
             </div>
           )}
           {part.configurations.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                marginTop: 4,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  letterSpacing: 0.6,
+                  textTransform: "uppercase",
+                  color: "var(--lb-text-3)",
+                }}
+              >
+                Configurations
+              </div>
               {part.configurations.map((c, i) => (
-                <span key={i} style={CHIP_STYLE}>
-                  {c}
-                </span>
+                <div
+                  key={i}
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "baseline",
+                    padding: "4px 0",
+                    fontSize: 12.5,
+                  }}
+                >
+                  <span
+                    style={{
+                      ...CHIP_STYLE,
+                      minWidth: 64,
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {c.name}
+                  </span>
+                  {c.description ? (
+                    <span style={{ color: "var(--lb-text-2)" }}>
+                      {c.description}
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--lb-text-3)" }}>
+                      No description
+                    </span>
+                  )}
+                </div>
               ))}
             </div>
           )}
@@ -1290,10 +1336,10 @@ function PartRowItem({
               style={INPUT}
             />
           </label>
-          <ChipEditor
+          <ConfigurationsEditor
             label="Configurations"
-            chips={chips}
-            setChips={setChips}
+            configs={chips}
+            setConfigs={setChips}
           />
           {err && <ErrorBox message={err} />}
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -1309,25 +1355,23 @@ function PartRowItem({
 
 // ── Shared building blocks ───────────────────────────────────────────────
 
-function ChipEditor({
+function ConfigurationsEditor({
   label,
-  chips,
-  setChips,
+  configs,
+  setConfigs,
 }: {
   label: string;
-  chips: string[];
-  setChips: (next: string[]) => void;
+  configs: Configuration[];
+  setConfigs: (next: Configuration[]) => void;
 }) {
-  const [draft, setDraft] = useState("");
-  function commit() {
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-    if (chips.includes(trimmed)) {
-      setDraft("");
-      return;
-    }
-    setChips([...chips, trimmed]);
-    setDraft("");
+  function add() {
+    setConfigs([...configs, { name: "", description: null }]);
+  }
+  function updateAt(i: number, patch: Partial<Configuration>) {
+    setConfigs(configs.map((c, j) => (i === j ? { ...c, ...patch } : c)));
+  }
+  function removeAt(i: number) {
+    setConfigs(configs.filter((_, j) => j !== i));
   }
   return (
     <label style={FIELD}>
@@ -1335,60 +1379,99 @@ function ChipEditor({
       <div
         style={{
           display: "flex",
-          flexWrap: "wrap",
-          gap: 6,
-          padding: 8,
+          flexDirection: "column",
+          gap: 8,
+          padding: 10,
           borderRadius: 8,
           background: "var(--lb-bg)",
           border: "1px solid var(--lb-border)",
         }}
       >
-        {chips.map((c, i) => (
+        {configs.length === 0 && (
           <span
-            key={`${c}-${i}`}
-            style={{ ...CHIP_STYLE, paddingRight: 6 }}
+            style={{
+              fontSize: 12,
+              color: "var(--lb-text-3)",
+              padding: "4px 2px",
+            }}
           >
-            {c}
+            No configurations yet — click <strong>+ Add configuration</strong>{" "}
+            to add one. Each gets a name and a description.
+          </span>
+        )}
+        {configs.map((c, i) => (
+          <div
+            key={i}
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "minmax(120px, 1fr) minmax(160px, 2fr) auto",
+              gap: 8,
+              alignItems: "flex-start",
+            }}
+          >
+            <input
+              value={c.name}
+              onChange={(e) =>
+                updateAt(i, { name: e.target.value.toUpperCase() })
+              }
+              placeholder="e.g. ENC"
+              aria-label={`Configuration ${i + 1} name`}
+              style={{
+                ...INPUT,
+                fontFamily: "var(--lb-font-mono, monospace)",
+                fontWeight: 700,
+                textTransform: "uppercase",
+              }}
+            />
+            <input
+              value={c.description ?? ""}
+              onChange={(e) =>
+                updateAt(i, {
+                  description: e.target.value ? e.target.value : null,
+                })
+              }
+              placeholder="Description (optional)"
+              aria-label={`Configuration ${i + 1} description`}
+              style={INPUT}
+            />
             <button
               type="button"
-              onClick={() => setChips(chips.filter((_, j) => j !== i))}
+              onClick={() => removeAt(i)}
+              aria-label={`Remove configuration ${i + 1}`}
               style={{
-                background: "transparent",
-                border: "none",
-                marginLeft: 4,
-                color: "inherit",
-                cursor: "pointer",
+                padding: "8px 12px",
                 fontSize: 13,
+                fontWeight: 600,
+                background: "transparent",
+                border: "1px solid var(--lb-border)",
+                borderRadius: 8,
+                color: "var(--lb-text-3)",
+                cursor: "pointer",
               }}
-              aria-label={`Remove ${c}`}
+              title="Remove"
             >
               ×
             </button>
-          </span>
+          </div>
         ))}
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === ",") {
-              e.preventDefault();
-              commit();
-            } else if (e.key === "Backspace" && !draft && chips.length) {
-              setChips(chips.slice(0, -1));
-            }
-          }}
-          placeholder={chips.length ? "" : "Add a configuration and press Enter"}
+        <button
+          type="button"
+          onClick={add}
           style={{
-            flex: 1,
-            minWidth: 160,
-            padding: 4,
-            border: "none",
-            outline: "none",
-            background: "transparent",
-            color: "var(--lb-text)",
+            alignSelf: "flex-start",
+            padding: "7px 14px",
             fontSize: 13,
+            fontWeight: 700,
+            background: "transparent",
+            border: "1px dashed var(--lb-accent)",
+            color: "var(--lb-accent)",
+            borderRadius: 999,
+            cursor: "pointer",
           }}
-        />
+        >
+          + Add configuration
+        </button>
       </div>
     </label>
   );

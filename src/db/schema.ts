@@ -2818,8 +2818,13 @@ export const nomenclatureParts = pgTable(
     // — the part/assembly generator uses inventory_items.kind for the
     // same distinction and doesn't embed P/A in the code itself.
     partOrAssembly: text("part_or_assembly"),
-    // Free-form chip strings ("Standard", "Long shank", "Cap-A").
-    configurations: jsonb("configurations").$type<string[]>().default([]),
+    // Configurations are name+description pairs ({ name: "ENC",
+    // description: "Enclosed variant" }). Stored JSONB so the catalogue
+    // can extend later. Pre-V78 rows that stored bare strings are
+    // normalised on read by the actions layer.
+    configurations: jsonb("configurations")
+      .$type<Array<{ name: string; description: string | null }>>()
+      .default([]),
     // Link to the resolved inventory row. Null until the inventory
     // upsert runs; populated by the same server action that inserts
     // the nomenclature_parts row.
