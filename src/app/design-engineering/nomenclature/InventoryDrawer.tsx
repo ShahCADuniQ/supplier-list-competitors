@@ -23,10 +23,12 @@ import {
   listSupplierCatalogueProductsAction,
   listSupplierOptions,
   removeInventoryAttachmentAction,
+  setInventoryClassAction,
   setInventoryConfigurationsAction,
   setInventoryStarredAction,
   unlinkSupplierProductFromInventoryAction,
   type AssemblyTreeNode,
+  type InventoryItemClass,
   type Configuration,
   type ConfigurationOption,
   type DrawerAttachment,
@@ -363,6 +365,14 @@ export default function InventoryDrawer({
                     starred={details.starred}
                     onChanged={(next) =>
                       setDetails((d) => (d ? { ...d, starred: next } : d))
+                    }
+                  />
+                  <DrawerClassPicker
+                    inventoryItemId={details.inventoryItemId}
+                    itemClass={details.itemClass}
+                    kindFallback={details.kind}
+                    onChanged={(next) =>
+                      setDetails((d) => (d ? { ...d, itemClass: next } : d))
                     }
                   />
                   {details.products.map((label) => (
@@ -859,6 +869,84 @@ function DrawerStarToggle({
     >
       {starred ? "★" : "☆"}
     </button>
+  );
+}
+
+// V106 — broader catalogue classification picker rendered next to
+// the star toggle. Drives the Inventory tab pills (Parts, Assemblies,
+// Hardware, Electronics, Adhesive/Sealants/Fillers). NULL falls back
+// to the row's `kind` (part vs assembly).
+const CLASS_OPTIONS: Array<{ value: InventoryItemClass; label: string; emoji: string }> = [
+  { value: "part", label: "Part", emoji: "🔧" },
+  { value: "assembly", label: "Assembly", emoji: "🧩" },
+  { value: "hardware", label: "Hardware", emoji: "🔩" },
+  { value: "electronics", label: "Electronics", emoji: "💡" },
+  { value: "adhesive_sealant_filler", label: "Adhesive / Sealant / Filler", emoji: "🧪" },
+];
+
+function DrawerClassPicker({
+  inventoryItemId,
+  itemClass,
+  kindFallback,
+  onChanged,
+}: {
+  inventoryItemId: number;
+  itemClass: InventoryItemClass | null;
+  kindFallback: "part" | "assembly";
+  onChanged: (next: InventoryItemClass | null) => void;
+}) {
+  const [pending, start] = useTransition();
+  const effective = (itemClass ?? kindFallback) as InventoryItemClass;
+
+  function change(next: string) {
+    const value = next === "__clear__" ? null : (next as InventoryItemClass);
+    onChanged(value);
+    start(async () => {
+      try {
+        await setInventoryClassAction({
+          inventoryItemId,
+          itemClass: value,
+        });
+      } catch (e) {
+        onChanged(itemClass);
+        alert(e instanceof Error ? e.message : "Class change failed");
+      }
+    });
+  }
+
+  return (
+    <select
+      value={itemClass ?? effective}
+      onChange={(e) => change(e.target.value)}
+      disabled={pending}
+      title="Catalogue class — drives which Lightbase Inventory tab this row appears under"
+      style={{
+        appearance: "none",
+        border: "1px solid var(--lb-border)",
+        background: "var(--lb-bg-elev)",
+        color: "var(--lb-text)",
+        borderRadius: 999,
+        fontSize: 10.5,
+        fontWeight: 700,
+        padding: "3px 22px 3px 10px",
+        cursor: pending ? "default" : "pointer",
+        opacity: pending ? 0.6 : 1,
+        backgroundImage:
+          "linear-gradient(45deg, transparent 50%, var(--lb-text-3) 50%), linear-gradient(135deg, var(--lb-text-3) 50%, transparent 50%)",
+        backgroundPosition: "calc(100% - 12px) center, calc(100% - 8px) center",
+        backgroundSize: "4px 4px, 4px 4px",
+        backgroundRepeat: "no-repeat",
+      }}
+    >
+      {CLASS_OPTIONS.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.emoji} {o.label}
+        </option>
+      ))}
+      {itemClass != null && (
+        <option value="__clear__">↺ Use default ({CLASS_OPTIONS.find((c) => c.value === kindFallback)?.label})</option>
+      )}
+    </select>
   );
 }
 

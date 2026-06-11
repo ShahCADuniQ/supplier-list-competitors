@@ -343,6 +343,10 @@ async function upsertInventoryItem(args: {
   product?: string | null;
   products?: string[];
   isConfiguration?: boolean;
+  // Broader catalogue classification — when omitted we let the read
+  // path fall back to `kind`. Passed explicitly by saveHardwarePart
+  // so the Hardware tab picks up freshly-saved hardware codes.
+  itemClass?: string | null;
   createdByClerkId: string | null;
 }): Promise<number> {
   // The inventory_items table + its columns live behind the suppliers
@@ -389,6 +393,7 @@ async function upsertInventoryItem(args: {
       // Nothing is auto-starred — user opts in explicitly.
       starred: false,
       isConfiguration: args.isConfiguration ?? false,
+      itemClass: args.itemClass ?? null,
       // Every nomenclature-generated row is a top-level "parent" entry
       // — never a child of an assembly.
       parentAssemblyId: null,
@@ -450,6 +455,9 @@ export async function saveHardwarePart(input: {
     product: productsArr[0] ?? null,
     products: productsArr,
     isConfiguration: input.isConfiguration ?? false,
+    // Hardware codes always live in the Hardware bucket on the
+    // Lightbase Inventory tab regardless of P vs A.
+    itemClass: "hardware",
     createdByClerkId: profile.clerkUserId,
   });
 
@@ -1341,6 +1349,9 @@ export type InventoryDetails = {
   standardName: string | null;
   starred: boolean;
   isConfiguration: boolean;
+  // Broader catalogue classification used by /suppliers → Inventory
+  // pills. Read path falls back to kind when the column is null.
+  itemClass: InventoryItemClass | null;
   attachments: DrawerAttachment[];
   supplierLinks: DrawerSupplierLink[];
   children: DrawerChild[];
@@ -1531,6 +1542,7 @@ export async function getInventoryDetails(input: {
     standardName,
     starred: item.starred ?? false,
     isConfiguration: item.isConfiguration ?? false,
+    itemClass: (item.itemClass ?? null) as InventoryItemClass | null,
     attachments,
     supplierLinks,
     children,
@@ -1626,6 +1638,198 @@ export async function setInventoryConfigurationFlagAction(input: {
     .set({ isConfiguration: input.isConfiguration, updatedAt: new Date() })
     .where(eq(inventoryItems.id, input.inventoryItemId));
   return { ok: true };
+}
+
+// V106 — set the broader catalogue classification on an inventory
+// row. Drives the Lightbase Inventory tab pills (Parts, Assemblies,
+// Hardware, Electronics, Adhesive/Sealants/Fillers). Pass null to
+// clear back to the kind-based default.
+export type InventoryItemClass =
+  | "part"
+  | "assembly"
+  | "hardware"
+  | "electronics"
+  | "adhesive_sealant_filler";
+
+export async function setInventoryClassAction(input: {
+  inventoryItemId: number;
+  itemClass: InventoryItemClass | null;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  await db
+    .update(inventoryItems)
+    .set({ itemClass: input.itemClass, updatedAt: new Date() })
+    .where(eq(inventoryItems.id, input.inventoryItemId));
+  return { ok: true };
+}
+
+// V106 — build a starred-only "how everything connects" tree for a
+// single product. Walks the assembly_bom graph from every starred
+// inventory row that belongs to `product`, keeping only edges whose
+// CHILD is also starred (and itemClass-allowed). Returns a flat set
+// of root forests so the InventoryTab Tree tab can render them on
+// the far RHS in one go without further round-trips.
+export type ProductTreeNode = {
+  inventoryItemId: number;
+  code: string;
+  name: string | null;
+  itemClass: InventoryItemClass | "part" | "assembly";
+  quantity: number;
+  starred: boolean;
+  isConfiguration: boolean;
+  children: ProductTreeNode[];
+};
+
+export async function getProductInventoryTreeAction(input: {
+  product: string;
+}): Promise<ProductTreeNode[]> {
+  const profile = await getOrCreateProfile();
+  if (!profile) return [];
+  await ensureOrdersSchema();
+  await ensureNomenclatureSchema();
+
+  const productKey = input.product.trim();
+  if (!productKey) return [];
+
+  // Allowed itemClass values for the filtered tree. Per the spec the
+  // tree includes parts + assemblies + hardware + electronics +
+  // adhesives/sealants/fillers, and ONLY starred rows.
+  const ALLOWED = new Set<string>([
+    "part",
+    "assembly",
+    "hardware",
+    "electronics",
+    "adhesive_sealant_filler",
+  ]);
+
+  // Pull every non-archived starred inventory row, then filter to the
+  // ones that belong to this product. Product membership matches the
+  // legacy scalar column OR any entry in the jsonb array, mirroring
+  // readProducts() used elsewhere.
+  const allRows = await db
+    .select({
+      id: inventoryItems.id,
+      code: inventoryItems.code,
+      name: inventoryItems.name,
+      kind: inventoryItems.kind,
+      itemClass: inventoryItems.itemClass,
+      starred: inventoryItems.starred,
+      isConfiguration: inventoryItems.isConfiguration,
+      product: inventoryItems.product,
+      products: inventoryItems.products,
+    })
+    .from(inventoryItems)
+    .where(
+      and(
+        eq(inventoryItems.archived, false),
+        eq(inventoryItems.starred, true),
+      ),
+    );
+
+  const allowedIds = new Set<number>();
+  const meta = new Map<
+    number,
+    {
+      id: number;
+      code: string;
+      name: string | null;
+      itemClass: InventoryItemClass | "part" | "assembly";
+      isConfiguration: boolean;
+    }
+  >();
+  for (const r of allRows) {
+    const ps = readProducts(r.product, r.products);
+    if (
+      !ps.some(
+        (p) => p.toLowerCase() === productKey.toLowerCase(),
+      )
+    ) {
+      continue;
+    }
+    const cls = (r.itemClass ?? (r.kind === "assembly" ? "assembly" : "part")) as
+      | InventoryItemClass
+      | "part"
+      | "assembly";
+    if (!ALLOWED.has(cls)) continue;
+    allowedIds.add(r.id);
+    meta.set(r.id, {
+      id: r.id,
+      code: r.code,
+      name: r.name ?? null,
+      itemClass: cls,
+      isConfiguration: r.isConfiguration ?? false,
+    });
+  }
+  if (allowedIds.size === 0) return [];
+
+  // Edges restricted to nodes in our allowed set. Discard the rest so
+  // the tree only walks through starred-in-product nodes.
+  const idsArr = Array.from(allowedIds);
+  const allEdges = await db
+    .select({
+      parentAssemblyId: assemblyBom.parentAssemblyId,
+      childItemId: assemblyBom.childItemId,
+      quantity: assemblyBom.quantity,
+      position: assemblyBom.position,
+    })
+    .from(assemblyBom)
+    .where(
+      and(
+        inArray(assemblyBom.parentAssemblyId, idsArr),
+        inArray(assemblyBom.childItemId, idsArr),
+      ),
+    );
+
+  const childrenByParent = new Map<
+    number,
+    Array<{ child: number; quantity: number; position: number }>
+  >();
+  const hasParent = new Set<number>();
+  for (const e of allEdges) {
+    const arr = childrenByParent.get(e.parentAssemblyId) ?? [];
+    arr.push({
+      child: e.childItemId,
+      quantity: e.quantity,
+      position: e.position,
+    });
+    childrenByParent.set(e.parentAssemblyId, arr);
+    hasParent.add(e.childItemId);
+  }
+  for (const arr of childrenByParent.values()) {
+    arr.sort((a, b) => a.position - b.position);
+  }
+
+  function build(
+    id: number,
+    qty: number,
+    ancestors: Set<number>,
+  ): ProductTreeNode {
+    const m = meta.get(id)!;
+    const next = new Set(ancestors);
+    next.add(id);
+    const childEdges = (childrenByParent.get(id) ?? []).filter(
+      (c) => !next.has(c.child),
+    );
+    return {
+      inventoryItemId: id,
+      code: m.code,
+      name: m.name,
+      itemClass: m.itemClass,
+      quantity: qty,
+      starred: true,
+      isConfiguration: m.isConfiguration,
+      children: childEdges.map((c) => build(c.child, c.quantity, next)),
+    };
+  }
+
+  // Forest roots = allowed nodes that aren't a child of any other
+  // allowed node. Sorted by code for stable rendering.
+  const roots = idsArr
+    .filter((id) => !hasParent.has(id))
+    .sort((a, b) => meta.get(a)!.code.localeCompare(meta.get(b)!.code));
+  return roots.map((id) => build(id, 1, new Set()));
 }
 
 export async function removeInventoryAttachmentAction(input: {

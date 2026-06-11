@@ -2745,6 +2745,13 @@ export const inventoryItems = pgTable(
     // BOM reader can tell a configuration-of-parent variant apart
     // from a permanent component.
     isConfiguration: boolean("is_configuration").notNull().default(false),
+    // Broader catalogue classification used by the Lightbase Inventory
+    // tab pills. Independent of `kind` (BOM-structural part/assembly).
+    // One of: 'part', 'assembly', 'hardware', 'electronics',
+    // 'adhesive_sealant_filler'. Nullable for legacy rows; the read
+    // paths treat NULL as 'part' for parts and 'assembly' for
+    // assemblies so the UI always has something to bucket by.
+    itemClass: text("item_class"),
     createdByClerkId: text("created_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),

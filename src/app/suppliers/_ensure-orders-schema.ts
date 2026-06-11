@@ -425,6 +425,13 @@ export function ensureOrdersSchema(): Promise<void> {
         ALTER TABLE "inventory_items"
           ADD COLUMN IF NOT EXISTS "is_configuration" boolean NOT NULL DEFAULT false
       `);
+      // V106 — broader catalogue classification (part / assembly /
+      // hardware / electronics / adhesive_sealant_filler) used by the
+      // Lightbase Inventory tab pills. NULL allowed; read paths fall
+      // back to `kind`. Backfill of pre-existing hardware rows happens
+      // in the nomenclature ensure step (guarded by lb_one_shot_flags).
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "item_class" text`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_item_class_idx" ON "inventory_items" ("item_class")`);
       // V105 — explicit FK link from a supplier_products row to an
       // inventory item. Created and used by the "Link to catalogue
       // product" picker in the InventoryDrawer. Mirrored from the

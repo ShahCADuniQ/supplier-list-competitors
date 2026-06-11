@@ -166,6 +166,33 @@ export function ensureNomenclatureSchema(): Promise<void> {
         ALTER TABLE "inventory_items"
           ADD COLUMN IF NOT EXISTS "is_configuration" boolean NOT NULL DEFAULT false
       `);
+      // V106 — itemClass groups inventory rows into the broader
+      // catalogue tabs in /suppliers (Parts / Assemblies / Hardware
+      // / Electronics / Adhesive-Sealants-Fillers). Independent of
+      // `kind` so an assembly can still be itemClass='assembly' even
+      // when itemClass-aware UIs route it into the Assemblies tab.
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "item_class" text`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_item_class_idx" ON "inventory_items" ("item_class")`);
+      // V106 backfill (one-shot): any inventory row linked to a
+      // nomenclature_parts row with kind='hardware' is auto-classed
+      // as 'hardware'. Other rows are left NULL — the read path
+      // falls back to the kind column (part vs assembly).
+      await db.execute(sql`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM "lb_one_shot_flags" WHERE "flag" = 'v106_backfill_item_class'
+          ) THEN
+            UPDATE "inventory_items" AS i
+              SET "item_class" = 'hardware'
+              FROM "nomenclature_parts" AS np
+              WHERE np."inventory_item_id" = i."id"
+                AND np."kind" = 'hardware'
+                AND i."item_class" IS NULL;
+            INSERT INTO "lb_one_shot_flags" ("flag") VALUES ('v106_backfill_item_class');
+          END IF;
+        END $$;
+      `);
       // V98 — Global configuration_options catalogue. Every config
       // name ever attached to a part / assembly / hardware gets
       // upserted here so the chip-editor can offer typeahead.
