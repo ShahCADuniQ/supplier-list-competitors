@@ -1676,6 +1676,39 @@ export async function setInventoryClassAction(input: {
   return { ok: true };
 }
 
+// V111 — write the products[] array on an inventory row from the
+// drawer's Products section. Mirrors the cleaned-up array onto the
+// linked nomenclature_parts row so the Database tab card stays in
+// sync without a refresh. Same normalisation rules as the rest of
+// the file: trim, drop empties, de-dup case-insensitively, preserve
+// the legacy scalar `product` field for old readers.
+export async function setInventoryProductsAction(input: {
+  inventoryItemId: number;
+  products: string[];
+}): Promise<{ ok: true; products: string[] }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  const productsArr = normalizeProductArray(input.products);
+  await db
+    .update(inventoryItems)
+    .set({
+      product: productsArr[0] ?? null,
+      products: productsArr,
+      updatedAt: new Date(),
+    })
+    .where(eq(inventoryItems.id, input.inventoryItemId));
+  await db
+    .update(nomenclatureParts)
+    .set({
+      product: productsArr[0] ?? null,
+      products: productsArr,
+      updatedAt: new Date(),
+    })
+    .where(eq(nomenclatureParts.inventoryItemId, input.inventoryItemId));
+  return { ok: true, products: productsArr };
+}
+
 // V106 — build a starred-only "how everything connects" tree for a
 // single product. Walks the assembly_bom graph from every starred
 // inventory row that belongs to `product`, keeping only edges whose

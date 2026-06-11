@@ -20,11 +20,13 @@ import {
   linkInventoryToSupplierAction,
   linkSupplierProductToInventoryAction,
   listConfigurationOptionsAction,
+  listProducts,
   listSupplierCatalogueProductsAction,
   listSupplierOptions,
   removeInventoryAttachmentAction,
   setInventoryClassAction,
   setInventoryConfigurationsAction,
+  setInventoryProductsAction,
   setInventoryStarredAction,
   unlinkSupplierProductFromInventoryAction,
   type AssemblyTreeNode,
@@ -1023,6 +1025,12 @@ function Body({
           )}
         </div>
       </Section>
+
+      <ProductsSection
+        inventoryItemId={details.inventoryItemId}
+        initialProducts={details.products}
+        onMutated={onMutated}
+      />
 
       <ConfigurationsSection
         inventoryItemId={details.inventoryItemId}
@@ -2407,6 +2415,214 @@ function NavList({
 
 // Editable configurations section. Read-only display by default;
 // click "Edit" to enter chip-editor mode with add/remove rows and
+// V111 — chip editor for the products[] array on an inventory row.
+// Visible everywhere the InventoryDrawer is rendered. Mirrors the
+// ProductInput on the nomenclature Database tab (typeahead from the
+// global product catalogue, chip-style display, ENTER to commit,
+// click × to remove). Saves through setInventoryProductsAction so
+// the linked nomenclature_parts row stays in sync.
+function ProductsSection({
+  inventoryItemId,
+  initialProducts,
+  onMutated,
+}: {
+  inventoryItemId: number;
+  initialProducts: string[];
+  onMutated: () => void;
+}) {
+  const [products, setProducts] = useState<string[]>(initialProducts);
+  const [draft, setDraft] = useState("");
+  const [knownProducts, setKnownProducts] = useState<string[]>([]);
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  const datalistId = `drawer-products-${inventoryItemId}`;
+
+  // Resync when the drawer reloads after another mutation so external
+  // edits win over stale local state.
+  useEffect(() => {
+    setProducts(initialProducts);
+  }, [initialProducts]);
+
+  // One-time fetch of the global product catalogue for typeahead.
+  useEffect(() => {
+    listProducts()
+      .then(setKnownProducts)
+      .catch(() => setKnownProducts([]));
+  }, []);
+
+  function persist(next: string[]) {
+    setErr(null);
+    start(async () => {
+      try {
+        const res = await setInventoryProductsAction({
+          inventoryItemId,
+          products: next,
+        });
+        setProducts(res.products);
+        onMutated();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Save failed");
+        setProducts(initialProducts);
+      }
+    });
+  }
+
+  function commit(raw?: string) {
+    const value = (raw ?? draft).trim();
+    if (!value) return;
+    if (products.some((p) => p.toLowerCase() === value.toLowerCase())) {
+      setDraft("");
+      return;
+    }
+    setDraft("");
+    persist([...products, value]);
+  }
+
+  function remove(label: string) {
+    persist(products.filter((p) => p !== label));
+  }
+
+  // Combine known catalogue entries with anything already on this row
+  // (case-insensitive) so the datalist offers both the global pool and
+  // any custom values the user has typed before.
+  const datalistOptions = (() => {
+    const seen = new Set(products.map((p) => p.toLowerCase()));
+    return knownProducts.filter((p) => !seen.has(p.toLowerCase()));
+  })();
+
+  return (
+    <Section title={`Products (${products.length})`}>
+      {err && (
+        <div
+          style={{
+            marginBottom: 8,
+            padding: 8,
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.12)",
+            color: "#fca5a5",
+            fontSize: 12.5,
+          }}
+        >
+          {err}
+        </div>
+      )}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6,
+          alignItems: "center",
+        }}
+      >
+        {products.length === 0 && (
+          <span
+            style={{
+              fontSize: 12,
+              color: "var(--lb-text-3)",
+              fontStyle: "italic",
+            }}
+          >
+            No products linked yet. Type a name and press Enter to
+            add — the typeahead pulls from every product label already
+            in the system.
+          </span>
+        )}
+        {products.map((label) => (
+          <span
+            key={label}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "3px 4px 3px 10px",
+              borderRadius: 999,
+              background:
+                "color-mix(in srgb, var(--lb-accent) 14%, transparent)",
+              color: "var(--lb-accent)",
+              fontSize: 11.5,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+              opacity: pending ? 0.6 : 1,
+            }}
+          >
+            {label}
+            <button
+              type="button"
+              onClick={() => remove(label)}
+              disabled={pending}
+              aria-label={`Remove ${label}`}
+              title={`Remove ${label}`}
+              style={{
+                appearance: "none",
+                border: "none",
+                background: "transparent",
+                color: "var(--lb-accent)",
+                fontSize: 13,
+                fontWeight: 800,
+                lineHeight: 1,
+                cursor: pending ? "default" : "pointer",
+                padding: "2px 6px",
+                borderRadius: 999,
+              }}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+            }
+          }}
+          placeholder="Add product (e.g. LIGHTLINE-X)…"
+          list={datalistId}
+          disabled={pending}
+          style={{
+            flex: 1,
+            padding: "7px 10px",
+            borderRadius: 8,
+            border: "1px solid var(--lb-border)",
+            background: "var(--lb-bg)",
+            color: "var(--lb-text)",
+            fontSize: 12.5,
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => commit()}
+          disabled={pending || !draft.trim()}
+          style={{
+            padding: "7px 14px",
+            borderRadius: 999,
+            background: "var(--lb-accent)",
+            color: "var(--lb-accent-fg, white)",
+            border: 0,
+            fontSize: 12.5,
+            fontWeight: 700,
+            cursor: pending || !draft.trim() ? "default" : "pointer",
+            opacity: pending || !draft.trim() ? 0.6 : 1,
+          }}
+        >
+          + Add
+        </button>
+        <datalist id={datalistId}>
+          {datalistOptions.map((opt) => (
+            <option key={opt} value={opt} />
+          ))}
+        </datalist>
+      </div>
+    </Section>
+  );
+}
+
 // a Save button. Always renders the section header so a user can
 // ADD configurations to a row that didn't have any.
 function ConfigurationsSection({
