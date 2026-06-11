@@ -112,6 +112,18 @@ export function ensureNomenclatureSchema(): Promise<void> {
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "assembly_bom_child_idx" ON "assembly_bom" ("child_item_id")`);
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "assembly_bom_unique_edge_idx" ON "assembly_bom" ("parent_assembly_id","child_item_id")`);
 
+      // V92 — Multi-product membership: a part / assembly can now
+      // belong to multiple products. Stored as a jsonb array of
+      // strings on both nomenclature_parts and inventory_items. The
+      // scalar `product` column is kept in sync with the first array
+      // element so legacy reads keep working.
+      await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "products" jsonb DEFAULT '[]'::jsonb`);
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "products" jsonb DEFAULT '[]'::jsonb`);
+      // Backfill from the existing scalar so the array is populated
+      // for rows created before V92.
+      await db.execute(sql`UPDATE "nomenclature_parts" SET "products" = jsonb_build_array("product") WHERE "product" IS NOT NULL AND ("products" IS NULL OR jsonb_array_length("products") = 0)`);
+      await db.execute(sql`UPDATE "inventory_items" SET "products" = jsonb_build_array("product") WHERE "product" IS NOT NULL AND ("products" IS NULL OR jsonb_array_length("products") = 0)`);
+
       // V90 — Auto-backfill: insert P / A after the unique ID in any
       // legacy nomenclature_parts row whose fullCode is missing it.
       // Idempotent; once every row is migrated the SELECT below

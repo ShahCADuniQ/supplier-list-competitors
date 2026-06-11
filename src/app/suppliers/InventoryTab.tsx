@@ -64,13 +64,26 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
   // appears in this dropdown for everyone.
   const [productFilter, setProductFilter] = useState<string>("__all__");
 
+  // Normalise products field for each row. Handles both the legacy
+  // scalar `product` column and the V92 `products` jsonb array.
+  function rowProducts(i: InventoryItemWithStats): string[] {
+    const arr = (i as { products?: unknown }).products;
+    if (Array.isArray(arr) && arr.length > 0) {
+      return (arr as unknown[]).filter(
+        (v): v is string => typeof v === "string" && v.trim().length > 0,
+      );
+    }
+    const scalar = (i.product ?? "").trim();
+    return scalar ? [scalar] : [];
+  }
+
   const productOptions = useMemo(() => {
     const set = new Set<string>();
     let hasNone = false;
     for (const i of items ?? []) {
-      const p = (i.product ?? "").trim();
-      if (p) set.add(p);
-      else hasNone = true;
+      const ps = rowProducts(i);
+      if (ps.length === 0) hasNone = true;
+      else for (const p of ps) set.add(p);
     }
     return {
       products: Array.from(set).sort((a, b) => a.localeCompare(b)),
@@ -86,15 +99,17 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
     );
     const byProduct = byKind.filter((i) => {
       if (productFilter === "__all__") return true;
-      if (productFilter === "__none__") return !(i.product ?? "").trim();
-      return (i.product ?? "").trim() === productFilter;
+      const ps = rowProducts(i);
+      if (productFilter === "__none__") return ps.length === 0;
+      return ps.includes(productFilter);
     });
     if (!q) return byProduct;
-    return byProduct.filter((i) =>
-      `${i.code} ${i.name ?? ""} ${i.description ?? ""} ${i.category ?? ""} ${i.material ?? ""} ${i.product ?? ""}`
+    return byProduct.filter((i) => {
+      const ps = rowProducts(i).join(" ");
+      return `${i.code} ${i.name ?? ""} ${i.description ?? ""} ${i.category ?? ""} ${i.material ?? ""} ${ps}`
         .toLowerCase()
-        .includes(q),
-    );
+        .includes(q);
+    });
   }, [items, search, view, productFilter]);
   const partsCount = (items ?? []).filter((i) => i.kind !== "assembly").length;
   const assembliesCount = (items ?? []).filter((i) => i.kind === "assembly").length;

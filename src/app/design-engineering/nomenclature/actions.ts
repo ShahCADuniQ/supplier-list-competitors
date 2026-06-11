@@ -110,11 +110,49 @@ export type PartRow = {
   standardName: string | null;
   name: string | null;
   description: string | null;
+  // Legacy single-product field. Always equal to products[0] when
+  // products is non-empty; null otherwise. Kept for UI components
+  // that haven't been migrated to the array yet.
   product: string | null;
+  products: string[];
   configurations: Configuration[];
   inventoryItemId: number | null;
   createdAt: string;
 };
+
+// Normalise an input value (string[] or null) into a clean string[].
+// Strips empty entries and de-duplicates while preserving order.
+function normalizeProductArray(
+  raw: string[] | null | undefined,
+): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of raw) {
+    if (typeof p !== "string") continue;
+    const trimmed = p.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+// Merge a single legacy `product` value with the canonical `products`
+// array so reads can rely on the array even on pre-V92 rows.
+function readProducts(
+  legacy: string | null | undefined,
+  arr: unknown,
+): string[] {
+  const cleaned = normalizeProductArray(
+    Array.isArray(arr) ? (arr as string[]) : null,
+  );
+  if (cleaned.length > 0) return cleaned;
+  if (legacy && legacy.trim()) return [legacy.trim()];
+  return [];
+}
 
 // Normalize either the new {name, description}[] shape OR the legacy
 // bare-string[] shape into a consistent Configuration[]. Old pre-V78
@@ -156,6 +194,7 @@ export async function listParts(): Promise<PartRow[]> {
       name: nomenclatureParts.name,
       description: nomenclatureParts.description,
       product: nomenclatureParts.product,
+      products: nomenclatureParts.products,
       configurations: nomenclatureParts.configurations,
       inventoryItemId: nomenclatureParts.inventoryItemId,
       createdAt: nomenclatureParts.createdAt,
@@ -186,6 +225,7 @@ export async function listParts(): Promise<PartRow[]> {
       name: r.name ?? null,
       description: r.description ?? null,
       product: r.product ?? null,
+      products: readProducts(r.product, r.products),
       configurations: normalizeConfigurations(r.configurations),
       inventoryItemId: r.inventoryItemId ?? null,
       createdAt: r.createdAt.toISOString(),
@@ -210,6 +250,7 @@ async function upsertInventoryItem(args: {
   description: string | null;
   kind: "part" | "assembly";
   product?: string | null;
+  products?: string[];
   createdByClerkId: string | null;
 }): Promise<number> {
   // The inventory_items table + its columns live behind the suppliers
@@ -231,6 +272,7 @@ async function upsertInventoryItem(args: {
         description: args.description,
         kind: args.kind,
         product: args.product ?? null,
+        products: args.products ?? [],
         archived: false,
         updatedAt: new Date(),
       })
@@ -245,6 +287,7 @@ async function upsertInventoryItem(args: {
       description: args.description,
       kind: args.kind,
       product: args.product ?? null,
+      products: args.products ?? [],
       // Every nomenclature-generated row is a top-level "parent" entry
       // — never a child of an assembly.
       parentAssemblyId: null,
@@ -264,6 +307,7 @@ export async function saveHardwarePart(input: {
   name?: string | null;
   description?: string | null;
   product?: string | null;
+  products?: string[];
   configurations?: Configuration[];
 }): Promise<{ id: number; uniqueId: string; fullCode: string }> {
   const profile = await getOrCreateProfile();
@@ -288,12 +332,16 @@ export async function saveHardwarePart(input: {
   const fullCode =
     `${classification}-${uniqueId}-${partOrAssembly}-${trimmedNom}`.toUpperCase();
 
+  const productsArr = normalizeProductArray(
+    input.products ?? (input.product ? [input.product] : []),
+  );
   const inventoryId = await upsertInventoryItem({
     code: fullCode,
     name: input.name ?? std.name,
     description: input.description ?? null,
     kind: partOrAssembly === "A" ? "assembly" : "part",
-    product: input.product?.trim() || null,
+    product: productsArr[0] ?? null,
+    products: productsArr,
     createdByClerkId: profile.clerkUserId,
   });
 
@@ -308,7 +356,8 @@ export async function saveHardwarePart(input: {
       partOrAssembly,
       name: input.name ?? null,
       description: input.description ?? null,
-      product: input.product?.trim() || null,
+      product: productsArr[0] ?? null,
+      products: productsArr,
       configurations: input.configurations ?? [],
       inventoryItemId: inventoryId,
       createdByClerkId: profile.clerkUserId,
@@ -357,6 +406,7 @@ export async function savePartCode(input: {
   configurations?: Configuration[];
   parentPartId?: number | null;
   product?: string | null;
+  products?: string[];
   // PHS only — optional. When provided we also create a row in
   // supplier_products linking this part to the supplier's catalogue.
   supplierId?: number | null;
@@ -404,12 +454,16 @@ export async function savePartCode(input: {
   // Circular:    CLS-UNIQUE-P|A-DXXXX-LXXXX-DISPLAY_NAME
   const fullCode = segments.join("-").toUpperCase();
 
+  const productsArr = normalizeProductArray(
+    input.products ?? (input.product ? [input.product] : []),
+  );
   const inventoryId = await upsertInventoryItem({
     code: fullCode,
     name: input.name ?? null,
     description: input.description ?? null,
     kind: inventoryKindFinal,
-    product: input.product?.trim() || null,
+    product: productsArr[0] ?? null,
+    products: productsArr,
     createdByClerkId: profile.clerkUserId,
   });
 
@@ -427,7 +481,8 @@ export async function savePartCode(input: {
       diameterMm: isCircular ? input.diameterMm ?? null : null,
       lengthMm: input.lengthMm ?? null,
       partOrAssembly,
-      product: input.product?.trim() || null,
+      product: productsArr[0] ?? null,
+      products: productsArr,
       configurations: input.configurations ?? [],
       inventoryItemId: inventoryId,
       parentPartId: input.parentPartId ?? null,
@@ -472,17 +527,22 @@ export async function updatePart(input: {
   name?: string | null;
   description?: string | null;
   product?: string | null;
+  products?: string[];
   configurations?: Configuration[];
 }): Promise<void> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");
   await ensureNomenclatureSchema();
+  const productsArr = normalizeProductArray(
+    input.products ?? (input.product ? [input.product] : []),
+  );
   await db
     .update(nomenclatureParts)
     .set({
       name: input.name ?? null,
       description: input.description ?? null,
-      product: input.product?.trim() || null,
+      product: productsArr[0] ?? null,
+      products: productsArr,
       configurations: input.configurations ?? [],
       updatedAt: new Date(),
     })
@@ -499,7 +559,8 @@ export async function updatePart(input: {
       .set({
         name: input.name ?? null,
         description: input.description ?? null,
-        product: input.product?.trim() || null,
+        product: productsArr[0] ?? null,
+        products: productsArr,
         updatedAt: new Date(),
       })
       .where(eq(inventoryItems.id, row.inv));
@@ -680,12 +741,16 @@ export type SupplierOption = {
 export async function listProducts(): Promise<string[]> {
   await ensureNomenclatureSchema();
   const rows = await db
-    .select({ product: nomenclatureParts.product })
+    .select({
+      product: nomenclatureParts.product,
+      products: nomenclatureParts.products,
+    })
     .from(nomenclatureParts);
   const set = new Set<string>();
   for (const r of rows) {
-    const p = (r.product ?? "").trim();
-    if (p) set.add(p);
+    for (const p of readProducts(r.product, r.products)) {
+      set.add(p);
+    }
   }
   return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
@@ -1017,6 +1082,7 @@ export type InventoryDetails = {
   name: string | null;
   description: string | null;
   product: string | null;
+  products: string[];
   classCode: string | null;
   partOrAssembly: "P" | "A" | null;
   uniqueId: string | null;
@@ -1164,6 +1230,7 @@ export async function getInventoryDetails(input: {
     name: item.name ?? null,
     description: item.description ?? null,
     product: item.product ?? null,
+    products: readProducts(item.product, (item as { products?: unknown }).products),
     classCode: nomRow?.classCode ?? null,
     partOrAssembly:
       nomRow?.partOrAssembly === "A" || nomRow?.partOrAssembly === "P"

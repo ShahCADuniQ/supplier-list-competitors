@@ -246,8 +246,9 @@ export default function InventoryDrawer({
                   >
                     {details.code}
                   </code>
-                  {details.product && (
+                  {details.products.map((label) => (
                     <span
+                      key={label}
                       style={{
                         padding: "2px 8px",
                         borderRadius: 999,
@@ -260,9 +261,9 @@ export default function InventoryDrawer({
                         letterSpacing: 0.4,
                       }}
                     >
-                      {details.product}
+                      {label}
                     </span>
-                  )}
+                  ))}
                   {details.maxBuildable != null && (
                     <span
                       style={{

@@ -2714,7 +2714,10 @@ export const inventoryItems = pgTable(
     // Free-form product / line name (e.g. "Lightline-X") for grouping
     // in the inventory tab. Mirrored from nomenclature_parts.product
     // on save so the inventory listing can filter without joining.
+    // Kept as a scalar for backward compat with /suppliers reads; the
+    // canonical multi-product value is in `products`.
     product: text("product"),
+    products: jsonb("products").$type<string[]>().default([]),
     createdByClerkId: text("created_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -2821,10 +2824,12 @@ export const nomenclatureParts = pgTable(
     // Set when the part is circular — replaces WXXXX-HXXXX in the code
     // with a single DXXXX segment (D = diameter).
     diameterMm: integer("diameter_mm"),
-    // Free-form product / line name (e.g. "Lightline-X"). Used by the
-    // Database tab's product-view filter so the team can see every
-    // code that belongs to a given product. Optional.
+    // Free-form product / line name (e.g. "Lightline-X"). Kept for
+    // backward compat with reads that pre-date the array column; new
+    // code reads from `products` (an array of names) so a single
+    // part / assembly can belong to multiple products.
     product: text("product"),
+    products: jsonb("products").$type<string[]>().default([]),
     // 'P' for part, 'A' for assembly. Only populated for kind='hardware'
     // — the part/assembly generator uses inventory_items.kind for the
     // same distinction and doesn't embed P/A in the code itself.

@@ -488,7 +488,7 @@ function HardwareForm({
   const [nomenclature, setNomenclature] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [product, setProduct] = useState("");
+  const [products, setProducts] = useState<string[]>([]);
   const [configurations, setConfigurations] = useState<Configuration[]>([]);
   const [url, setUrl] = useState("");
   const [aiNotes, setAiNotes] = useState<string | null>(null);
@@ -526,7 +526,7 @@ function HardwareForm({
           nomenclature,
           name: name.trim() || null,
           description: description.trim() || null,
-          product: product.trim() || null,
+          products,
           configurations,
         });
         setGeneratedCode(r.fullCode);
@@ -540,7 +540,8 @@ function HardwareForm({
           standardName: standard.name,
           name: name.trim() || null,
           description: description.trim() || null,
-          product: product.trim() || null,
+          product: products[0] ?? null,
+          products,
           configurations,
           inventoryItemId: null,
           createdAt: new Date().toISOString(),
@@ -548,6 +549,7 @@ function HardwareForm({
         setNomenclature("");
         setName("");
         setDescription("");
+        setProducts([]);
         setConfigurations([]);
         setUrl("");
         setAiNotes(null);
@@ -699,8 +701,8 @@ function HardwareForm({
       </div>
 
       <ProductInput
-        value={product}
-        onChange={setProduct}
+        values={products}
+        onChange={setProducts}
         productOptions={productOptions}
       />
 
@@ -944,7 +946,7 @@ function PartIdTab({
   const [shape, setShape] = useState<"rect" | "circ">("rect");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [product, setProduct] = useState("");
+  const [products, setProducts] = useState<string[]>([]);
   const [width, setWidth] = useState<string>("");
   const [height, setHeight] = useState<string>("");
   const [diameter, setDiameter] = useState<string>("");
@@ -981,7 +983,7 @@ function PartIdTab({
           lengthMm: length.trim() ? Math.round(Number(length)) : null,
           kind,
           configurations,
-          product: product.trim() || null,
+          products,
           supplierId:
             classification === "PHS" && typeof supplierId === "number"
               ? supplierId
@@ -1002,14 +1004,15 @@ function PartIdTab({
           standardName: null,
           name: name.trim() || null,
           description: description.trim() || null,
-          product: product.trim() || null,
+          product: products[0] ?? null,
+          products,
           configurations,
           inventoryItemId: null,
           createdAt: new Date().toISOString(),
         });
         setName("");
         setDescription("");
-        setProduct("");
+        setProducts([]);
         setWidth("");
         setHeight("");
         setDiameter("");
@@ -1233,8 +1236,8 @@ function PartIdTab({
       </label>
 
       <ProductInput
-        value={product}
-        onChange={setProduct}
+        values={products}
+        onChange={setProducts}
         productOptions={productOptions}
       />
 
@@ -1299,9 +1302,11 @@ function DatabaseTab({
     for (const p of productOptions) if (p) set.add(p);
     let hasNone = false;
     for (const p of parts) {
-      const v = (p.product ?? "").trim();
-      if (v) set.add(v);
-      else hasNone = true;
+      if (p.products.length === 0) {
+        hasNone = true;
+      } else {
+        for (const label of p.products) set.add(label);
+      }
     }
     return {
       products: Array.from(set).sort((a, b) => a.localeCompare(b)),
@@ -1313,16 +1318,17 @@ function DatabaseTab({
     const q = filter.trim().toLowerCase();
     return parts.filter((p) => {
       if (productView === "__none__") {
-        if ((p.product ?? "").trim()) return false;
+        if (p.products.length > 0) return false;
       } else if (productView !== "__all__") {
-        if ((p.product ?? "").trim() !== productView) return false;
+        if (!p.products.includes(productView)) return false;
       }
       if (!q) return true;
       return (
         p.fullCode.toLowerCase().includes(q) ||
         (p.name ?? "").toLowerCase().includes(q) ||
         (p.description ?? "").toLowerCase().includes(q) ||
-        p.uniqueId.toLowerCase().includes(q)
+        p.uniqueId.toLowerCase().includes(q) ||
+        p.products.some((pp) => pp.toLowerCase().includes(q))
       );
     });
   }, [parts, filter, productView]);
@@ -1549,7 +1555,7 @@ function PartRowItem({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(part.name ?? "");
   const [description, setDescription] = useState(part.description ?? "");
-  const [product, setProduct] = useState(part.product ?? "");
+  const [products, setProducts] = useState<string[]>(part.products);
   const [chips, setChips] = useState<Configuration[]>(part.configurations);
   const [busy, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
@@ -1565,14 +1571,15 @@ function PartRowItem({
           id: part.id,
           name: name.trim() || null,
           description: description.trim() || null,
-          product: product.trim() || null,
+          products,
           configurations: chips,
         });
         onUpdate({
           id: part.id,
           name: name.trim() || null,
           description: description.trim() || null,
-          product: product.trim() || null,
+          product: products[0] ?? null,
+          products,
           configurations: chips,
         });
         setEditing(false);
@@ -1752,8 +1759,9 @@ function PartRowItem({
               <strong>{part.uniqueId}</strong>
             </span>
             {part.standardName && <span>· {part.standardName}</span>}
-            {part.product && (
+            {part.products.map((label) => (
               <span
+                key={label}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -1768,9 +1776,9 @@ function PartRowItem({
                   textTransform: "uppercase",
                 }}
               >
-                {part.product}
+                {label}
               </span>
-            )}
+            ))}
             <span>· created {new Date(part.createdAt).toLocaleDateString()}</span>
           </div>
         </div>
@@ -1946,8 +1954,8 @@ function PartRowItem({
             />
           </label>
           <ProductInput
-            value={product}
-            onChange={setProduct}
+            values={products}
+            onChange={setProducts}
             productOptions={productOptions}
           />
           <ConfigurationsEditor
@@ -2758,38 +2766,136 @@ function ConfigurationsEditor({
   );
 }
 
-// Free-form product / line input with a datalist of known values so
-// users can either pick an existing label or type a brand new one.
+// Multi-product chip editor: a part / assembly can belong to many
+// products (e.g. shared between Lightline-X and Lightline-Y). User
+// types a name + Enter to add a chip; existing labels appear as
+// datalist suggestions; click × on a chip to remove. Supports the
+// legacy single-string callers via the values prop being string[].
 function ProductInput({
-  value,
+  values,
   onChange,
   productOptions,
 }: {
-  value: string;
-  onChange: (next: string) => void;
+  values: string[];
+  onChange: (next: string[]) => void;
   productOptions: string[];
 }) {
+  const [draft, setDraft] = useState("");
+  // Unique id per render so each datalist is reachable. Stable across
+  // re-renders for the same option set so the input keeps its hookup.
   const id = `products-${Math.abs(
     Array.from(productOptions.join("|")).reduce(
       (h, c) => (h * 31 + c.charCodeAt(0)) | 0,
       productOptions.length,
     ),
   )}`;
+
+  function commit(rawCandidate?: string) {
+    const candidate = (rawCandidate ?? draft).trim();
+    if (!candidate) return;
+    if (values.some((v) => v.toLowerCase() === candidate.toLowerCase())) {
+      setDraft("");
+      return;
+    }
+    onChange([...values, candidate]);
+    setDraft("");
+  }
+
+  function remove(i: number) {
+    onChange(values.filter((_, j) => j !== i));
+  }
+
   return (
     <label style={FIELD}>
-      <span style={LABEL}>Product / line (optional)</span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        list={id}
-        placeholder="e.g. Lightline-X"
-        style={INPUT}
-      />
-      <datalist id={id}>
-        {productOptions.map((p) => (
-          <option key={p} value={p} />
+      <span style={LABEL}>Products / lines (optional, multiple allowed)</span>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6,
+          padding: 8,
+          borderRadius: 8,
+          background: "var(--lb-bg)",
+          border: "1px solid var(--lb-border)",
+          alignItems: "center",
+        }}
+      >
+        {values.map((v, i) => (
+          <span
+            key={`${v}-${i}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "3px 4px 3px 10px",
+              borderRadius: 999,
+              background:
+                "color-mix(in srgb, var(--lb-accent) 14%, transparent)",
+              color: "var(--lb-accent)",
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: 0.3,
+              textTransform: "uppercase",
+            }}
+          >
+            {v}
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              aria-label={`Remove ${v}`}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "inherit",
+                cursor: "pointer",
+                padding: "0 4px",
+                fontSize: 13,
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
+          </span>
         ))}
-      </datalist>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              commit();
+            } else if (e.key === "Backspace" && !draft && values.length) {
+              onChange(values.slice(0, -1));
+            }
+          }}
+          onBlur={() => {
+            // Commit a pending draft when the input loses focus so the
+            // user doesn't lose typing they forgot to press Enter on.
+            if (draft.trim()) commit();
+          }}
+          list={id}
+          placeholder={
+            values.length ? "" : "Type a product and press Enter (e.g. Lightline-X)"
+          }
+          style={{
+            flex: 1,
+            minWidth: 180,
+            padding: "4px 6px",
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            color: "var(--lb-text)",
+            fontSize: 13,
+          }}
+        />
+        <datalist id={id}>
+          {productOptions
+            .filter((p) => !values.some((v) => v.toLowerCase() === p.toLowerCase()))
+            .map((p) => (
+              <option key={p} value={p} />
+            ))}
+        </datalist>
+      </div>
     </label>
   );
 }
