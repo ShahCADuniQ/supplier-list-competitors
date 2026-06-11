@@ -972,6 +972,14 @@ function Body({
   const item = history?.item;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* Supplier links hoisted to the top per user request — first
+          thing the buyer needs to see is who supplies this item. */}
+      <SupplierLinkSection
+        inventoryItemId={details.inventoryItemId}
+        links={details.supplierLinks}
+        onMutated={onMutated}
+      />
+
       {/* Editable basics (name / category / description / notes) +
           archive action. Only visible when the viewer can read the
           supplier-side history (i.e. has supplier access). */}
@@ -1123,12 +1131,6 @@ function Body({
         onNavigateTo={onNavigateTo}
         onDrop={onDropAsParent}
         currentItemId={details.inventoryItemId}
-      />
-
-      <SupplierLinkSection
-        inventoryItemId={details.inventoryItemId}
-        links={details.supplierLinks}
-        onMutated={onMutated}
       />
 
       {history && history.rfqs.length > 0 && (
