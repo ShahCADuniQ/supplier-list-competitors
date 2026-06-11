@@ -21,6 +21,7 @@ import {
 import {
   addAssemblyChildAction,
   addUserStandard,
+  backfillPartCodesAction,
   deletePart,
   extractHardwareFromUrlAction,
   getAssemblyTree,
@@ -111,6 +112,7 @@ export default function NomenclatureGenerator({
         <DatabaseTab
           parts={parts}
           supplierOptions={supplierOptions}
+          productOptions={productOptions}
           onUpdate={(updated) =>
             setParts((prev) =>
               prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)),
@@ -1025,10 +1027,15 @@ function PartIdTab({
         }}
       >
         <li>
-          Rectangular: <code>CLS-XXXXXX-WXXXX-HXXXX-LXXXX-DISPLAY_NAME</code>
+          Rectangular:{" "}
+          <code>CLS-XXXXXX-P|A-WXXXX-HXXXX-LXXXX-DISPLAY_NAME</code>
         </li>
         <li>
-          Circular: <code>CLS-XXXXXX-DXXXX-LXXXX-DISPLAY_NAME</code>
+          Circular: <code>CLS-XXXXXX-P|A-DXXXX-LXXXX-DISPLAY_NAME</code>
+        </li>
+        <li>
+          The <strong>P</strong> / <strong>A</strong> segment is driven
+          by the Kind selector — Part/Configuration → P, Assembly → A.
         </li>
         <li>
           Leave a dimension blank and it stays as literal{" "}
@@ -1235,7 +1242,9 @@ function PartIdTab({
           disabled={saving}
           style={PRIMARY_BTN}
         >
-          {saving ? "Allocating…" : "Generate ID"}
+          {saving
+            ? "Allocating…"
+            : `Generate ${classification}-XXXXXX-${kind === "assembly" ? "A" : "P"} ID`}
         </button>
       </div>
     </section>
@@ -1247,17 +1256,23 @@ function PartIdTab({
 function DatabaseTab({
   parts,
   supplierOptions,
+  productOptions,
   onUpdate,
   onDelete,
 }: {
   parts: PartRow[];
   supplierOptions: SupplierOption[];
+  productOptions: string[];
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
   onDelete: (id: number) => void;
 }) {
   const [filter, setFilter] = useState("");
   const [productView, setProductView] = useState<string>("__all__");
   const [dropError, setDropError] = useState<string | null>(null);
+  const [backfillResult, setBackfillResult] = useState<
+    Awaited<ReturnType<typeof backfillPartCodesAction>> | null
+  >(null);
+  const [backfilling, startBackfill] = useTransition();
   // After a drag-drop add we want the assembly tree section to refresh.
   // We bump a counter and pass it down as a `refreshKey` prop so the
   // section refetches its tree when the value changes.
@@ -1265,14 +1280,20 @@ function DatabaseTab({
 
   const productList = useMemo(() => {
     const set = new Set<string>();
+    // Seed with server-known products so the dropdown remembers labels
+    // even when no rows currently match (e.g. they're filtered out).
+    for (const p of productOptions) if (p) set.add(p);
     let hasNone = false;
     for (const p of parts) {
       const v = (p.product ?? "").trim();
       if (v) set.add(v);
       else hasNone = true;
     }
-    return { products: Array.from(set).sort(), hasNone };
-  }, [parts]);
+    return {
+      products: Array.from(set).sort((a, b) => a.localeCompare(b)),
+      hasNone,
+    };
+  }, [parts, productOptions]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -1353,10 +1374,103 @@ function DatabaseTab({
           />
         </div>
       </div>
-      <p style={{ fontSize: 12.5, color: "var(--lb-text-3)", margin: "0 0 12px" }}>
-        Tip: drag a card onto an assembly card to link it as a child.
-        Dropping onto a regular part promotes it to an assembly.
-      </p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <p style={{ fontSize: 12.5, color: "var(--lb-text-3)", margin: 0 }}>
+          Tip: drag a card onto an assembly card to link it as a child.
+          Dropping onto a regular part promotes it to an assembly.
+        </p>
+        <button
+          type="button"
+          disabled={backfilling}
+          onClick={() => {
+            if (
+              !confirm(
+                "Insert P (Part) / A (Assembly) after the unique ID in every legacy code? Hardware codes already have it; only part/assembly codes get rewritten. Linked inventory + supplier-catalogue rows are updated to match.",
+              )
+            ) {
+              return;
+            }
+            setBackfillResult(null);
+            startBackfill(async () => {
+              try {
+                const r = await backfillPartCodesAction();
+                setBackfillResult(r);
+              } catch (e) {
+                setBackfillResult({
+                  scanned: 0,
+                  rewritten: 0,
+                  skipped: 0,
+                  errors: [
+                    {
+                      id: 0,
+                      code: "",
+                      message:
+                        e instanceof Error ? e.message : "Backfill failed",
+                    },
+                  ],
+                });
+              }
+            });
+          }}
+          style={{
+            padding: "7px 14px",
+            fontSize: 12.5,
+            fontWeight: 700,
+            borderRadius: 999,
+            background: "transparent",
+            border: "1px solid var(--lb-border)",
+            color: "var(--lb-text-2)",
+            cursor: backfilling ? "default" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+          title="One-time fix: insert P/A after unique ID in old codes"
+        >
+          {backfilling ? "Backfilling…" : "↻ Backfill P/A in old codes"}
+        </button>
+      </div>
+      {backfillResult && (
+        <div
+          style={{
+            padding: 10,
+            borderRadius: 8,
+            marginBottom: 10,
+            background:
+              backfillResult.errors.length > 0
+                ? "rgba(234,88,12,0.10)"
+                : "rgba(16,185,129,0.10)",
+            border:
+              backfillResult.errors.length > 0
+                ? "1px solid rgba(234,88,12,0.40)"
+                : "1px solid rgba(16,185,129,0.40)",
+            color:
+              backfillResult.errors.length > 0 ? "#ea580c" : "#10b981",
+            fontSize: 12.5,
+          }}
+        >
+          Backfill — {backfillResult.rewritten} rewritten,{" "}
+          {backfillResult.skipped} already up-to-date of{" "}
+          {backfillResult.scanned} scanned. Refresh the page to see new
+          codes.
+          {backfillResult.errors.length > 0 && (
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {backfillResult.errors.slice(0, 3).map((e, i) => (
+                <li key={i}>
+                  <code>{e.code}</code>: {e.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {dropError && (
         <div style={{ marginBottom: 10 }}>
           <ErrorBox message={dropError} />
@@ -1382,6 +1496,7 @@ function DatabaseTab({
               key={p.id}
               part={p}
               supplierOptions={supplierOptions}
+              productOptions={productList.products}
               refreshKey={refreshKey}
               onDrop={handleDrop}
               onUpdate={onUpdate}
@@ -1397,6 +1512,7 @@ function DatabaseTab({
 function PartRowItem({
   part,
   supplierOptions,
+  productOptions,
   refreshKey,
   onDrop,
   onUpdate,
@@ -1404,6 +1520,7 @@ function PartRowItem({
 }: {
   part: PartRow;
   supplierOptions: SupplierOption[];
+  productOptions: string[];
   refreshKey: number;
   onDrop: (args: {
     draggedItemId: number;
@@ -1792,15 +1909,11 @@ function PartRowItem({
               style={INPUT}
             />
           </label>
-          <label style={FIELD}>
-            <span style={LABEL}>Product / line</span>
-            <input
-              value={product}
-              onChange={(e) => setProduct(e.target.value)}
-              placeholder="e.g. Lightline-X"
-              style={INPUT}
-            />
-          </label>
+          <ProductInput
+            value={product}
+            onChange={setProduct}
+            productOptions={productOptions}
+          />
           <ConfigurationsEditor
             label="Configurations"
             configs={chips}

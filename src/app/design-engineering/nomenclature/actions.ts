@@ -373,6 +373,11 @@ export async function savePartCode(input: {
   const isCircular = input.shape === "circ";
 
   const uniqueId = await allocateUniqueId();
+  // P for part / configuration, A for assembly. Follows the unique ID
+  // in EVERY code (hardware AND part/assembly) per the convention.
+  const inventoryKindFinal: "part" | "assembly" = input.kind ?? "part";
+  const partOrAssembly: "P" | "A" =
+    inventoryKindFinal === "assembly" ? "A" : "P";
   // Circular parts use a single DXXXX segment in place of WXXXX-HXXXX.
   // Length still applies in either shape.
   const dimensionSegments = isCircular
@@ -388,20 +393,20 @@ export async function savePartCode(input: {
   const segments = [
     classification,
     uniqueId,
+    partOrAssembly,
     ...dimensionSegments,
     lSeg,
     nameSeg,
   ].filter(Boolean);
-  // Rectangular: CLS-UNIQUE-WXXXX-HXXXX-LXXXX-DISPLAY_NAME
-  // Circular:    CLS-UNIQUE-DXXXX-LXXXX-DISPLAY_NAME
+  // Rectangular: CLS-UNIQUE-P|A-WXXXX-HXXXX-LXXXX-DISPLAY_NAME
+  // Circular:    CLS-UNIQUE-P|A-DXXXX-LXXXX-DISPLAY_NAME
   const fullCode = segments.join("-").toUpperCase();
 
-  const inventoryKind: "part" | "assembly" = input.kind ?? "part";
   const inventoryId = await upsertInventoryItem({
     code: fullCode,
     name: input.name ?? null,
     description: input.description ?? null,
-    kind: inventoryKind,
+    kind: inventoryKindFinal,
     product: input.product?.trim() || null,
     createdByClerkId: profile.clerkUserId,
   });
@@ -419,7 +424,7 @@ export async function savePartCode(input: {
       heightMm: isCircular ? null : input.heightMm ?? null,
       diameterMm: isCircular ? input.diameterMm ?? null : null,
       lengthMm: input.lengthMm ?? null,
-      partOrAssembly: inventoryKind === "assembly" ? "A" : "P",
+      partOrAssembly,
       product: input.product?.trim() || null,
       configurations: input.configurations ?? [],
       inventoryItemId: inventoryId,
@@ -849,6 +854,122 @@ export async function getMaxProducible(input: {
   if (!profile) return 0;
   await ensureOrdersSchema();
   return await maxProducible(input.inventoryItemId);
+}
+
+// ── Backfill: insert P/A after the unique ID in legacy part codes ──────
+//
+// Hardware codes already had P/A (V77+). Part/Assembly codes were
+// missing it until V87. This action walks every nomenclature_parts
+// row of kind='part', rewrites fullCode to insert "-P-" or "-A-"
+// right after the unique ID segment, and mirrors the new code into
+// inventory_items.code + any supplier_products.productCode that
+// referenced the old code. Idempotent — rows whose code already
+// matches the new shape are left alone.
+
+export type BackfillSummary = {
+  scanned: number;
+  rewritten: number;
+  skipped: number;
+  errors: Array<{ id: number; code: string; message: string }>;
+};
+
+export async function backfillPartCodesAction(): Promise<BackfillSummary> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureNomenclatureSchema();
+  await ensureOrdersSchema();
+
+  const rows = await db
+    .select({
+      id: nomenclatureParts.id,
+      uniqueId: nomenclatureParts.uniqueId,
+      kind: nomenclatureParts.kind,
+      fullCode: nomenclatureParts.fullCode,
+      partOrAssembly: nomenclatureParts.partOrAssembly,
+      inventoryItemId: nomenclatureParts.inventoryItemId,
+    })
+    .from(nomenclatureParts)
+    .where(eq(nomenclatureParts.kind, "part"));
+
+  const out: BackfillSummary = {
+    scanned: rows.length,
+    rewritten: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  for (const r of rows) {
+    try {
+      // Decide P or A. Use the partOrAssembly column when present;
+      // fall back to inventory.kind. Default P.
+      let pa: "P" | "A" =
+        r.partOrAssembly === "A" ? "A" : r.partOrAssembly === "P" ? "P" : "P";
+      if (!r.partOrAssembly && r.inventoryItemId != null) {
+        const [inv] = await db
+          .select({ kind: inventoryItems.kind })
+          .from(inventoryItems)
+          .where(eq(inventoryItems.id, r.inventoryItemId))
+          .limit(1);
+        if (inv?.kind === "assembly") pa = "A";
+      }
+
+      const segments = r.fullCode.split("-");
+      if (segments.length < 2) {
+        out.skipped++;
+        continue;
+      }
+      // Find the unique-id segment by position (1) and check whether
+      // the next segment is already "P" or "A".
+      const next = segments[2];
+      if (next === "P" || next === "A") {
+        out.skipped++;
+        continue;
+      }
+      const rewritten = [
+        segments[0],
+        segments[1],
+        pa,
+        ...segments.slice(2),
+      ]
+        .join("-")
+        .toUpperCase();
+
+      // Update nomenclature_parts.
+      await db
+        .update(nomenclatureParts)
+        .set({
+          fullCode: rewritten,
+          partOrAssembly: pa,
+          updatedAt: new Date(),
+        })
+        .where(eq(nomenclatureParts.id, r.id));
+
+      // Mirror to inventory_items.code if linked.
+      if (r.inventoryItemId != null) {
+        await db
+          .update(inventoryItems)
+          .set({ code: rewritten, updatedAt: new Date() })
+          .where(eq(inventoryItems.id, r.inventoryItemId));
+      }
+
+      // Mirror to any supplier_products row that referenced the old
+      // code as productCode (the V83 PHS link path stores it there).
+      await db
+        .update(supplierProducts)
+        .set({ productCode: rewritten, updatedAt: new Date() })
+        .where(eq(supplierProducts.productCode, r.fullCode));
+
+      out.rewritten++;
+    } catch (e) {
+      out.errors.push({
+        id: r.id,
+        code: r.fullCode,
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  return out;
 }
 
 // Suppress unused-import warning if drizzle-orm helpers shift later.
