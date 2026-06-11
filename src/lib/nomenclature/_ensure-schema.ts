@@ -69,6 +69,25 @@ export function ensureNomenclatureSchema(): Promise<void> {
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "product" text`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_product_idx" ON "inventory_items" ("product")`);
 
+      // V89 — inventory_attachments: CAD / drawings / images / docs /
+      // links keyed off the inventory_items row.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "inventory_attachments" (
+          "id" serial PRIMARY KEY,
+          "inventory_item_id" integer NOT NULL REFERENCES "inventory_items"("id") ON DELETE CASCADE,
+          "kind" text NOT NULL,
+          "label" text NOT NULL,
+          "url" text NOT NULL,
+          "pathname" text,
+          "content_type" text,
+          "size_bytes" bigint,
+          "notes" text,
+          "created_by_clerk_id" text,
+          "created_at" timestamp NOT NULL DEFAULT now()
+        )`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_attachments_inventory_idx" ON "inventory_attachments" ("inventory_item_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_attachments_kind_idx" ON "inventory_attachments" ("kind")`);
+
       // V83 — assembly_bom: many-to-many edge table for the
       // assembly tree. Lazy-created here so the nomenclature page works
       // even when /suppliers hasn't been opened yet.

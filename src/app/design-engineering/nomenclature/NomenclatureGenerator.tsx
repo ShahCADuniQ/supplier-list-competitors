@@ -18,6 +18,7 @@ import {
   useState,
   useTransition,
 } from "react";
+import InventoryDrawer from "./InventoryDrawer";
 import {
   addAssemblyChildAction,
   addUserStandard,
@@ -76,6 +77,9 @@ export default function NomenclatureGenerator({
   const [tab, setTab] = useState<Tab>("hardware");
   const [standards, setStandards] = useState<StandardRow[]>(initialStandards);
   const [parts, setParts] = useState<PartRow[]>(initialParts);
+  // Open drawer for inventory item id, or null when closed. Lives at
+  // the top so any tab/section can open it via the openDrawer callback.
+  const [drawerItemId, setDrawerItemId] = useState<number | null>(null);
 
   return (
     <div
@@ -108,11 +112,19 @@ export default function NomenclatureGenerator({
           onSaved={(p) => setParts((prev) => [p, ...prev])}
         />
       )}
+      {drawerItemId != null && (
+        <InventoryDrawer
+          inventoryItemId={drawerItemId}
+          onClose={() => setDrawerItemId(null)}
+        />
+      )}
+
       {tab === "database" && (
         <DatabaseTab
           parts={parts}
           supplierOptions={supplierOptions}
           productOptions={productOptions}
+          openDrawer={(id) => setDrawerItemId(id)}
           onUpdate={(updated) =>
             setParts((prev) =>
               prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)),
@@ -1257,12 +1269,14 @@ function DatabaseTab({
   parts,
   supplierOptions,
   productOptions,
+  openDrawer,
   onUpdate,
   onDelete,
 }: {
   parts: PartRow[];
   supplierOptions: SupplierOption[];
   productOptions: string[];
+  openDrawer: (inventoryItemId: number) => void;
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
   onDelete: (id: number) => void;
 }) {
@@ -1501,6 +1515,7 @@ function DatabaseTab({
               onDrop={handleDrop}
               onUpdate={onUpdate}
               onDelete={onDelete}
+              openDrawer={openDrawer}
             />
           ))}
         </ul>
@@ -1517,6 +1532,7 @@ function PartRowItem({
   onDrop,
   onUpdate,
   onDelete,
+  openDrawer,
 }: {
   part: PartRow;
   supplierOptions: SupplierOption[];
@@ -1528,6 +1544,7 @@ function PartRowItem({
   }) => void;
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
   onDelete: (id: number) => void;
+  openDrawer: (inventoryItemId: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(part.name ?? "");
@@ -1766,6 +1783,24 @@ function PartRowItem({
             e.stopPropagation();
           }}
         >
+          {part.inventoryItemId != null && (
+            <button
+              type="button"
+              draggable={false}
+              onClick={() =>
+                part.inventoryItemId != null && openDrawer(part.inventoryItemId)
+              }
+              style={{
+                ...LINK_BTN,
+                borderColor: "var(--lb-accent)",
+                color: "var(--lb-accent)",
+                fontWeight: 700,
+              }}
+              title="Open details panel — attachments, links, children"
+            >
+              Open ↗
+            </button>
+          )}
           <button
             type="button"
             draggable={false}
@@ -1887,6 +1922,7 @@ function PartRowItem({
         <AssemblyContentsSection
           inventoryItemId={part.inventoryItemId}
           refreshKey={refreshKey}
+          openDrawer={openDrawer}
         />
       )}
 
@@ -1936,9 +1972,11 @@ function PartRowItem({
 function AssemblyContentsSection({
   inventoryItemId,
   refreshKey,
+  openDrawer,
 }: {
   inventoryItemId: number;
   refreshKey: number;
+  openDrawer: (id: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [tree, setTree] = useState<AssemblyTreeNode | null>(null);
@@ -2032,6 +2070,7 @@ function AssemblyContentsSection({
             <AssemblyBrowser
               rootTree={tree}
               parentInventoryItemId={inventoryItemId}
+              openDrawer={openDrawer}
               onMutated={reload}
             />
           )}
@@ -2048,10 +2087,12 @@ function AssemblyContentsSection({
 function AssemblyBrowser({
   rootTree,
   parentInventoryItemId,
+  openDrawer,
   onMutated,
 }: {
   rootTree: AssemblyTreeNode;
   parentInventoryItemId: number;
+  openDrawer: (id: number) => void;
   onMutated: () => void;
 }) {
   // Each path entry is { node, parentId }. The browser shows the
@@ -2225,6 +2266,7 @@ function AssemblyBrowser({
               onOpen={
                 c.kind === "assembly" ? () => drillInto(c) : undefined
               }
+              onOpenDrawer={() => openDrawer(c.itemId)}
               parentInventoryItemId={current.node.itemId}
               onRemoved={onMutated}
             />
@@ -2248,11 +2290,13 @@ function AssemblyBrowser({
 function ChildCard({
   node,
   onOpen,
+  onOpenDrawer,
   parentInventoryItemId,
   onRemoved,
 }: {
   node: AssemblyTreeNode;
   onOpen: (() => void) | undefined;
+  onOpenDrawer: () => void;
   parentInventoryItemId: number;
   onRemoved: () => void;
 }) {
@@ -2391,10 +2435,31 @@ function ChildCard({
       <div
         style={{
           display: "flex",
-          justifyContent: "flex-end",
+          justifyContent: "space-between",
+          gap: 6,
           marginTop: 4,
         }}
       >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenDrawer();
+          }}
+          draggable={false}
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color: "var(--lb-accent)",
+            background: "transparent",
+            border: "1px solid var(--lb-accent)",
+            borderRadius: 999,
+            padding: "3px 10px",
+            cursor: "pointer",
+          }}
+        >
+          Open ↗
+        </button>
         <button
           type="button"
           onClick={remove}

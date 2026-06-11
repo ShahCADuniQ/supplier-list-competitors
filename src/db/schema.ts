@@ -2907,3 +2907,42 @@ export const assemblyBom = pgTable(
   }),
 );
 export type AssemblyBomRow = typeof assemblyBom.$inferSelect;
+
+// Attachments on inventory_items — STEP files, drawings (PDF / DWG /
+// DXF), images, datasheets, or external links. Mirrors the
+// supplier_product_attachments pattern (label, URL, blob pathname,
+// content type, size) so the InventoryDrawer in /design-engineering
+// can render the same widget shape as the supplier catalogue.
+export const inventoryAttachments = pgTable(
+  "inventory_attachments",
+  {
+    id: serial("id").primaryKey(),
+    inventoryItemId: integer("inventory_item_id")
+      .notNull()
+      .references(() => inventoryItems.id, { onDelete: "cascade" }),
+    // 'cad' (STEP / IGES / Parasolid / native CAD), 'drawing' (PDF
+    // technical drawing / DWG / DXF), 'image' (photo / render), 'doc'
+    // (datasheet / cert / receipt), 'link' (no blob, just a URL).
+    kind: text("kind").notNull(),
+    label: text("label").notNull(),
+    // URL — for blob uploads this is the public blob URL; for kind='link'
+    // it's the external URL the user pasted.
+    url: text("url").notNull(),
+    // Blob pathname (e.g. design-engineering/inventory/123/file.step).
+    // NULL for kind='link'.
+    pathname: text("pathname"),
+    contentType: text("content_type"),
+    sizeBytes: bigint("size_bytes", { mode: "number" }),
+    notes: text("notes"),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    inventoryIdx: index("inventory_attachments_inventory_idx").on(
+      t.inventoryItemId,
+    ),
+    kindIdx: index("inventory_attachments_kind_idx").on(t.kind),
+  }),
+);
+export type InventoryAttachmentRow =
+  typeof inventoryAttachments.$inferSelect;

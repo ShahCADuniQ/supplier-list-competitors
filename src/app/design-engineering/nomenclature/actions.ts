@@ -25,6 +25,8 @@ import { revalidatePath } from "next/cache";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  assemblyBom,
+  inventoryAttachments,
   inventoryItems,
   nomenclatureParts,
   nomenclatureStandards,
@@ -970,6 +972,252 @@ export async function backfillPartCodesAction(): Promise<BackfillSummary> {
   }
 
   return out;
+}
+
+// ── Detail drawer: full picture of one inventory item ──────────────────
+
+export type DrawerAttachment = {
+  id: number;
+  kind: "cad" | "drawing" | "image" | "doc" | "link";
+  label: string;
+  url: string;
+  pathname: string | null;
+  contentType: string | null;
+  sizeBytes: number | null;
+  createdAt: string;
+};
+
+export type DrawerSupplierLink = {
+  supplierProductId: number;
+  supplierId: number;
+  supplierName: string;
+  productUrl: string | null;
+};
+
+export type DrawerChild = {
+  inventoryItemId: number;
+  code: string;
+  name: string | null;
+  kind: "part" | "assembly";
+  quantity: number;
+  stock: number;
+};
+
+export type DrawerParent = {
+  inventoryItemId: number;
+  code: string;
+  name: string | null;
+  quantity: number;
+};
+
+export type InventoryDetails = {
+  inventoryItemId: number;
+  code: string;
+  kind: "part" | "assembly";
+  name: string | null;
+  description: string | null;
+  product: string | null;
+  classCode: string | null;
+  partOrAssembly: "P" | "A" | null;
+  uniqueId: string | null;
+  configurations: Configuration[];
+  standardName: string | null;
+  attachments: DrawerAttachment[];
+  supplierLinks: DrawerSupplierLink[];
+  children: DrawerChild[];
+  parents: DrawerParent[];
+  maxBuildable: number | null;
+};
+
+function normalizeKind(raw: string): DrawerAttachment["kind"] {
+  switch (raw) {
+    case "cad":
+    case "drawing":
+    case "image":
+    case "doc":
+    case "link":
+      return raw;
+    default:
+      return "doc";
+  }
+}
+
+export async function getInventoryDetails(input: {
+  inventoryItemId: number;
+}): Promise<InventoryDetails | null> {
+  const profile = await getOrCreateProfile();
+  if (!profile) return null;
+  await ensureNomenclatureSchema();
+  await ensureOrdersSchema();
+
+  const [item] = await db
+    .select()
+    .from(inventoryItems)
+    .where(eq(inventoryItems.id, input.inventoryItemId))
+    .limit(1);
+  if (!item) return null;
+
+  const [nomRow] = await db
+    .select({
+      uniqueId: nomenclatureParts.uniqueId,
+      classCode: nomenclatureParts.classCode,
+      partOrAssembly: nomenclatureParts.partOrAssembly,
+      configurations: nomenclatureParts.configurations,
+      standardId: nomenclatureParts.standardId,
+    })
+    .from(nomenclatureParts)
+    .where(eq(nomenclatureParts.inventoryItemId, input.inventoryItemId))
+    .limit(1);
+
+  let standardName: string | null = null;
+  if (nomRow?.standardId != null) {
+    const [std] = await db
+      .select({ name: nomenclatureStandards.name })
+      .from(nomenclatureStandards)
+      .where(eq(nomenclatureStandards.id, nomRow.standardId))
+      .limit(1);
+    standardName = std?.name ?? null;
+  }
+
+  const attRows = await db
+    .select()
+    .from(inventoryAttachments)
+    .where(eq(inventoryAttachments.inventoryItemId, input.inventoryItemId))
+    .orderBy(desc(inventoryAttachments.createdAt));
+  const attachments: DrawerAttachment[] = attRows.map((a) => ({
+    id: a.id,
+    kind: normalizeKind(a.kind),
+    label: a.label,
+    url: a.url,
+    pathname: a.pathname,
+    contentType: a.contentType,
+    sizeBytes: a.sizeBytes,
+    createdAt: a.createdAt.toISOString(),
+  }));
+
+  const supplierRows = await db
+    .select({
+      spId: supplierProducts.id,
+      supplierId: supplierProducts.supplierId,
+      supplierName: suppliers.name,
+      productUrl: supplierProducts.productUrl,
+    })
+    .from(supplierProducts)
+    .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
+    .where(eq(supplierProducts.productCode, item.code));
+  const supplierLinks: DrawerSupplierLink[] = supplierRows.map((r) => ({
+    supplierProductId: r.spId,
+    supplierId: r.supplierId,
+    supplierName: r.supplierName,
+    productUrl: r.productUrl ?? null,
+  }));
+
+  // Direct children of this assembly.
+  const childEdges = await db
+    .select({
+      edgeQuantity: assemblyBom.quantity,
+      child: inventoryItems,
+    })
+    .from(assemblyBom)
+    .innerJoin(
+      inventoryItems,
+      eq(inventoryItems.id, assemblyBom.childItemId),
+    )
+    .where(eq(assemblyBom.parentAssemblyId, input.inventoryItemId));
+  const children: DrawerChild[] = childEdges.map((r) => ({
+    inventoryItemId: r.child.id,
+    code: r.child.code,
+    name: r.child.name ?? null,
+    kind: r.child.kind === "assembly" ? "assembly" : "part",
+    quantity: r.edgeQuantity,
+    stock: r.child.confirmedQty ?? 0,
+  }));
+
+  // Parents — assemblies that contain THIS item.
+  const parentEdges = await db
+    .select({
+      edgeQuantity: assemblyBom.quantity,
+      parent: inventoryItems,
+    })
+    .from(assemblyBom)
+    .innerJoin(
+      inventoryItems,
+      eq(inventoryItems.id, assemblyBom.parentAssemblyId),
+    )
+    .where(eq(assemblyBom.childItemId, input.inventoryItemId));
+  const parents: DrawerParent[] = parentEdges.map((r) => ({
+    inventoryItemId: r.parent.id,
+    code: r.parent.code,
+    name: r.parent.name ?? null,
+    quantity: r.edgeQuantity,
+  }));
+
+  let maxBuildableNum: number | null = null;
+  if (item.kind === "assembly") {
+    maxBuildableNum = await maxProducible(item.id);
+  }
+
+  return {
+    inventoryItemId: item.id,
+    code: item.code,
+    kind: item.kind === "assembly" ? "assembly" : "part",
+    name: item.name ?? null,
+    description: item.description ?? null,
+    product: item.product ?? null,
+    classCode: nomRow?.classCode ?? null,
+    partOrAssembly:
+      nomRow?.partOrAssembly === "A" || nomRow?.partOrAssembly === "P"
+        ? nomRow.partOrAssembly
+        : null,
+    uniqueId: nomRow?.uniqueId ?? null,
+    configurations: normalizeConfigurations(nomRow?.configurations),
+    standardName,
+    attachments,
+    supplierLinks,
+    children,
+    parents,
+    maxBuildable: maxBuildableNum,
+  };
+}
+
+export async function addInventoryAttachmentAction(input: {
+  inventoryItemId: number;
+  kind: "cad" | "drawing" | "image" | "doc" | "link";
+  label: string;
+  url: string;
+  pathname?: string | null;
+  contentType?: string | null;
+  sizeBytes?: number | null;
+}): Promise<{ id: number }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureNomenclatureSchema();
+  const [row] = await db
+    .insert(inventoryAttachments)
+    .values({
+      inventoryItemId: input.inventoryItemId,
+      kind: input.kind,
+      label: input.label.trim() || input.kind,
+      url: input.url,
+      pathname: input.pathname ?? null,
+      contentType: input.contentType ?? null,
+      sizeBytes: input.sizeBytes ?? null,
+      createdByClerkId: profile.clerkUserId,
+    })
+    .returning({ id: inventoryAttachments.id });
+  return { id: row.id };
+}
+
+export async function removeInventoryAttachmentAction(input: {
+  attachmentId: number;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureNomenclatureSchema();
+  await db
+    .delete(inventoryAttachments)
+    .where(eq(inventoryAttachments.id, input.attachmentId));
+  return { ok: true };
 }
 
 // Suppress unused-import warning if drizzle-orm helpers shift later.
