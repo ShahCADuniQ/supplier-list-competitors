@@ -317,9 +317,12 @@ function dimensionSegment(prefix: string, value: number | null): string {
   // When the user leaves the field blank we preserve the slot in the
   // code with literal X placeholders (e.g. WXXXX) so the segment layout
   // stays the same length and is greppable later. Numeric values are
-  // zero-padded to four digits.
+  // rounded to an integer, clamped to 0..9999, and zero-padded so the
+  // segment is ALWAYS exactly 5 chars (prefix + 4 digits). 235 -> W0235,
+  // 5 -> W0005, 9999 -> W9999, 12345 -> W9999.
   if (value == null || Number.isNaN(value)) return `${prefix}XXXX`;
-  return `${prefix}${value.toString().padStart(4, "0")}`;
+  const clamped = Math.max(0, Math.min(9999, Math.round(value)));
+  return `${prefix}${clamped.toString().padStart(4, "0")}`;
 }
 
 function slugify(desc: string | null | undefined): string {
