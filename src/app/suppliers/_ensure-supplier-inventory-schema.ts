@@ -139,6 +139,12 @@ export function ensureSupplierInventorySchema(): Promise<void> {
       // place-to-buy does not spawn a new catalogue card. Schema of each
       // entry is defined in src/db/schema.ts > supplierProducts > purchaseSources.
       await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "purchase_sources" jsonb NOT NULL DEFAULT '[]'::jsonb`);
+      // V105 — direct FK to Lightbase inventory. Lets the
+      // InventoryDrawer's "Link to catalogue product" picker associate
+      // an existing catalogue row with a different inventory item
+      // (i.e. when the catalogue code != inventory code).
+      await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "inventory_item_id" integer`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_products_inventory_item_idx" ON "supplier_products" ("inventory_item_id")`);
 
       // Migration 0040: per-project document routing on attachments.
       // project_num ties to supplier_project_entries.project_num so we can

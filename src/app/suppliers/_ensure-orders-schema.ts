@@ -425,6 +425,13 @@ export function ensureOrdersSchema(): Promise<void> {
         ALTER TABLE "inventory_items"
           ADD COLUMN IF NOT EXISTS "is_configuration" boolean NOT NULL DEFAULT false
       `);
+      // V105 — explicit FK link from a supplier_products row to an
+      // inventory item. Created and used by the "Link to catalogue
+      // product" picker in the InventoryDrawer. Mirrored from the
+      // supplier-inventory ensure step so the column exists even on
+      // pages that load through the orders pipeline.
+      await db.execute(sql`ALTER TABLE "supplier_products" ADD COLUMN IF NOT EXISTS "inventory_item_id" integer`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "supplier_products_inventory_item_idx" ON "supplier_products" ("inventory_item_id")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_kind_idx" ON "inventory_items" ("kind")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_parent_idx" ON "inventory_items" ("parent_assembly_id")`);
 

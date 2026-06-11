@@ -17,17 +17,25 @@ import {
   addInventoryAttachmentAction,
   getAssemblyTree,
   getInventoryDetails,
+  linkInventoryToSupplierAction,
+  linkSupplierProductToInventoryAction,
   listConfigurationOptionsAction,
+  listSupplierCatalogueProductsAction,
+  listSupplierOptions,
   removeInventoryAttachmentAction,
   setInventoryConfigurationsAction,
   setInventoryStarredAction,
+  unlinkSupplierProductFromInventoryAction,
   type AssemblyTreeNode,
   type Configuration,
   type ConfigurationOption,
   type DrawerAttachment,
   type DrawerChild,
   type DrawerParent,
+  type DrawerSupplierLink,
   type InventoryDetails,
+  type SupplierCatalogueOption,
+  type SupplierOption,
 } from "./actions";
 import {
   archiveInventoryItem,
@@ -941,78 +949,9 @@ function Body({
         onMutated={onMutated}
       />
 
-      <DropZoneSection
-        title={`Direct children (${details.children.length})`}
-        tone="child"
-        emptyHint={`Drag any card from the database list here and drop — it becomes a child of ${details.code}.`}
-        items={details.children}
-        onNavigateTo={onNavigateTo}
-        onDrop={onDropAsChild}
-        currentItemId={details.inventoryItemId}
-      />
-
-      <DropZoneSection
-        title={`Used in (${details.parents.length})`}
-        tone="parent"
-        emptyHint={`Drag a card here — that card becomes a parent assembly, and ${details.code} becomes its child.`}
-        items={details.parents.map((p) => ({
-          inventoryItemId: p.inventoryItemId,
-          code: p.code,
-          name: p.name,
-          kind: "assembly" as const,
-          quantity: p.quantity,
-          stock: 0,
-        }))}
-        onNavigateTo={onNavigateTo}
-        onDrop={onDropAsParent}
-        currentItemId={details.inventoryItemId}
-      />
-
-      {details.supplierLinks.length > 0 && (
-        <Section
-          title={`Supplier catalogue links (${details.supplierLinks.length})`}
-        >
-          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-            {details.supplierLinks.map((s) => (
-              <li
-                key={s.supplierProductId}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "8px 12px",
-                  border: "1px solid var(--lb-border)",
-                  borderRadius: 8,
-                  background: "var(--lb-bg-elev)",
-                  fontSize: 13,
-                }}
-              >
-                <strong>{s.supplierName}</strong>
-                {s.productUrl && (
-                  <a
-                    href={s.productUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      marginLeft: "auto",
-                      color: "var(--lb-accent)",
-                      fontSize: 12,
-                      textDecoration: "none",
-                    }}
-                  >
-                    Vendor page ↗
-                  </a>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {/* Sections below are only rendered when the viewer has supplier
-          access and getInventoryItemHistory returned data. They cover
-          the bits that used to live in the suppliers-side detail
-          drawer: physical properties + qty state + RFQ/PO history. */}
+      {/* Physical properties + qty status, hoisted above the BOM drop
+          zones so the most-referenced numeric facts are visible without
+          scrolling past the tree. */}
       {item && (
         <Section title="Physical properties (from IFC)">
           <div
@@ -1062,6 +1001,39 @@ function Body({
           )}
         </Section>
       )}
+
+      <DropZoneSection
+        title={`Direct children (${details.children.length})`}
+        tone="child"
+        emptyHint={`Drag any card from the database list here and drop — it becomes a child of ${details.code}.`}
+        items={details.children}
+        onNavigateTo={onNavigateTo}
+        onDrop={onDropAsChild}
+        currentItemId={details.inventoryItemId}
+      />
+
+      <DropZoneSection
+        title={`Used in (${details.parents.length})`}
+        tone="parent"
+        emptyHint={`Drag a card here — that card becomes a parent assembly, and ${details.code} becomes its child.`}
+        items={details.parents.map((p) => ({
+          inventoryItemId: p.inventoryItemId,
+          code: p.code,
+          name: p.name,
+          kind: "assembly" as const,
+          quantity: p.quantity,
+          stock: 0,
+        }))}
+        onNavigateTo={onNavigateTo}
+        onDrop={onDropAsParent}
+        currentItemId={details.inventoryItemId}
+      />
+
+      <SupplierLinkSection
+        inventoryItemId={details.inventoryItemId}
+        links={details.supplierLinks}
+        onMutated={onMutated}
+      />
 
       {history && history.rfqs.length > 0 && (
         <Section
@@ -1451,6 +1423,607 @@ function rfqStatusColor(s: string): string {
     case "cancelled": return "#dc2626";
     default: return "#6b7280";
   }
+}
+
+// V105 — supplier-link section. Two add modes:
+//
+//   1. Link to catalogue product — browse every supplier_products
+//      row, search by name / code / supplier, click a card to attach
+//      this inventory item to that catalogue entry (sets
+//      supplier_products.inventory_item_id).
+//   2. Link to supplier (fabricated) — pick a supplier + optional
+//      vendor URL; creates a fresh supplier_products row tied by
+//      productCode.
+//
+// Either path adds a chip to the displayed list. Chips linked via the
+// V105 FK can be removed in-place; legacy productCode-matched rows
+// stay until the underlying catalogue row is archived (separate flow).
+function SupplierLinkSection({
+  inventoryItemId,
+  links,
+  onMutated,
+}: {
+  inventoryItemId: number;
+  links: DrawerSupplierLink[];
+  onMutated: () => void;
+}) {
+  type Mode = null | "catalogue" | "fabricated";
+  const [mode, setMode] = useState<Mode>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+
+  function unlink(supplierProductId: number) {
+    setErr(null);
+    start(async () => {
+      try {
+        await unlinkSupplierProductFromInventoryAction({ supplierProductId });
+        onMutated();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Unlink failed");
+      }
+    });
+  }
+
+  return (
+    <Section title={`Supplier links (${links.length})`}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        <button
+          type="button"
+          onClick={() => setMode(mode === "catalogue" ? null : "catalogue")}
+          style={modeBtn(mode === "catalogue")}
+        >
+          {mode === "catalogue" ? "Cancel" : "+ Link catalogue product"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode(mode === "fabricated" ? null : "fabricated")}
+          style={modeBtn(mode === "fabricated")}
+        >
+          {mode === "fabricated" ? "Cancel" : "+ Link supplier (fabricated)"}
+        </button>
+      </div>
+
+      {err && (
+        <div
+          style={{
+            marginBottom: 10,
+            padding: 8,
+            borderRadius: 8,
+            background: "rgba(220,38,38,0.12)",
+            color: "#fca5a5",
+            fontSize: 12.5,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {mode === "catalogue" && (
+        <CataloguePicker
+          inventoryItemId={inventoryItemId}
+          onLinked={() => {
+            setMode(null);
+            onMutated();
+          }}
+          onError={setErr}
+        />
+      )}
+      {mode === "fabricated" && (
+        <FabricatedSupplierPicker
+          inventoryItemId={inventoryItemId}
+          onLinked={() => {
+            setMode(null);
+            onMutated();
+          }}
+          onError={setErr}
+        />
+      )}
+
+      {links.length === 0 ? (
+        <div
+          style={{
+            padding: 14,
+            borderRadius: 10,
+            border: "1px dashed var(--lb-border)",
+            color: "var(--lb-text-3)",
+            fontSize: 12.5,
+            textAlign: "center",
+          }}
+        >
+          No supplier links yet. Use one of the buttons above to attach
+          this item to a catalogue product or to a supplier who
+          fabricates it.
+        </div>
+      ) : (
+        <ul
+          style={{
+            listStyle: "none",
+            padding: 0,
+            margin: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          {links.map((s) => (
+            <li
+              key={s.supplierProductId}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 12px",
+                border: "1px solid var(--lb-border)",
+                borderRadius: 8,
+                background: "var(--lb-bg-elev)",
+                fontSize: 13,
+              }}
+            >
+              {s.thumbnailUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={s.thumbnailUrl}
+                  alt=""
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 6,
+                    objectFit: "cover",
+                    border: "1px solid var(--lb-border)",
+                    flexShrink: 0,
+                  }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 6,
+                    background: "var(--lb-bg)",
+                    border: "1px dashed var(--lb-border)",
+                    display: "grid",
+                    placeItems: "center",
+                    color: "var(--lb-text-3)",
+                    fontSize: 14,
+                    flexShrink: 0,
+                  }}
+                >
+                  📦
+                </div>
+              )}
+              <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <strong style={{ fontSize: 12.5 }}>{s.supplierName}</strong>
+                  {s.linkedByFk && (
+                    <span
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 800,
+                        letterSpacing: 0.5,
+                        textTransform: "uppercase",
+                        padding: "1px 6px",
+                        borderRadius: 999,
+                        background: "color-mix(in srgb, var(--lb-accent) 16%, transparent)",
+                        color: "var(--lb-accent)",
+                      }}
+                    >
+                      Linked
+                    </span>
+                  )}
+                </div>
+                <span style={{ fontSize: 11.5, color: "var(--lb-text-2)" }}>
+                  {s.productName}
+                  {s.productCode ? ` · ${s.productCode}` : ""}
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {s.productUrl && (
+                  <a
+                    href={s.productUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      color: "var(--lb-accent)",
+                      fontSize: 11.5,
+                      textDecoration: "none",
+                    }}
+                  >
+                    Vendor ↗
+                  </a>
+                )}
+                {s.linkedByFk && (
+                  <button
+                    type="button"
+                    onClick={() => unlink(s.supplierProductId)}
+                    disabled={pending}
+                    style={{
+                      appearance: "none",
+                      border: "1px solid rgba(220,38,38,0.3)",
+                      background: "transparent",
+                      color: "#dc2626",
+                      borderRadius: 999,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: "2px 8px",
+                      cursor: pending ? "default" : "pointer",
+                    }}
+                  >
+                    Unlink
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function modeBtn(active: boolean): React.CSSProperties {
+  return {
+    appearance: "none",
+    padding: "5px 12px",
+    borderRadius: 999,
+    border: active
+      ? "1px solid var(--lb-accent)"
+      : "1px solid var(--lb-border)",
+    background: active
+      ? "color-mix(in srgb, var(--lb-accent) 12%, transparent)"
+      : "var(--lb-bg-elev)",
+    color: active ? "var(--lb-accent)" : "var(--lb-text)",
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+  };
+}
+
+// Scrollable catalogue picker. Loads every non-archived
+// supplier_products row, lets the user search by supplier / name /
+// code / description, and clicks a card to set
+// supplier_products.inventory_item_id = this inventory row.
+function CataloguePicker({
+  inventoryItemId,
+  onLinked,
+  onError,
+}: {
+  inventoryItemId: number;
+  onLinked: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [options, setOptions] = useState<SupplierCatalogueOption[] | null>(null);
+  const [search, setSearch] = useState("");
+  const [pending, start] = useTransition();
+
+  useEffect(() => {
+    listSupplierCatalogueProductsAction()
+      .then(setOptions)
+      .catch((e) =>
+        onError(e instanceof Error ? e.message : "Could not load catalogue"),
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filtered = (() => {
+    if (!options) return [];
+    const q = search.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => {
+      const hay = `${o.supplierName} ${o.productName} ${o.productCode ?? ""} ${o.description ?? ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  })();
+
+  function pick(spId: number) {
+    start(async () => {
+      try {
+        await linkSupplierProductToInventoryAction({
+          supplierProductId: spId,
+          inventoryItemId,
+        });
+        onLinked();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Link failed");
+      }
+    });
+  }
+
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        padding: 10,
+        borderRadius: 10,
+        border: "1px solid var(--lb-border)",
+        background: "var(--lb-bg-elev)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <input
+        type="search"
+        autoFocus
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search supplier, product name, code…"
+        style={{
+          padding: "8px 12px",
+          borderRadius: 999,
+          background: "var(--lb-bg)",
+          border: "1px solid var(--lb-border)",
+          color: "var(--lb-text)",
+          fontSize: 12.5,
+        }}
+      />
+      {options === null ? (
+        <div style={{ fontSize: 12, color: "var(--lb-text-3)" }}>Loading catalogue…</div>
+      ) : filtered.length === 0 ? (
+        <div
+          style={{
+            padding: 12,
+            fontSize: 12,
+            color: "var(--lb-text-3)",
+            textAlign: "center",
+          }}
+        >
+          {options.length === 0
+            ? "No catalogue products yet. Use /suppliers to add some."
+            : "No match — try a different search term."}
+        </div>
+      ) : (
+        <div
+          style={{
+            maxHeight: 320,
+            overflowY: "auto",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+            gap: 8,
+          }}
+        >
+          {filtered.map((o) => {
+            const alreadyOnSomethingElse =
+              o.linkedToInventoryItemId != null &&
+              o.linkedToInventoryItemId !== inventoryItemId;
+            const alreadyOnUs = o.linkedToInventoryItemId === inventoryItemId;
+            return (
+              <button
+                key={o.supplierProductId}
+                type="button"
+                disabled={pending || alreadyOnUs}
+                onClick={() => pick(o.supplierProductId)}
+                title={
+                  alreadyOnUs
+                    ? "Already linked to this item."
+                    : alreadyOnSomethingElse
+                      ? "Linked to a different inventory item — clicking will move the link to this one."
+                      : `Click to link ${o.productName} to this inventory item`
+                }
+                style={{
+                  textAlign: "left",
+                  padding: 8,
+                  borderRadius: 8,
+                  border: alreadyOnUs
+                    ? "1px solid var(--lb-accent)"
+                    : alreadyOnSomethingElse
+                      ? "1px dashed rgba(202,138,4,0.5)"
+                      : "1px solid var(--lb-border)",
+                  background: alreadyOnUs
+                    ? "color-mix(in srgb, var(--lb-accent) 10%, var(--lb-bg))"
+                    : "var(--lb-bg)",
+                  color: "var(--lb-text)",
+                  cursor: alreadyOnUs ? "default" : "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  opacity: pending ? 0.7 : 1,
+                }}
+              >
+                {o.thumbnailUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={o.thumbnailUrl}
+                    alt=""
+                    style={{
+                      width: "100%",
+                      aspectRatio: "1/1",
+                      objectFit: "cover",
+                      borderRadius: 6,
+                      background: "var(--lb-bg-elev)",
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: "100%",
+                      aspectRatio: "1/1",
+                      borderRadius: 6,
+                      background: "var(--lb-bg-elev)",
+                      display: "grid",
+                      placeItems: "center",
+                      color: "var(--lb-text-3)",
+                      fontSize: 22,
+                    }}
+                  >
+                    📦
+                  </div>
+                )}
+                <div
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    letterSpacing: 0.4,
+                    textTransform: "uppercase",
+                    color: "var(--lb-text-3)",
+                  }}
+                >
+                  {o.supplierName}
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3 }}>
+                  {o.productName}
+                </div>
+                {o.productCode && (
+                  <code
+                    style={{
+                      fontSize: 10.5,
+                      color: "#0891b2",
+                      background: "rgba(8,145,178,0.12)",
+                      padding: "1px 6px",
+                      borderRadius: 4,
+                      fontWeight: 700,
+                      alignSelf: "flex-start",
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    {o.productCode}
+                  </code>
+                )}
+                {alreadyOnUs && (
+                  <div style={{ fontSize: 10.5, color: "var(--lb-accent)", fontWeight: 700 }}>
+                    ✓ Currently linked
+                  </div>
+                )}
+                {alreadyOnSomethingElse && (
+                  <div style={{ fontSize: 10.5, color: "#ca8a04" }}>
+                    Already linked to another item
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Fabricated-supplier picker. Simpler: dropdown of every supplier +
+// optional vendor URL. Creates a fresh supplier_products row tied to
+// this inventory item via its productCode (the existing
+// linkInventoryToSupplierAction path).
+function FabricatedSupplierPicker({
+  inventoryItemId,
+  onLinked,
+  onError,
+}: {
+  inventoryItemId: number;
+  onLinked: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [options, setOptions] = useState<SupplierOption[] | null>(null);
+  const [supplierId, setSupplierId] = useState<number | "">("");
+  const [url, setUrl] = useState("");
+  const [pending, start] = useTransition();
+
+  useEffect(() => {
+    listSupplierOptions()
+      .then(setOptions)
+      .catch((e) =>
+        onError(e instanceof Error ? e.message : "Could not load suppliers"),
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function run() {
+    if (typeof supplierId !== "number") {
+      onError("Pick a supplier first.");
+      return;
+    }
+    start(async () => {
+      try {
+        await linkInventoryToSupplierAction({
+          inventoryItemId,
+          supplierId,
+          productUrl: url.trim() || null,
+        });
+        onLinked();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Link failed");
+      }
+    });
+  }
+
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        padding: 10,
+        borderRadius: 10,
+        border: "1px solid var(--lb-border)",
+        background: "var(--lb-bg-elev)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <p style={{ margin: 0, fontSize: 11.5, color: "var(--lb-text-3)" }}>
+        Use this when you fabricate the item in-house and want to track
+        a supplier who supplies a raw material or a sub-process for it
+        (no catalogue product needed).
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <select
+          value={supplierId === "" ? "" : String(supplierId)}
+          onChange={(e) =>
+            setSupplierId(e.target.value === "" ? "" : Number(e.target.value))
+          }
+          style={{
+            flex: "1 1 200px",
+            padding: "7px 10px",
+            borderRadius: 8,
+            background: "var(--lb-bg)",
+            border: "1px solid var(--lb-border)",
+            color: "var(--lb-text)",
+            fontSize: 12.5,
+          }}
+        >
+          <option value="">
+            {options === null ? "Loading…" : "Pick a supplier"}
+          </option>
+          {options?.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+              {s.origin ? ` · ${s.origin}` : ""}
+            </option>
+          ))}
+        </select>
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="Optional vendor URL"
+          style={{
+            flex: "1 1 200px",
+            padding: "7px 10px",
+            borderRadius: 8,
+            background: "var(--lb-bg)",
+            border: "1px solid var(--lb-border)",
+            color: "var(--lb-text)",
+            fontSize: 12.5,
+          }}
+        />
+        <button
+          type="button"
+          onClick={run}
+          disabled={pending || typeof supplierId !== "number"}
+          style={{
+            padding: "7px 14px",
+            borderRadius: 999,
+            background: "var(--lb-accent)",
+            color: "var(--lb-accent-fg, white)",
+            border: 0,
+            fontSize: 12.5,
+            fontWeight: 700,
+            cursor: pending ? "default" : "pointer",
+            opacity:
+              pending || typeof supplierId !== "number" ? 0.6 : 1,
+          }}
+        >
+          {pending ? "Linking…" : "Link supplier"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // Drop-target section. Two visual modes:

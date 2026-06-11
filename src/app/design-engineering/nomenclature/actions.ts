@@ -22,7 +22,7 @@
 //                                              detaches the inventory row.
 
 import { revalidatePath } from "next/cache";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   assemblyBom,
@@ -955,6 +955,99 @@ export async function linkInventoryToSupplierAction(input: {
   return { supplierProductId: sp.id };
 }
 
+// V105 — browse every supplier catalogue product for the
+// InventoryDrawer's "Link to catalogue product" picker. Returns one
+// row per non-archived supplier_products entry with the bits the
+// scrollable picker needs (supplier name, product name, code,
+// thumbnail, vendor URL, link state).
+export type SupplierCatalogueOption = {
+  supplierProductId: number;
+  supplierId: number;
+  supplierName: string;
+  productName: string;
+  productCode: string | null;
+  productUrl: string | null;
+  thumbnailUrl: string | null;
+  description: string | null;
+  // The inventory item this product is already explicitly linked to,
+  // if any. The picker greys out rows already linked to ANOTHER item
+  // so the user doesn't accidentally steal a link.
+  linkedToInventoryItemId: number | null;
+};
+
+export async function listSupplierCatalogueProductsAction(): Promise<
+  SupplierCatalogueOption[]
+> {
+  const profile = await getOrCreateProfile();
+  if (!profile) return [];
+  await ensureOrdersSchema();
+  const rows = await db
+    .select({
+      spId: supplierProducts.id,
+      supplierId: supplierProducts.supplierId,
+      supplierName: suppliers.name,
+      productName: supplierProducts.name,
+      productCode: supplierProducts.productCode,
+      productUrl: supplierProducts.productUrl,
+      thumbnailUrl: supplierProducts.thumbnailUrl,
+      description: supplierProducts.description,
+      linkedToInventoryItemId: supplierProducts.inventoryItemId,
+    })
+    .from(supplierProducts)
+    .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
+    .where(eq(supplierProducts.archived, false))
+    .orderBy(asc(suppliers.name), asc(supplierProducts.name));
+  return rows.map((r) => ({
+    supplierProductId: r.spId,
+    supplierId: r.supplierId,
+    supplierName: r.supplierName,
+    productName: r.productName,
+    productCode: r.productCode ?? null,
+    productUrl: r.productUrl ?? null,
+    thumbnailUrl: r.thumbnailUrl ?? null,
+    description: r.description ?? null,
+    linkedToInventoryItemId: r.linkedToInventoryItemId ?? null,
+  }));
+}
+
+// V105 — link an existing supplier_products row to this inventory
+// item by setting supplier_products.inventory_item_id. Used when the
+// user picks a card from the catalogue picker. Does NOT touch the
+// productCode — the catalogue product keeps its own code, and the
+// drawer surfaces the row by FK match.
+export async function linkSupplierProductToInventoryAction(input: {
+  supplierProductId: number;
+  inventoryItemId: number;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  await db
+    .update(supplierProducts)
+    .set({
+      inventoryItemId: input.inventoryItemId,
+      updatedAt: new Date(),
+    })
+    .where(eq(supplierProducts.id, input.supplierProductId));
+  return { ok: true };
+}
+
+// V105 — clear the FK on a supplier_products row so it's no longer
+// surfaced on this inventory item's drawer. Doesn't archive or delete
+// the catalogue row.
+export async function unlinkSupplierProductFromInventoryAction(input: {
+  supplierProductId: number;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  await db
+    .update(supplierProducts)
+    .set({ inventoryItemId: null, updatedAt: new Date() })
+    .where(eq(supplierProducts.id, input.supplierProductId));
+  return { ok: true };
+}
+
 export async function listSupplierOptions(): Promise<SupplierOption[]> {
   const profile = await getOrCreateProfile();
   if (!profile) return [];
@@ -1208,6 +1301,13 @@ export type DrawerSupplierLink = {
   supplierId: number;
   supplierName: string;
   productUrl: string | null;
+  productName: string;
+  productCode: string | null;
+  thumbnailUrl: string | null;
+  // True when supplier_products.inventoryItemId is set explicitly via
+  // the V105 "Link to catalogue product" picker. Used by the UI to
+  // decide whether the Unlink button shows up.
+  linkedByFk: boolean;
 };
 
 export type DrawerChild = {
@@ -1314,21 +1414,46 @@ export async function getInventoryDetails(input: {
     createdAt: a.createdAt.toISOString(),
   }));
 
+  // Two ways a supplier_product can be tied to this inventory row:
+  //   1. legacy — productCode == item.code (rows created via the
+  //      saveHardwarePart / savePartCode supplier auto-create flow)
+  //   2. explicit — inventoryItemId == item.id (V105: the new "Link to
+  //      catalogue product" picker writes this on an existing
+  //      catalogue row)
+  // OR them together so the unified list shows both kinds.
   const supplierRows = await db
     .select({
       spId: supplierProducts.id,
       supplierId: supplierProducts.supplierId,
       supplierName: suppliers.name,
       productUrl: supplierProducts.productUrl,
+      productName: supplierProducts.name,
+      productCode: supplierProducts.productCode,
+      thumbnailUrl: supplierProducts.thumbnailUrl,
+      linkedItemId: supplierProducts.inventoryItemId,
     })
     .from(supplierProducts)
     .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
-    .where(eq(supplierProducts.productCode, item.code));
+    .where(
+      and(
+        eq(supplierProducts.archived, false),
+        or(
+          eq(supplierProducts.productCode, item.code),
+          eq(supplierProducts.inventoryItemId, item.id),
+        ),
+      ),
+    );
   const supplierLinks: DrawerSupplierLink[] = supplierRows.map((r) => ({
     supplierProductId: r.spId,
     supplierId: r.supplierId,
     supplierName: r.supplierName,
     productUrl: r.productUrl ?? null,
+    productName: r.productName,
+    productCode: r.productCode ?? null,
+    thumbnailUrl: r.thumbnailUrl ?? null,
+    // True when this is a V105-style explicit FK link (vs the legacy
+    // productCode match). UI surfaces an Unlink button only on these.
+    linkedByFk: r.linkedItemId === item.id,
   }));
 
   // Direct children of this assembly.

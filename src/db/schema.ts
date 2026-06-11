@@ -549,6 +549,14 @@ export const supplierProducts = pgTable(
     isPrimarySupplier: boolean("is_primary_supplier").notNull().default(true),
     name: text("name").notNull(),
     productCode: text("product_code"),
+    // Direct FK link to a Lightbase inventory item. Set when the user
+    // picks this catalogue product from the InventoryDrawer's "Link to
+    // catalogue product" picker. NULL for catalogue rows that haven't
+    // been associated with any inventory row yet (the common case).
+    // The drawer surfaces a supplier_products row for an item if EITHER
+    // productCode == inventory.code (the legacy match) OR
+    // inventoryItemId == inventory.id (the explicit link).
+    inventoryItemId: integer("inventory_item_id"),
     description: text("description"),
     category: text("category"),
     notes: text("notes"),
