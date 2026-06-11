@@ -295,7 +295,11 @@ export async function saveHardwarePart(input: {
 // the user omits it).
 
 function dimensionSegment(prefix: string, value: number | null): string {
-  if (value == null || Number.isNaN(value)) return "";
+  // When the user leaves the field blank we preserve the slot in the
+  // code with literal X placeholders (e.g. WXXXX) so the segment layout
+  // stays the same length and is greppable later. Numeric values are
+  // zero-padded to four digits.
+  if (value == null || Number.isNaN(value)) return `${prefix}XXXX`;
   return `${prefix}${value.toString().padStart(4, "0")}`;
 }
 

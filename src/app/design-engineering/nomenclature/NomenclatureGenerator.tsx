@@ -969,6 +969,12 @@ function PartIdTab({
         <li>
           Circular: <code>CLS-XXXXXX-DXXXX-LXXXX-DISPLAY_NAME</code>
         </li>
+        <li>
+          Leave a dimension blank and it stays as literal{" "}
+          <code>WXXXX</code> / <code>HXXXX</code> / <code>LXXXX</code> /{" "}
+          <code>DXXXX</code> in the code. All segments are uppercased
+          automatically.
+        </li>
       </ul>
 
       <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr 1fr" }}>
@@ -1041,7 +1047,7 @@ function PartIdTab({
               onChange={(e) =>
                 setWidth(e.target.value.replace(/[^0-9.]/g, ""))
               }
-              placeholder="0–9999"
+              placeholder="blank → XXXX"
               style={INPUT}
             />
           </label>
@@ -1052,7 +1058,7 @@ function PartIdTab({
               onChange={(e) =>
                 setHeight(e.target.value.replace(/[^0-9.]/g, ""))
               }
-              placeholder="0–9999"
+              placeholder="blank → XXXX"
               style={INPUT}
             />
           </label>
@@ -1063,7 +1069,7 @@ function PartIdTab({
               onChange={(e) =>
                 setLength(e.target.value.replace(/[^0-9.]/g, ""))
               }
-              placeholder="0–9999"
+              placeholder="blank → XXXX"
               style={INPUT}
             />
           </label>
@@ -1077,7 +1083,7 @@ function PartIdTab({
               onChange={(e) =>
                 setDiameter(e.target.value.replace(/[^0-9.]/g, ""))
               }
-              placeholder="0–9999"
+              placeholder="blank → XXXX"
               style={INPUT}
             />
           </label>
@@ -1088,7 +1094,7 @@ function PartIdTab({
               onChange={(e) =>
                 setLength(e.target.value.replace(/[^0-9.]/g, ""))
               }
-              placeholder="0–9999"
+              placeholder="blank → XXXX"
               style={INPUT}
             />
           </label>
