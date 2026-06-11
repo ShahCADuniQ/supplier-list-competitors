@@ -119,10 +119,14 @@ export type PartRow = {
   configurations: Configuration[];
   inventoryItemId: number | null;
   // Whether the linked inventory row is starred (shown in
-  // /suppliers → Lightbase Inventory). When inventoryItemId is null
-  // (very rare, only during in-flight first-save), this defaults to
-  // false so the UI shows the empty star until the row is hydrated.
+  // /suppliers → Lightbase Inventory). Defaults to false — nothing
+  // is auto-starred, the user explicitly opts each one in.
   starred: boolean;
+  // Whether this item is flagged as a "configuration of the previous
+  // branch" — i.e. a configuration variant of its parent in an
+  // assembly tree. Asked at creation time in the nomenclature
+  // generator and toggleable on every card.
+  isConfiguration: boolean;
   createdAt: string;
 };
 
@@ -277,6 +281,7 @@ export async function listParts(): Promise<PartRow[]> {
       configurations: nomenclatureParts.configurations,
       inventoryItemId: nomenclatureParts.inventoryItemId,
       starred: inventoryItems.starred,
+      isConfiguration: inventoryItems.isConfiguration,
       createdAt: nomenclatureParts.createdAt,
     })
     .from(nomenclatureParts)
@@ -311,6 +316,7 @@ export async function listParts(): Promise<PartRow[]> {
       product: r.product ?? null,
       products: readProducts(r.product, r.products),
       starred: r.starred ?? false,
+      isConfiguration: r.isConfiguration ?? false,
       configurations: normalizeConfigurations(r.configurations),
       inventoryItemId: r.inventoryItemId ?? null,
       createdAt: r.createdAt.toISOString(),
@@ -336,6 +342,7 @@ async function upsertInventoryItem(args: {
   kind: "part" | "assembly";
   product?: string | null;
   products?: string[];
+  isConfiguration?: boolean;
   createdByClerkId: string | null;
 }): Promise<number> {
   // The inventory_items table + its columns live behind the suppliers
@@ -358,6 +365,12 @@ async function upsertInventoryItem(args: {
         kind: args.kind,
         product: args.product ?? null,
         products: args.products ?? [],
+        // isConfiguration is only updated if the caller passed it
+        // explicitly — re-saves from forms that don't ask the
+        // question (e.g. inline edits) shouldn't reset the flag.
+        ...(args.isConfiguration !== undefined
+          ? { isConfiguration: args.isConfiguration }
+          : {}),
         archived: false,
         updatedAt: new Date(),
       })
@@ -373,10 +386,9 @@ async function upsertInventoryItem(args: {
       kind: args.kind,
       product: args.product ?? null,
       products: args.products ?? [],
-      // Parts + hardware-as-part default to starred (in inventory);
-      // assemblies default to UNstarred and the user opts each one
-      // in from the Database tab star button.
-      starred: args.kind !== "assembly",
+      // Nothing is auto-starred — user opts in explicitly.
+      starred: false,
+      isConfiguration: args.isConfiguration ?? false,
       // Every nomenclature-generated row is a top-level "parent" entry
       // — never a child of an assembly.
       parentAssemblyId: null,
@@ -398,6 +410,7 @@ export async function saveHardwarePart(input: {
   product?: string | null;
   products?: string[];
   configurations?: Configuration[];
+  isConfiguration?: boolean;
 }): Promise<{
   id: number;
   uniqueId: string;
@@ -436,6 +449,7 @@ export async function saveHardwarePart(input: {
     kind: partOrAssembly === "A" ? "assembly" : "part",
     product: productsArr[0] ?? null,
     products: productsArr,
+    isConfiguration: input.isConfiguration ?? false,
     createdByClerkId: profile.clerkUserId,
   });
 
@@ -506,6 +520,7 @@ export async function savePartCode(input: {
   parentPartId?: number | null;
   product?: string | null;
   products?: string[];
+  isConfiguration?: boolean;
   // PHS only — optional. When provided we also create a row in
   // supplier_products linking this part to the supplier's catalogue.
   supplierId?: number | null;
@@ -564,6 +579,7 @@ export async function savePartCode(input: {
     kind: inventoryKindFinal,
     product: productsArr[0] ?? null,
     products: productsArr,
+    isConfiguration: input.isConfiguration ?? false,
     createdByClerkId: profile.clerkUserId,
   });
 
@@ -1224,6 +1240,7 @@ export type InventoryDetails = {
   configurations: Configuration[];
   standardName: string | null;
   starred: boolean;
+  isConfiguration: boolean;
   attachments: DrawerAttachment[];
   supplierLinks: DrawerSupplierLink[];
   children: DrawerChild[];
@@ -1388,6 +1405,7 @@ export async function getInventoryDetails(input: {
     })(),
     standardName,
     starred: item.starred ?? false,
+    isConfiguration: item.isConfiguration ?? false,
     attachments,
     supplierLinks,
     children,
@@ -1450,10 +1468,9 @@ export async function setInventoryConfigurationsAction(input: {
 }
 
 // Toggle the starred flag on an inventory row. Star = "show this in
-// the Lightbase Inventory tab". Parts/hardware default to starred at
-// creation; assemblies default to unstarred so the team curates which
-// sub-assemblies need explicit inventory tracking. The Database tab
-// card and the InventoryDrawer header both call this.
+// the Lightbase Inventory tab". Nothing is auto-starred — user opts
+// each row in explicitly from the Database card, the InventoryDrawer
+// header, or the assembly-tree card.
 export async function setInventoryStarredAction(input: {
   inventoryItemId: number;
   starred: boolean;
@@ -1464,6 +1481,24 @@ export async function setInventoryStarredAction(input: {
   await db
     .update(inventoryItems)
     .set({ starred: input.starred, updatedAt: new Date() })
+    .where(eq(inventoryItems.id, input.inventoryItemId));
+  return { ok: true };
+}
+
+// Toggle the is_configuration flag on an inventory row. "Configuration
+// of the previous branch" — set at creation time in the nomenclature
+// generator, but also toggleable from every tree card and the
+// Database tab card.
+export async function setInventoryConfigurationFlagAction(input: {
+  inventoryItemId: number;
+  isConfiguration: boolean;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  await db
+    .update(inventoryItems)
+    .set({ isConfiguration: input.isConfiguration, updatedAt: new Date() })
     .where(eq(inventoryItems.id, input.inventoryItemId));
   return { ok: true };
 }

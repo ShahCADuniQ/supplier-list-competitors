@@ -124,27 +124,48 @@ export function ensureNomenclatureSchema(): Promise<void> {
       // inventory_items so the InventoryDrawer can edit them on any
       // row, including those auto-minted from RFQs.
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "configurations" jsonb DEFAULT '[]'::jsonb`);
-      // V102 — Starred flag for the Lightbase Inventory list. ADD +
-      // UPDATE in one DO block so the assembly back-fill ONLY runs
-      // the first time we create the column. Subsequent boots skip
-      // both because the column already exists.
+      // V102 — Starred flag for the Lightbase Inventory list. The
+      // initial V102 default was "true for parts, false for
+      // assemblies" but the team decided NOTHING should be auto-
+      // starred — every row is opted in explicitly. So we ADD the
+      // column unstarred-by-default, and (also in V103) flip every
+      // pre-existing row to false in case the prior V102 self-heal
+      // already wrote starred=true.
+      await db.execute(sql`
+        ALTER TABLE "inventory_items"
+          ADD COLUMN IF NOT EXISTS "starred" boolean NOT NULL DEFAULT false
+      `);
+      await db.execute(sql`ALTER TABLE "inventory_items" ALTER COLUMN "starred" SET DEFAULT false`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_starred_idx" ON "inventory_items" ("starred")`);
+      // V103 — One-shot reset: clear every star that the brief V102
+      // auto-star left behind. Guarded by a tiny metadata flag so we
+      // only ever do this once (a user who legitimately starred
+      // something after V103 ships shouldn't get reset on the next
+      // boot). The flag lives in a dedicated table.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "lb_one_shot_flags" (
+          "flag" text PRIMARY KEY,
+          "applied_at" timestamp NOT NULL DEFAULT now()
+        )
+      `);
       await db.execute(sql`
         DO $$
         BEGIN
           IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'inventory_items'
-              AND column_name = 'starred'
+            SELECT 1 FROM "lb_one_shot_flags" WHERE "flag" = 'v103_reset_stars'
           ) THEN
-            ALTER TABLE "inventory_items"
-              ADD COLUMN "starred" boolean NOT NULL DEFAULT true;
-            UPDATE "inventory_items"
-              SET "starred" = false
-              WHERE "kind" = 'assembly';
+            UPDATE "inventory_items" SET "starred" = false WHERE "starred" = true;
+            INSERT INTO "lb_one_shot_flags" ("flag") VALUES ('v103_reset_stars');
           END IF;
         END $$;
       `);
-      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_starred_idx" ON "inventory_items" ("starred")`);
+      // V103 — is_configuration flag. Marks a tree card as "a
+      // configuration variant of its parent" rather than a permanent
+      // component. Default false; idempotent ADD COLUMN.
+      await db.execute(sql`
+        ALTER TABLE "inventory_items"
+          ADD COLUMN IF NOT EXISTS "is_configuration" boolean NOT NULL DEFAULT false
+      `);
       // V98 — Global configuration_options catalogue. Every config
       // name ever attached to a part / assembly / hardware gets
       // upserted here so the chip-editor can offer typeahead.

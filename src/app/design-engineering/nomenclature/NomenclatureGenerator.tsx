@@ -31,6 +31,7 @@ import {
   removeAssemblyChildAction,
   saveHardwarePart,
   savePartCode,
+  setInventoryConfigurationFlagAction,
   setInventoryStarredAction,
   suggestTemplateAction,
   updatePart,
@@ -534,6 +535,7 @@ function HardwareForm({
   const [description, setDescription] = useState("");
   const [products, setProducts] = useState<string[]>([]);
   const [configurations, setConfigurations] = useState<Configuration[]>([]);
+  const [isConfiguration, setIsConfiguration] = useState(false);
   const [url, setUrl] = useState("");
   const [aiNotes, setAiNotes] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -572,6 +574,7 @@ function HardwareForm({
           description: description.trim() || null,
           products,
           configurations,
+          isConfiguration,
         });
         setGeneratedCode(r.fullCode);
         onSaved({
@@ -588,10 +591,9 @@ function HardwareForm({
           products,
           configurations,
           inventoryItemId: r.inventoryItemId ?? null,
-          // Hardware is always treated as a part on the inventory side,
-          // so it's starred by default — matches the server's
-          // upsertInventoryItem behaviour.
-          starred: partOrAssembly !== "A",
+          // Nothing is auto-starred; user opts in explicitly.
+          starred: false,
+          isConfiguration,
           createdAt: new Date().toISOString(),
         });
         setNomenclature("");
@@ -599,6 +601,7 @@ function HardwareForm({
         setDescription("");
         setProducts([]);
         setConfigurations([]);
+        setIsConfiguration(false);
         setUrl("");
         setAiNotes(null);
       } catch (e) {
@@ -754,6 +757,11 @@ function HardwareForm({
         productOptions={productOptions}
       />
 
+      <IsConfigurationCheckbox
+        checked={isConfiguration}
+        onChange={setIsConfiguration}
+      />
+
       <ConfigurationsEditor
         label="Configurations (optional)"
         configs={configurations}
@@ -779,6 +787,54 @@ function HardwareForm({
         </button>
       </div>
     </div>
+  );
+}
+
+// Shared "Is this a configuration of the previous branch?" checkbox
+// used by both the Hardware form and the Part/Assembly form. The
+// answer is stored on inventory_items.is_configuration and surfaced
+// on every tree card.
+function IsConfigurationCheckbox({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "10px 12px",
+        borderRadius: 10,
+        border: checked
+          ? "1px solid color-mix(in srgb, var(--lb-accent) 45%, var(--lb-border))"
+          : "1px solid var(--lb-border)",
+        background: checked
+          ? "color-mix(in srgb, var(--lb-accent) 6%, transparent)"
+          : "var(--lb-bg)",
+        cursor: "pointer",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ marginTop: 2, cursor: "pointer" }}
+      />
+      <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>
+          Is this a configuration of the previous branch?
+        </span>
+        <span style={{ fontSize: 11.5, color: "var(--lb-text-3)", lineHeight: 1.4 }}>
+          Tick when this item is a variant/configuration of its parent
+          assembly rather than a permanent component. Shown as a{" "}
+          <strong>CFG</strong> badge on every tree card.
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -1004,6 +1060,7 @@ function PartIdTab({
   const [length, setLength] = useState<string>("");
   const [kind, setKind] = useState<"part" | "assembly">("part");
   const [configurations, setConfigurations] = useState<Configuration[]>([]);
+  const [isConfiguration, setIsConfiguration] = useState(false);
   const [supplierId, setSupplierId] = useState<number | "">("");
   const [supplierUrl, setSupplierUrl] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
@@ -1034,6 +1091,7 @@ function PartIdTab({
           lengthMm: length.trim() ? Math.round(Number(length)) : null,
           kind,
           configurations,
+          isConfiguration,
           products,
           supplierId:
             classification === "PHS" && typeof supplierId === "number"
@@ -1059,9 +1117,9 @@ function PartIdTab({
           products,
           configurations,
           inventoryItemId: r.inventoryItemId ?? null,
-          // Mirrors the server: parts default starred, assemblies don't
-          // (assemblies are opt-in for the Lightbase Inventory tab).
-          starred: kind !== "assembly",
+          // Nothing is auto-starred; user opts in explicitly.
+          starred: false,
+          isConfiguration,
           createdAt: new Date().toISOString(),
         });
         setName("");
@@ -1072,6 +1130,7 @@ function PartIdTab({
         setDiameter("");
         setLength("");
         setConfigurations([]);
+        setIsConfiguration(false);
         setSupplierId("");
         setSupplierUrl("");
       } catch (e) {
@@ -1293,6 +1352,11 @@ function PartIdTab({
         values={products}
         onChange={setProducts}
         productOptions={productOptions}
+      />
+
+      <IsConfigurationCheckbox
+        checked={isConfiguration}
+        onChange={setIsConfiguration}
       />
 
       <ConfigurationsEditor
@@ -2592,11 +2656,47 @@ function TreeNodeCard({
   const isAssembly = node.kind === "assembly";
   const [dragOver, setDragOver] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [starred, setStarred] = useState(node.starred);
+  const [isConfig, setIsConfig] = useState(node.isConfiguration);
+  useEffect(() => setStarred(node.starred), [node.starred]);
+  useEffect(() => setIsConfig(node.isConfiguration), [node.isConfiguration]);
+  const [, startToggle] = useTransition();
   const effectiveStock =
     node.stock + (isAssembly ? node.buildableFromStock ?? 0 : 0);
   const lacks = !root && node.quantity > 0 && effectiveStock < node.quantity;
 
   const accent = root ? "#7c3aed" : "var(--lb-accent)";
+
+  function flipStar(e: React.MouseEvent) {
+    e.stopPropagation();
+    const next = !starred;
+    setStarred(next);
+    startToggle(async () => {
+      try {
+        await setInventoryStarredAction({
+          inventoryItemId: node.itemId,
+          starred: next,
+        });
+      } catch {
+        setStarred(!next);
+      }
+    });
+  }
+  function flipConfig(e: React.MouseEvent) {
+    e.stopPropagation();
+    const next = !isConfig;
+    setIsConfig(next);
+    startToggle(async () => {
+      try {
+        await setInventoryConfigurationFlagAction({
+          inventoryItemId: node.itemId,
+          isConfiguration: next,
+        });
+      } catch {
+        setIsConfig(!next);
+      }
+    });
+  }
 
   return (
     <>
@@ -2719,22 +2819,84 @@ function TreeNodeCard({
               {node.code}
             </code>
           </div>
-          {!root && (
-            <span
+          <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+            <button
+              type="button"
+              draggable={false}
+              onClick={flipStar}
+              title={
+                starred
+                  ? "Starred — visible in Lightbase Inventory"
+                  : "Click to add to Lightbase Inventory"
+              }
               style={{
-                fontSize: 10,
-                fontWeight: 800,
-                color: "var(--lb-text-2)",
-                padding: "1px 7px",
+                appearance: "none",
+                border: "1px solid",
+                borderColor: starred
+                  ? "color-mix(in srgb, #d97706 40%, var(--lb-border))"
+                  : "var(--lb-border)",
+                background: starred
+                  ? "color-mix(in srgb, #d97706 12%, transparent)"
+                  : "transparent",
+                color: starred ? "#d97706" : "var(--lb-text-3)",
                 borderRadius: 999,
-                background: "var(--lb-bg-elev)",
-                border: "1px solid var(--lb-border)",
-                whiteSpace: "nowrap",
+                padding: "0 5px",
+                fontSize: 11,
+                fontWeight: 700,
+                lineHeight: 1.3,
+                cursor: "pointer",
               }}
             >
-              × {node.quantity}
-            </span>
-          )}
+              {starred ? "★" : "☆"}
+            </button>
+            <button
+              type="button"
+              draggable={false}
+              onClick={flipConfig}
+              title={
+                isConfig
+                  ? "Flagged as a configuration of the previous branch"
+                  : "Mark as configuration of the previous branch"
+              }
+              style={{
+                appearance: "none",
+                border: "1px solid",
+                borderColor: isConfig
+                  ? "color-mix(in srgb, var(--lb-accent) 45%, var(--lb-border))"
+                  : "var(--lb-border)",
+                background: isConfig
+                  ? "color-mix(in srgb, var(--lb-accent) 16%, transparent)"
+                  : "transparent",
+                color: isConfig ? "var(--lb-accent)" : "var(--lb-text-3)",
+                borderRadius: 999,
+                padding: "0 6px",
+                fontSize: 8.5,
+                fontWeight: 800,
+                letterSpacing: 0.5,
+                textTransform: "uppercase",
+                cursor: "pointer",
+                lineHeight: 1.4,
+              }}
+            >
+              {isConfig ? "CFG ✓" : "CFG"}
+            </button>
+            {!root && (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 800,
+                  color: "var(--lb-text-2)",
+                  padding: "1px 7px",
+                  borderRadius: 999,
+                  background: "var(--lb-bg-elev)",
+                  border: "1px solid var(--lb-border)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                × {node.quantity}
+              </span>
+            )}
+          </div>
         </div>
         {node.name && (
           <div style={{ fontSize: 10.5, color: "var(--lb-text-2)" }}>
@@ -2868,9 +3030,50 @@ function ChildCard({
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // Optimistic local mirrors of the two toggleable flags. Reset every
+  // time a fresh node arrives from a tree refresh so external edits
+  // win over any stale local optimism.
+  const [starred, setStarred] = useState(node.starred);
+  const [isConfig, setIsConfig] = useState(node.isConfiguration);
+  useEffect(() => setStarred(node.starred), [node.starred]);
+  useEffect(() => setIsConfig(node.isConfiguration), [node.isConfiguration]);
+  const [toggling, startToggle] = useTransition();
   const effectiveStock =
     node.stock + (isAssembly ? node.buildableFromStock ?? 0 : 0);
   const lacks = node.quantity > 0 && effectiveStock < node.quantity;
+
+  function flipStar(e: React.MouseEvent) {
+    e.stopPropagation();
+    const next = !starred;
+    setStarred(next);
+    startToggle(async () => {
+      try {
+        await setInventoryStarredAction({
+          inventoryItemId: node.itemId,
+          starred: next,
+        });
+      } catch (e) {
+        setStarred(!next);
+        setErr(e instanceof Error ? e.message : "Star toggle failed");
+      }
+    });
+  }
+  function flipConfig(e: React.MouseEvent) {
+    e.stopPropagation();
+    const next = !isConfig;
+    setIsConfig(next);
+    startToggle(async () => {
+      try {
+        await setInventoryConfigurationFlagAction({
+          inventoryItemId: node.itemId,
+          isConfiguration: next,
+        });
+      } catch (e) {
+        setIsConfig(!next);
+        setErr(e instanceof Error ? e.message : "Configuration toggle failed");
+      }
+    });
+  }
 
   function remove(e: React.MouseEvent) {
     e.stopPropagation();
@@ -2999,20 +3202,91 @@ function ChildCard({
             {node.code}
           </code>
         </div>
-        <span
+        <div
           style={{
-            fontSize: 10.5,
-            fontWeight: 700,
-            color: "var(--lb-text-2)",
-            padding: "2px 8px",
-            borderRadius: 999,
-            background: "var(--lb-bg-elev)",
-            border: "1px solid var(--lb-border)",
-            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            flexShrink: 0,
           }}
         >
-          × {node.quantity}
-        </span>
+          <button
+            type="button"
+            draggable={false}
+            onClick={flipStar}
+            disabled={toggling}
+            title={
+              starred
+                ? "Starred — visible in Lightbase Inventory. Click to unstar."
+                : "Click to star — adds this to Lightbase Inventory."
+            }
+            style={{
+              appearance: "none",
+              border: "1px solid",
+              borderColor: starred
+                ? "color-mix(in srgb, #d97706 40%, var(--lb-border))"
+                : "var(--lb-border)",
+              background: starred
+                ? "color-mix(in srgb, #d97706 8%, transparent)"
+                : "transparent",
+              color: starred ? "#d97706" : "var(--lb-text-3)",
+              borderRadius: 999,
+              padding: "1px 6px",
+              fontSize: 12,
+              fontWeight: 700,
+              lineHeight: 1.2,
+              cursor: toggling ? "default" : "pointer",
+            }}
+          >
+            {starred ? "★" : "☆"}
+          </button>
+          <button
+            type="button"
+            draggable={false}
+            onClick={flipConfig}
+            disabled={toggling}
+            title={
+              isConfig
+                ? "Flagged as a configuration of the previous branch. Click to unset."
+                : "Mark as a configuration of the previous branch."
+            }
+            style={{
+              appearance: "none",
+              border: "1px solid",
+              borderColor: isConfig
+                ? "color-mix(in srgb, var(--lb-accent) 45%, var(--lb-border))"
+                : "var(--lb-border)",
+              background: isConfig
+                ? "color-mix(in srgb, var(--lb-accent) 14%, transparent)"
+                : "transparent",
+              color: isConfig ? "var(--lb-accent)" : "var(--lb-text-3)",
+              borderRadius: 999,
+              padding: "1px 7px",
+              fontSize: 9.5,
+              fontWeight: 800,
+              letterSpacing: 0.5,
+              textTransform: "uppercase",
+              cursor: toggling ? "default" : "pointer",
+              lineHeight: 1.2,
+            }}
+          >
+            {isConfig ? "CFG ✓" : "CFG"}
+          </button>
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              color: "var(--lb-text-2)",
+              padding: "2px 8px",
+              borderRadius: 999,
+              background: "var(--lb-bg-elev)",
+              border: "1px solid var(--lb-border)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            × {node.quantity}
+          </span>
+        </div>
       </div>
       {node.name && (
         <div style={{ fontSize: 12, color: "var(--lb-text-2)" }}>

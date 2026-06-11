@@ -29,6 +29,10 @@ export type TreeNode = {
   // For an assembly: how many more can we build from raw stock right
   // now, ignoring stock of the assembly itself. Null for parts.
   buildableFromStock: number | null;
+  // Surfaced so the tree card can render the star + configuration
+  // toggles without a separate fetch per node.
+  starred: boolean;
+  isConfiguration: boolean;
   // Tree continues if this node is an assembly with edges.
   children: TreeNode[];
 };
@@ -46,7 +50,18 @@ async function loadEdgesFor(
   rootId: number,
 ): Promise<{
   edges: Edge[];
-  items: Map<number, { id: number; code: string; name: string | null; kind: "part" | "assembly"; confirmedQty: number }>;
+  items: Map<
+    number,
+    {
+      id: number;
+      code: string;
+      name: string | null;
+      kind: "part" | "assembly";
+      confirmedQty: number;
+      starred: boolean;
+      isConfiguration: boolean;
+    }
+  >;
 }> {
   const visited = new Set<number>([rootId]);
   const allEdges: Edge[] = [];
@@ -79,12 +94,22 @@ async function loadEdgesFor(
       name: inventoryItems.name,
       kind: inventoryItems.kind,
       confirmedQty: inventoryItems.confirmedQty,
+      starred: inventoryItems.starred,
+      isConfiguration: inventoryItems.isConfiguration,
     })
     .from(inventoryItems)
     .where(inArray(inventoryItems.id, Array.from(visited)));
   const items = new Map<
     number,
-    { id: number; code: string; name: string | null; kind: "part" | "assembly"; confirmedQty: number }
+    {
+      id: number;
+      code: string;
+      name: string | null;
+      kind: "part" | "assembly";
+      confirmedQty: number;
+      starred: boolean;
+      isConfiguration: boolean;
+    }
   >();
   for (const it of itemRows) {
     items.set(it.id, {
@@ -93,6 +118,8 @@ async function loadEdgesFor(
       name: it.name,
       kind: it.kind === "assembly" ? "assembly" : "part",
       confirmedQty: it.confirmedQty ?? 0,
+      starred: it.starred ?? false,
+      isConfiguration: it.isConfiguration ?? false,
     });
   }
   return { edges: allEdges, items };
@@ -137,6 +164,8 @@ export async function buildAssemblyTree(rootId: number): Promise<TreeNode | null
       quantity,
       stock: it.confirmedQty,
       buildableFromStock: buildable,
+      starred: it.starred,
+      isConfiguration: it.isConfiguration,
       children,
     };
   }

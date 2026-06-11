@@ -409,29 +409,22 @@ export function ensureOrdersSchema(): Promise<void> {
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "ifc_source_name" text`);
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "pending_qty" integer NOT NULL DEFAULT 0`);
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "confirmed_qty" integer NOT NULL DEFAULT 0`);
-      // V102 — starred flag controls visibility in /suppliers → Lightbase
-      // Inventory. Parts/hardware default starred; existing assemblies
-      // backfill to unstarred so the team curates which sub-assemblies
-      // actually need inventory tracking. Wrapped in DO so the
-      // backfill only runs the very first time the column is created
-      // (re-runs are no-ops once the column exists).
+      // V102/V103 — starred flag controls visibility in /suppliers →
+      // Lightbase Inventory. Nothing auto-starred; default false.
+      // The full V103 reset of pre-existing stars lives in the
+      // nomenclature ensure pipeline (guarded by lb_one_shot_flags).
       await db.execute(sql`
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'inventory_items'
-              AND column_name = 'starred'
-          ) THEN
-            ALTER TABLE "inventory_items"
-              ADD COLUMN "starred" boolean NOT NULL DEFAULT true;
-            UPDATE "inventory_items"
-              SET "starred" = false
-              WHERE "kind" = 'assembly';
-          END IF;
-        END $$;
+        ALTER TABLE "inventory_items"
+          ADD COLUMN IF NOT EXISTS "starred" boolean NOT NULL DEFAULT false
       `);
+      await db.execute(sql`ALTER TABLE "inventory_items" ALTER COLUMN "starred" SET DEFAULT false`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_starred_idx" ON "inventory_items" ("starred")`);
+      // V103 — is_configuration flag for the tree-card "configuration
+      // of the previous branch" badge.
+      await db.execute(sql`
+        ALTER TABLE "inventory_items"
+          ADD COLUMN IF NOT EXISTS "is_configuration" boolean NOT NULL DEFAULT false
+      `);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_kind_idx" ON "inventory_items" ("kind")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_parent_idx" ON "inventory_items" ("parent_assembly_id")`);
 

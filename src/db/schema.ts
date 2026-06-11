@@ -2726,12 +2726,17 @@ export const inventoryItems = pgTable(
       .$type<Array<{ name: string; description: string | null }>>()
       .default([]),
     // Whether this item shows up in the /suppliers → Lightbase
-    // Inventory list. Parts and hardware are starred by default
-    // (they're the things we always want to track on hand); sub-
-    // assemblies default to unstarred so the team can curate which
-    // assemblies actually need inventory accounting. User-toggleable
-    // from the Database tab card AND the InventoryDrawer header.
-    starred: boolean("starred").notNull().default(true),
+    // Inventory list. NOTHING is auto-starred — every row starts
+    // unstarred and the team explicitly opts each one in from the
+    // star button on the Database tab card, the InventoryDrawer
+    // header, or the assembly-tree card.
+    starred: boolean("starred").notNull().default(false),
+    // Whether this item is a "configuration variant" of its parent
+    // in an assembly tree. Asked at creation time in the nomenclature
+    // generator. Rendered as a small badge on every tree card so the
+    // BOM reader can tell a configuration-of-parent variant apart
+    // from a permanent component.
+    isConfiguration: boolean("is_configuration").notNull().default(false),
     createdByClerkId: text("created_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
