@@ -328,11 +328,19 @@ export async function savePartCode(input: {
   const wSeg = dimensionSegment("W", input.widthMm ?? null);
   const hSeg = dimensionSegment("H", input.heightMm ?? null);
   const lSeg = dimensionSegment("L", input.lengthMm ?? null);
-  const descSeg = slugify(input.description);
-  const segments = [classification, uniqueId, wSeg, hSeg, lSeg, descSeg].filter(
-    Boolean,
-  );
-  // CLS-UNIQUE-WXXXX-HXXXX-LXXXX-DESCRIPTION (all uppercase already)
+  // The trailing segment is the Display Name (per V79 spec change),
+  // not the free-text description. Description still gets stored on the
+  // row + inventory for the listing UI, just not in the code itself.
+  const nameSeg = slugify(input.name);
+  const segments = [
+    classification,
+    uniqueId,
+    wSeg,
+    hSeg,
+    lSeg,
+    nameSeg,
+  ].filter(Boolean);
+  // CLS-UNIQUE-WXXXX-HXXXX-LXXXX-DISPLAY_NAME (all uppercase already)
   const fullCode = segments.join("-").toUpperCase();
 
   const inventoryKind: "part" | "assembly" = input.kind ?? "part";

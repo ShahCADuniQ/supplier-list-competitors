@@ -352,6 +352,19 @@ function HardwareTab({
     <div style={GRID}>
       <section style={PANEL}>
         <h2 style={SECTION_TITLE}>Pick a hardware family</h2>
+        <p
+          style={{
+            fontSize: 13,
+            color: "var(--lb-text-3)",
+            marginTop: 0,
+            marginBottom: 14,
+          }}
+        >
+          Hardware code layout:{" "}
+          <code>CLS-XXXX-P|A-NOMENCLATURE</code>. The nomenclature itself
+          follows the family&apos;s standard from the OneDrive HARDWARES
+          folder.
+        </p>
         <div
           style={{
             display: "grid",
@@ -926,8 +939,9 @@ function PartIdTab({
       <h2 style={SECTION_TITLE}>Generate a Part / Assembly ID</h2>
       <p style={{ fontSize: 13, color: "var(--lb-text-3)", marginTop: 0 }}>
         Allocates a fresh 4-character alphanumeric and builds a code like{" "}
-        <code>CLS-XXXX-WXXXX-HXXXX-LXXXX-DESCRIPTION</code>. Leave any
-        dimension blank to drop it from the code.
+        <code>CLS-XXXX-WXXXX-HXXXX-LXXXX-DISPLAY_NAME</code>. The trailing
+        segment is the <strong>Display Name</strong>; leave any dimension
+        blank to drop it from the code.
       </p>
 
       <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr 1fr" }}>
@@ -959,11 +973,11 @@ function PartIdTab({
           </select>
         </label>
         <label style={FIELD}>
-          <span style={LABEL}>Display name (optional)</span>
+          <span style={LABEL}>Display name (appears in the code)</span>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Front bracket"
+            placeholder="e.g. Front bracket → FRONT_BRACKET"
             style={INPUT}
           />
         </label>
