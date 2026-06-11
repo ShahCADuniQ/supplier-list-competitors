@@ -1244,12 +1244,24 @@ export async function getInventoryDetails(input: {
     product: item.product ?? null,
     products: readProducts(item.product, (item as { products?: unknown }).products),
     classCode: nomRow?.classCode ?? null,
+    // Configurations source priority:
+    //   1. inventory_items.configurations (the V97 mirror — kept in
+    //      sync on every write so it's always the freshest).
+    //   2. nomenclature_parts.configurations (legacy rows that
+    //      pre-date the mirror).
+    // Both go through the same normaliser so callers get a clean
+    // Configuration[] regardless of which source had it.
     partOrAssembly:
       nomRow?.partOrAssembly === "A" || nomRow?.partOrAssembly === "P"
         ? nomRow.partOrAssembly
         : null,
     uniqueId: nomRow?.uniqueId ?? null,
-    configurations: normalizeConfigurations(nomRow?.configurations),
+    configurations: (() => {
+      const inv = (item as { configurations?: unknown }).configurations;
+      const fromInv = normalizeConfigurations(inv);
+      if (fromInv.length) return fromInv;
+      return normalizeConfigurations(nomRow?.configurations);
+    })(),
     standardName,
     attachments,
     supplierLinks,
@@ -1285,6 +1297,30 @@ export async function addInventoryAttachmentAction(input: {
     })
     .returning({ id: inventoryAttachments.id });
   return { id: row.id };
+}
+
+// Persist a fresh configurations array onto an inventory row from
+// the InventoryDrawer's editor. Mirrors to nomenclature_parts when
+// the row is linked, so the Database tab keeps showing the same
+// chip set without needing a refresh.
+export async function setInventoryConfigurationsAction(input: {
+  inventoryItemId: number;
+  configurations: Configuration[];
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureNomenclatureSchema();
+  await ensureOrdersSchema();
+  const clean = normalizeConfigurations(input.configurations);
+  await db
+    .update(inventoryItems)
+    .set({ configurations: clean, updatedAt: new Date() })
+    .where(eq(inventoryItems.id, input.inventoryItemId));
+  await db
+    .update(nomenclatureParts)
+    .set({ configurations: clean, updatedAt: new Date() })
+    .where(eq(nomenclatureParts.inventoryItemId, input.inventoryItemId));
+  return { ok: true };
 }
 
 export async function removeInventoryAttachmentAction(input: {

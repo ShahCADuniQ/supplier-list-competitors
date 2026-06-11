@@ -119,6 +119,10 @@ export function ensureNomenclatureSchema(): Promise<void> {
       // element so legacy reads keep working.
       await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "products" jsonb DEFAULT '[]'::jsonb`);
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "products" jsonb DEFAULT '[]'::jsonb`);
+      // V97 — Mirror nomenclature_parts.configurations onto
+      // inventory_items so the InventoryDrawer can edit them on any
+      // row, including those auto-minted from RFQs.
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "configurations" jsonb DEFAULT '[]'::jsonb`);
       // Backfill from the existing scalar so the array is populated
       // for rows created before V92.
       await db.execute(sql`UPDATE "nomenclature_parts" SET "products" = jsonb_build_array("product") WHERE "product" IS NOT NULL AND ("products" IS NULL OR jsonb_array_length("products") = 0)`);

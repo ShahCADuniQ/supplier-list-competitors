@@ -2718,6 +2718,13 @@ export const inventoryItems = pgTable(
     // canonical multi-product value is in `products`.
     product: text("product"),
     products: jsonb("products").$type<string[]>().default([]),
+    // Configurations mirrored from nomenclature_parts so the
+    // InventoryDrawer can show + edit them regardless of how the
+    // inventory row was created (nomenclature generator OR auto-mint
+    // from RFQ).
+    configurations: jsonb("configurations")
+      .$type<Array<{ name: string; description: string | null }>>()
+      .default([]),
     createdByClerkId: text("created_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),

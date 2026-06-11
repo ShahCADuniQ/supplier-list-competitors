@@ -17,6 +17,8 @@ import {
   addInventoryAttachmentAction,
   getInventoryDetails,
   removeInventoryAttachmentAction,
+  setInventoryConfigurationsAction,
+  type Configuration,
   type DrawerAttachment,
   type DrawerChild,
   type DrawerParent,
@@ -405,48 +407,11 @@ function Body({
         </div>
       </Section>
 
-      {details.configurations.length > 0 && (
-        <Section title="Configurations">
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {details.configurations.map((c, i) => (
-              <div
-                key={i}
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  gap: 10,
-                  fontSize: 13,
-                }}
-              >
-                <span
-                  style={{
-                    minWidth: 64,
-                    padding: "3px 9px",
-                    borderRadius: 999,
-                    background:
-                      "color-mix(in srgb, var(--lb-accent) 14%, transparent)",
-                    color: "var(--lb-accent)",
-                    fontSize: 11,
-                    fontWeight: 700,
-                    textAlign: "center",
-                  }}
-                >
-                  {c.name}
-                </span>
-                <span
-                  style={{
-                    color: c.description
-                      ? "var(--lb-text-2)"
-                      : "var(--lb-text-3)",
-                  }}
-                >
-                  {c.description ?? "No description"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
+      <ConfigurationsSection
+        inventoryItemId={details.inventoryItemId}
+        initialConfigurations={details.configurations}
+        onMutated={onMutated}
+      />
 
       <AttachmentsSection
         inventoryItemId={details.inventoryItemId}
@@ -810,6 +775,335 @@ function NavList({
 }
 
 // ── Attachments ────────────────────────────────────────────────────────
+
+// Editable configurations section. Read-only display by default;
+// click "Edit" to enter chip-editor mode with add/remove rows and
+// a Save button. Always renders the section header so a user can
+// ADD configurations to a row that didn't have any.
+function ConfigurationsSection({
+  inventoryItemId,
+  initialConfigurations,
+  onMutated,
+}: {
+  inventoryItemId: number;
+  initialConfigurations: Configuration[];
+  onMutated: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftConfigs, setDraftConfigs] = useState<Configuration[]>(
+    initialConfigurations,
+  );
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+
+  // Keep the editor in sync if the drawer reloads after another
+  // mutation (e.g. attachment add) so the user doesn't lose context.
+  useEffect(() => {
+    if (!editing) setDraftConfigs(initialConfigurations);
+  }, [initialConfigurations, editing]);
+
+  function enterEdit() {
+    setDraftConfigs(initialConfigurations);
+    setEditing(true);
+    setErr(null);
+  }
+  function cancel() {
+    setEditing(false);
+    setErr(null);
+  }
+  function save() {
+    setErr(null);
+    start(async () => {
+      try {
+        await setInventoryConfigurationsAction({
+          inventoryItemId,
+          configurations: draftConfigs,
+        });
+        setEditing(false);
+        onMutated();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Save failed");
+      }
+    });
+  }
+
+  function addRow() {
+    setDraftConfigs((prev) => [...prev, { name: "", description: null }]);
+  }
+  function updateAt(i: number, patch: Partial<Configuration>) {
+    setDraftConfigs((prev) =>
+      prev.map((c, j) => (i === j ? { ...c, ...patch } : c)),
+    );
+  }
+  function removeAt(i: number) {
+    setDraftConfigs((prev) => prev.filter((_, j) => j !== i));
+  }
+
+  const title = `Configurations (${initialConfigurations.length})`;
+
+  return (
+    <section>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 8,
+        }}
+      >
+        <h3
+          style={{
+            margin: 0,
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: 0.6,
+            textTransform: "uppercase",
+            color: "var(--lb-text-3)",
+          }}
+        >
+          {title}
+        </h3>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={enterEdit}
+            style={{
+              fontSize: 11.5,
+              padding: "4px 10px",
+              borderRadius: 999,
+              border: "1px solid var(--lb-border)",
+              background: "transparent",
+              color: "var(--lb-accent)",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {initialConfigurations.length === 0 ? "+ Add" : "Edit"}
+          </button>
+        ) : (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              onClick={cancel}
+              disabled={pending}
+              style={{
+                fontSize: 11.5,
+                padding: "4px 10px",
+                borderRadius: 999,
+                border: "1px solid var(--lb-border)",
+                background: "transparent",
+                color: "var(--lb-text-2)",
+                cursor: pending ? "default" : "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={pending}
+              style={{
+                fontSize: 11.5,
+                fontWeight: 700,
+                padding: "4px 12px",
+                borderRadius: 999,
+                border: "none",
+                color: "#fff",
+                background:
+                  "linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)",
+                cursor: pending ? "default" : "pointer",
+              }}
+            >
+              {pending ? "Saving…" : "Save"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {!editing ? (
+        initialConfigurations.length === 0 ? (
+          <div
+            style={{
+              padding: "12px 14px",
+              borderRadius: 10,
+              border: "1px dashed var(--lb-border)",
+              fontSize: 12.5,
+              color: "var(--lb-text-3)",
+              textAlign: "center",
+            }}
+          >
+            No configurations yet — click <strong>+ Add</strong> above to
+            create one.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {initialConfigurations.map((c, i) => (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 10,
+                  fontSize: 13,
+                }}
+              >
+                <span
+                  style={{
+                    minWidth: 64,
+                    padding: "3px 9px",
+                    borderRadius: 999,
+                    background:
+                      "color-mix(in srgb, var(--lb-accent) 14%, transparent)",
+                    color: "var(--lb-accent)",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    textAlign: "center",
+                  }}
+                >
+                  {c.name}
+                </span>
+                <span
+                  style={{
+                    color: c.description
+                      ? "var(--lb-text-2)"
+                      : "var(--lb-text-3)",
+                  }}
+                >
+                  {c.description ?? "No description"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            padding: 10,
+            borderRadius: 10,
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+          }}
+        >
+          {draftConfigs.length === 0 && (
+            <span
+              style={{
+                fontSize: 12,
+                color: "var(--lb-text-3)",
+                padding: "4px 2px",
+              }}
+            >
+              No configurations yet — click <strong>+ Add configuration</strong>{" "}
+              to add one. Each gets a name and a description.
+            </span>
+          )}
+          {draftConfigs.map((c, i) => (
+            <div
+              key={i}
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "minmax(110px, 1fr) minmax(160px, 2fr) auto",
+                gap: 8,
+                alignItems: "flex-start",
+              }}
+            >
+              <input
+                value={c.name}
+                onChange={(e) =>
+                  updateAt(i, { name: e.target.value.toUpperCase() })
+                }
+                placeholder="e.g. ENC"
+                aria-label={`Configuration ${i + 1} name`}
+                style={{
+                  padding: "8px 10px",
+                  fontSize: 12.5,
+                  borderRadius: 8,
+                  border: "1px solid var(--lb-border)",
+                  background: "var(--lb-bg)",
+                  color: "var(--lb-text)",
+                  fontFamily: "var(--lb-font-mono, monospace)",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  outline: "none",
+                }}
+              />
+              <input
+                value={c.description ?? ""}
+                onChange={(e) =>
+                  updateAt(i, {
+                    description: e.target.value ? e.target.value : null,
+                  })
+                }
+                placeholder="Description (optional)"
+                aria-label={`Configuration ${i + 1} description`}
+                style={{
+                  padding: "8px 10px",
+                  fontSize: 12.5,
+                  borderRadius: 8,
+                  border: "1px solid var(--lb-border)",
+                  background: "var(--lb-bg)",
+                  color: "var(--lb-text)",
+                  outline: "none",
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => removeAt(i)}
+                aria-label={`Remove configuration ${i + 1}`}
+                style={{
+                  padding: "6px 10px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: "transparent",
+                  border: "1px solid var(--lb-border)",
+                  borderRadius: 8,
+                  color: "var(--lb-text-3)",
+                  cursor: "pointer",
+                }}
+                title="Remove"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={addRow}
+            style={{
+              alignSelf: "flex-start",
+              padding: "6px 12px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              background: "transparent",
+              border: "1px dashed var(--lb-accent)",
+              color: "var(--lb-accent)",
+              borderRadius: 999,
+              cursor: "pointer",
+            }}
+          >
+            + Add configuration
+          </button>
+          {err && (
+            <div
+              style={{
+                padding: 8,
+                borderRadius: 6,
+                background: "rgba(239,68,68,0.08)",
+                color: "#dc2626",
+                fontSize: 12,
+              }}
+            >
+              {err}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function AttachmentsSection({
   inventoryItemId,
