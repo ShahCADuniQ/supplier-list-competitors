@@ -278,7 +278,7 @@ export default function PlaceOrderDialog({
             }}
           >
             ⚠ You haven&apos;t connected an email account yet.{" "}
-            <a href="/settings/email" style={{ color: "#ea580c", textDecoration: "underline" }}>
+            <a href="/settings#email" style={{ color: "#ea580c", textDecoration: "underline" }}>
               Connect Outlook or Gmail
             </a>{" "}
             so suppliers see your real address. Until then, outbound mail logs

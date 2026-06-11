@@ -165,9 +165,9 @@ export default function Sidebar({
           signed-in user, regardless of tenant access. */}
       <div className="flex flex-col items-center gap-2 mt-auto">
         <Link
-          href="/settings/email"
-          title="Settings — connect email"
-          aria-label="Settings"
+          href="/settings"
+          title="Manage Account"
+          aria-label="Manage Account"
           aria-current={
             pathname === "/settings/email" ||
             pathname.startsWith("/settings/")

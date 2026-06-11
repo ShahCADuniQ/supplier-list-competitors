@@ -107,9 +107,9 @@ export default function TopBar({
 
       <Show when="signed-in">
         <Link
-          href="/settings/email"
-          title="Settings — email & integrations"
-          aria-label="Settings"
+          href="/settings"
+          title="Manage Account"
+          aria-label="Manage Account"
           className="inline-flex items-center justify-center"
           style={{
             width: 40,

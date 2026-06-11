@@ -101,9 +101,9 @@ export default function AppShell({
           <CaduniqLogo href="/" height={60} />
           <div className="flex items-center gap-3">
             <Link
-              href="/settings/email"
-              title="Settings"
-              aria-label="Settings"
+              href="/settings"
+              title="Manage Account"
+              aria-label="Manage Account"
               style={{
                 display: "inline-flex",
                 alignItems: "center",

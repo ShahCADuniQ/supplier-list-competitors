@@ -17,7 +17,7 @@ function diagnostic(provider: EmailProvider, missing: string[]): Response {
       <p>The server is missing OAuth credentials for this provider. Add the following to <code>.env</code> and restart <code>next dev</code>:</p>
       <ul>${items}</ul>
       <p>See <code>docs/rfq-email.md</code> for the Azure / Google Cloud setup walkthrough.</p>
-      <p style="margin-top:24px"><a href="/settings/email">← Back to Email settings</a></p>
+      <p style="margin-top:24px"><a href="/settings#email">← Back to Manage Account</a></p>
     </body></html>`,
     { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );

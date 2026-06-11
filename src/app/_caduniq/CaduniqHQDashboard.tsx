@@ -178,7 +178,7 @@ export default function CaduniqHQDashboard({
           >
             {emailStatus.configured ? (
               <Link
-                href="/settings/email"
+                href="/settings#email"
                 title={`Email connected: ${emailStatus.fromAddress ?? ""}`}
                 style={{
                   display: "inline-flex",
@@ -199,7 +199,7 @@ export default function CaduniqHQDashboard({
               </Link>
             ) : (
               <Link
-                href="/settings/email"
+                href="/settings#email"
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -218,7 +218,7 @@ export default function CaduniqHQDashboard({
               </Link>
             )}
             <Link
-              href="/settings/email"
+              href="/settings#email"
               title="Settings"
               aria-label="Settings"
               style={{

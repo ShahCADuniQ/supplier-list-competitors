@@ -33,7 +33,7 @@ export async function handleOAuthCallback(
 
   if (error) {
     return html(
-      `<h1>Authorisation failed</h1><p>${error}</p><p>${errorDesc ?? ""}</p><p><a href="/settings/email">Back to settings</a></p>`,
+      `<h1>Authorisation failed</h1><p>${error}</p><p>${errorDesc ?? ""}</p><p><a href="/settings#email">Back to settings</a></p>`,
       400,
     );
   }
@@ -86,12 +86,12 @@ export async function handleOAuthCallback(
     jar.delete(STATE_COOKIE);
     return new Response(null, {
       status: 302,
-      headers: { Location: "/settings/email?connected=" + provider },
+      headers: { Location: "/settings?connected=" + provider + "#email" },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return html(
-      `<h1>Could not finish connecting</h1><pre style="white-space:pre-wrap">${msg.replace(/</g, "&lt;")}</pre><p><a href="/settings/email">Back to settings</a></p>`,
+      `<h1>Could not finish connecting</h1><pre style="white-space:pre-wrap">${msg.replace(/</g, "&lt;")}</pre><p><a href="/settings#email">Back to settings</a></p>`,
       500,
     );
   }

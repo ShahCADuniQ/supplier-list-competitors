@@ -208,7 +208,7 @@ export default function RfqEmailDraftDialog({
             }}
           >
             ⚠ You haven&apos;t connected an email account yet.{" "}
-            <a href="/settings/email" style={{ color: "#ea580c", textDecoration: "underline" }}>
+            <a href="/settings#email" style={{ color: "#ea580c", textDecoration: "underline" }}>
               Connect Outlook or Gmail
             </a>{" "}
             so the RFQ goes out from your own address. Until then it logs to
