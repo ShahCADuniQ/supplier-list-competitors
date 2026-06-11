@@ -73,6 +73,77 @@ function parseDraggedItemIds(dt: DataTransfer): number[] {
   return Array.from(out);
 }
 
+// iOS-photos-style stacked drag image. Builds an absolutely-
+// positioned wrapper offscreen (left: -9999px) containing up to four
+// fanned-out card thumbnails plus a "× N" badge so multi-drags feel
+// tactile. The caller hands the wrapper to dataTransfer.setDragImage
+// and removes it on the next tick — the browser has already
+// rasterised the bitmap by then.
+function buildStackedDragGhost(
+  codes: string[],
+  totalCount: number,
+): HTMLDivElement {
+  const wrap = document.createElement("div");
+  wrap.style.position = "fixed";
+  wrap.style.top = "-9999px";
+  wrap.style.left = "-9999px";
+  wrap.style.width = "260px";
+  wrap.style.height = "120px";
+  wrap.style.pointerEvents = "none";
+  wrap.style.fontFamily = "system-ui, sans-serif";
+
+  const visible = codes.slice(0, Math.min(4, codes.length));
+  visible.forEach((code, i) => {
+    const card = document.createElement("div");
+    const rot = (i - (visible.length - 1) / 2) * 5; // fan -7.5° .. +7.5°
+    const offsetX = i * 8;
+    const offsetY = i * 4;
+    card.style.position = "absolute";
+    card.style.left = `${offsetX}px`;
+    card.style.top = `${offsetY}px`;
+    card.style.width = "200px";
+    card.style.padding = "10px 12px";
+    card.style.borderRadius = "10px";
+    card.style.background = "#ffffff";
+    card.style.border = "1px solid rgba(15,23,42,0.18)";
+    card.style.boxShadow = "0 10px 24px -10px rgba(15,23,42,0.45)";
+    card.style.transform = `rotate(${rot}deg)`;
+    card.style.transformOrigin = "30px 30px";
+    card.style.fontSize = "10px";
+    card.style.fontWeight = "700";
+    card.style.color = "#0f172a";
+    card.style.wordBreak = "break-all";
+    card.style.lineHeight = "1.3";
+    card.textContent = code;
+    wrap.appendChild(card);
+  });
+
+  // "× N" badge in the top-right corner so the user knows how many
+  // items they're dragging at a glance.
+  if (totalCount > 1) {
+    const badge = document.createElement("div");
+    badge.style.position = "absolute";
+    badge.style.top = "-6px";
+    badge.style.right = "-6px";
+    badge.style.minWidth = "28px";
+    badge.style.height = "28px";
+    badge.style.padding = "0 8px";
+    badge.style.borderRadius = "999px";
+    badge.style.background = "#dc2626";
+    badge.style.color = "#fff";
+    badge.style.fontSize = "12px";
+    badge.style.fontWeight = "800";
+    badge.style.display = "flex";
+    badge.style.alignItems = "center";
+    badge.style.justifyContent = "center";
+    badge.style.boxShadow = "0 4px 10px -2px rgba(220,38,38,0.6)";
+    badge.style.zIndex = "10";
+    badge.textContent = `${totalCount}`;
+    wrap.appendChild(badge);
+  }
+  return wrap;
+}
+
 // Three fixed classification codes; every generated full-code starts
 // with one of these.
 const CLASSIFICATIONS: Array<{
@@ -1683,7 +1754,7 @@ function DatabaseTab({
         </ul>
       )}
         </div>
-        {productSpecific && <InventoryPalette parts={parts} />}
+        {productSpecific && <InventoryPalette parts={parts} openDrawer={openDrawer} />}
       </div>
     </section>
   );
@@ -3714,7 +3785,13 @@ function ConfigurationsEditor({
 // any PartRowItem master OR ChildCard target. Shown only in the
 // product-specific view, where the main list is filtered to masters
 // and the user needs a way to reach everything else.
-function InventoryPalette({ parts }: { parts: PartRow[] }) {
+function InventoryPalette({
+  parts,
+  openDrawer,
+}: {
+  parts: PartRow[];
+  openDrawer: (inventoryItemId: number) => void;
+}) {
   const [q, setQ] = useState("");
   // Set of inventoryItemIds the user has checked. Multi-drag: when
   // the user drags any selected row, the whole set rides along.
@@ -3887,9 +3964,12 @@ function InventoryPalette({ parts }: { parts: PartRow[] }) {
                 p.inventoryItemId != null && selected.has(p.inventoryItemId)
               }
               selectedIds={selected}
+              allParts={parts}
               onToggle={() => {
                 if (p.inventoryItemId != null) toggle(p.inventoryItemId);
               }}
+              onDropCompleted={clearSelection}
+              onOpen={openDrawer}
             />
           ))
         )}
@@ -3902,12 +3982,23 @@ function PaletteRow({
   part,
   selected,
   selectedIds,
+  allParts,
   onToggle,
+  onDropCompleted,
+  onOpen,
 }: {
   part: PartRow;
   selected: boolean;
   selectedIds: Set<number>;
+  allParts: PartRow[];
   onToggle: () => void;
+  // Called when this row's drag finishes successfully. Clears the
+  // multi-select set so the highlight goes away once the user has
+  // dropped — otherwise rows stay visually selected after the drop.
+  onDropCompleted: () => void;
+  // Click anywhere on the row body (outside the checkbox) opens the
+  // unified InventoryDrawer for this part.
+  onOpen: (inventoryItemId: number) => void;
 }) {
   const [grabbing, setGrabbing] = useState(false);
   const isAssembly = part.partOrAssembly === "A";
@@ -3915,6 +4006,12 @@ function PaletteRow({
   return (
     <div
       draggable
+      onClick={(e) => {
+        // Don't intercept clicks on the checkbox itself (its own
+        // handler already calls stopPropagation, but be defensive).
+        if (e.target instanceof HTMLElement && e.target.tagName === "INPUT") return;
+        if (part.inventoryItemId != null) onOpen(part.inventoryItemId);
+      }}
       onDragStart={(e) => {
         if (part.inventoryItemId == null) return;
         // Drag set:
@@ -3940,13 +4037,39 @@ function PaletteRow({
           String(ids[0]),
         );
         e.dataTransfer.effectAllowed = "link";
+
+        // iOS-style stacked drag image for multi-select. Builds a
+        // fanned-out card stack offscreen, hands it to
+        // setDragImage(), then removes it on the next tick (browser
+        // has already snapshotted the bitmap by then).
+        if (ids.length > 1) {
+          const codes: string[] = [];
+          for (const id of ids) {
+            const p = allParts.find((x) => x.inventoryItemId === id);
+            if (p) codes.push(p.fullCode);
+            if (codes.length === 4) break;
+          }
+          const ghost = buildStackedDragGhost(codes, ids.length);
+          document.body.appendChild(ghost);
+          e.dataTransfer.setDragImage(ghost, 28, 28);
+          setTimeout(() => ghost.remove(), 0);
+        }
+
         setGrabbing(true);
       }}
-      onDragEnd={() => setGrabbing(false)}
+      onDragEnd={(e) => {
+        setGrabbing(false);
+        // dropEffect === "none" means the user dropped on something
+        // that didn't accept the drop (or pressed Esc) — keep the
+        // selection so they can retry. Otherwise clear.
+        if (e.dataTransfer.dropEffect !== "none") {
+          onDropCompleted();
+        }
+      }}
       title={
         selected && selectedIds.size > 1
-          ? `Drag to link ${selectedIds.size} selected items as children`
-          : `Drag onto an assembly to link ${part.fullCode} as a child`
+          ? `Drag to link ${selectedIds.size} selected items as children · click to open`
+          : `Drag onto an assembly to link ${part.fullCode} · click to open`
       }
       style={{
         padding: "9px 10px",
