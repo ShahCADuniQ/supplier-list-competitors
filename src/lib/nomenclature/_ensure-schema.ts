@@ -59,6 +59,25 @@ export function ensureNomenclatureSchema(): Promise<void> {
       await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "part_or_assembly" text`);
       // V80 — Circular shape support: DXXXX replaces WXXXX-HXXXX.
       await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "diameter_mm" integer`);
+
+      // V83 — assembly_bom: many-to-many edge table for the
+      // assembly tree. Lazy-created here so the nomenclature page works
+      // even when /suppliers hasn't been opened yet.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "assembly_bom" (
+          "id" serial PRIMARY KEY,
+          "parent_assembly_id" integer NOT NULL REFERENCES "inventory_items"("id") ON DELETE CASCADE,
+          "child_item_id" integer NOT NULL REFERENCES "inventory_items"("id") ON DELETE CASCADE,
+          "quantity" integer NOT NULL DEFAULT 1,
+          "position" integer NOT NULL DEFAULT 0,
+          "notes" text,
+          "created_by_clerk_id" text,
+          "created_at" timestamp NOT NULL DEFAULT now(),
+          "updated_at" timestamp NOT NULL DEFAULT now()
+        )`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "assembly_bom_parent_idx" ON "assembly_bom" ("parent_assembly_id")`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "assembly_bom_child_idx" ON "assembly_bom" ("child_item_id")`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "assembly_bom_unique_edge_idx" ON "assembly_bom" ("parent_assembly_id","child_item_id")`);
     } catch (e) {
       _ensured = null;
       throw e;

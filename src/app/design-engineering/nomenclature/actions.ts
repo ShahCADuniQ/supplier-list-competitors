@@ -22,16 +22,25 @@
 //                                              detaches the inventory row.
 
 import { revalidatePath } from "next/cache";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   inventoryItems,
   nomenclatureParts,
   nomenclatureStandards,
+  supplierProducts,
+  suppliers,
 } from "@/db/schema";
 import { getOrCreateProfile } from "@/lib/permissions";
 import { ensureNomenclatureSchema } from "@/lib/nomenclature/_ensure-schema";
 import { ensureOrdersSchema } from "@/app/suppliers/_ensure-orders-schema";
+import {
+  buildAssemblyTree,
+  maxProducible,
+  removeAssemblyEdge,
+  upsertAssemblyEdge,
+  type TreeNode,
+} from "@/lib/nomenclature/assembly-tree";
 import {
   scanHardwaresFolder,
   writeNewStandardFile,
@@ -333,7 +342,16 @@ export async function savePartCode(input: {
   kind?: "part" | "assembly";
   configurations?: Configuration[];
   parentPartId?: number | null;
-}): Promise<{ id: number; uniqueId: string; fullCode: string }> {
+  // PHS only — optional. When provided we also create a row in
+  // supplier_products linking this part to the supplier's catalogue.
+  supplierId?: number | null;
+  supplierProductUrl?: string | null;
+}): Promise<{
+  id: number;
+  uniqueId: string;
+  fullCode: string;
+  supplierProductId: number | null;
+}> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");
   await ensureNomenclatureSchema();
@@ -395,7 +413,34 @@ export async function savePartCode(input: {
     })
     .returning({ id: nomenclatureParts.id });
 
-  return { id: inserted.id, uniqueId, fullCode };
+  // PHS-only side effect: also create a row in the supplier catalogue
+  // so this code shows up under /suppliers → catalogue. We only do
+  // this when the caller passes a supplierId; without one we leave the
+  // user to attach the supplier later from the catalogue page.
+  let supplierProductId: number | null = null;
+  if (classification === "PHS" && input.supplierId) {
+    try {
+      const [sp] = await db
+        .insert(supplierProducts)
+        .values({
+          supplierId: input.supplierId,
+          name: input.name ?? fullCode,
+          productCode: fullCode,
+          description: input.description ?? null,
+          productUrl: input.supplierProductUrl ?? null,
+          createdByClerkId: profile.clerkUserId,
+        })
+        .returning({ id: supplierProducts.id });
+      supplierProductId = sp?.id ?? null;
+    } catch (e) {
+      console.warn(
+        "[nomenclature] failed to create supplier_products row:",
+        e,
+      );
+    }
+  }
+
+  return { id: inserted.id, uniqueId, fullCode, supplierProductId };
 }
 
 // ── Edit (name + description + configurations) ──────────────────────────
@@ -597,6 +642,135 @@ export async function extractHardwareFromUrlAction(input: {
   };
 }
 
+// ── Supplier picker (used by the PHS form on the Part/Assembly tab) ────
+
+export type SupplierOption = {
+  id: number;
+  name: string;
+  origin: string | null;
+};
+
+export async function listSupplierOptions(): Promise<SupplierOption[]> {
+  const profile = await getOrCreateProfile();
+  if (!profile) return [];
+  const rows = await db
+    .select({
+      id: suppliers.id,
+      name: suppliers.name,
+      origin: suppliers.origin,
+    })
+    .from(suppliers)
+    .orderBy(asc(suppliers.name));
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    origin: r.origin ?? null,
+  }));
+}
+
+// ── Assembly tree (used by the Database tab + new Assembly editor) ─────
+
+export type AssemblyTreeNode = TreeNode;
+
+export type InventoryPickerRow = {
+  itemId: number;
+  code: string;
+  name: string | null;
+  kind: "part" | "assembly";
+  stock: number;
+};
+
+// Lists every non-archived inventory item except the assembly itself,
+// so the "Add child" picker on /design-engineering/nomenclature has
+// something to render. Filters to the same assembly's subtree-safe
+// candidates is left to the server upsert (cycle guard).
+export async function listInventoryPickerOptions(args: {
+  excludeItemId?: number;
+}): Promise<InventoryPickerRow[]> {
+  const profile = await getOrCreateProfile();
+  if (!profile) return [];
+  await ensureOrdersSchema();
+  const rows = await db
+    .select({
+      id: inventoryItems.id,
+      code: inventoryItems.code,
+      name: inventoryItems.name,
+      kind: inventoryItems.kind,
+      confirmedQty: inventoryItems.confirmedQty,
+    })
+    .from(inventoryItems)
+    .where(eq(inventoryItems.archived, false))
+    .orderBy(desc(inventoryItems.createdAt));
+  return rows
+    .filter((r) => r.id !== args.excludeItemId)
+    .map((r) => ({
+      itemId: r.id,
+      code: r.code,
+      name: r.name ?? null,
+      kind: r.kind === "assembly" ? "assembly" : "part",
+      stock: r.confirmedQty ?? 0,
+    }));
+}
+
+export async function getAssemblyTree(input: {
+  inventoryItemId: number;
+}): Promise<AssemblyTreeNode | null> {
+  const profile = await getOrCreateProfile();
+  if (!profile) return null;
+  await ensureOrdersSchema();
+  return await buildAssemblyTree(input.inventoryItemId);
+}
+
+export async function addAssemblyChildAction(input: {
+  parentInventoryItemId: number;
+  childInventoryItemId: number;
+  quantity: number;
+  notes?: string | null;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  // Flip the parent to kind='assembly' so the tree calculation treats
+  // it as one. This is a no-op if it already was.
+  await db
+    .update(inventoryItems)
+    .set({ kind: "assembly", updatedAt: new Date() })
+    .where(eq(inventoryItems.id, input.parentInventoryItemId));
+  await upsertAssemblyEdge({
+    parentAssemblyId: input.parentInventoryItemId,
+    childItemId: input.childInventoryItemId,
+    quantity: input.quantity,
+    notes: input.notes ?? null,
+    createdByClerkId: profile.clerkUserId,
+  });
+  return { ok: true };
+}
+
+export async function removeAssemblyChildAction(input: {
+  parentInventoryItemId: number;
+  childInventoryItemId: number;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  await removeAssemblyEdge({
+    parentAssemblyId: input.parentInventoryItemId,
+    childItemId: input.childInventoryItemId,
+  });
+  return { ok: true };
+}
+
+export async function getMaxProducible(input: {
+  inventoryItemId: number;
+}): Promise<number> {
+  const profile = await getOrCreateProfile();
+  if (!profile) return 0;
+  await ensureOrdersSchema();
+  return await maxProducible(input.inventoryItemId);
+}
+
 // Suppress unused-import warning if drizzle-orm helpers shift later.
 void and;
 void isNull;
+void inArray;
+void sql;

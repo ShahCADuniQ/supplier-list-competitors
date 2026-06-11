@@ -2858,3 +2858,44 @@ export const nomenclatureParts = pgTable(
   }),
 );
 export type NomenclaturePart = typeof nomenclatureParts.$inferSelect;
+
+// Assembly BOM — many-to-many edge table linking an assembly to its
+// children. Both parent and child are inventory_items rows. A part can
+// be a leaf (no row in this table as parent); an assembly that's itself
+// nested under another assembly shows up twice (once as a parent_id,
+// once as a child_id). Quantity is the count of this child required to
+// build one of the parent.
+export const assemblyBom = pgTable(
+  "assembly_bom",
+  {
+    id: serial("id").primaryKey(),
+    // Parent — must have inventory_items.kind = 'assembly'. Enforced at
+    // the action layer, not in SQL.
+    parentAssemblyId: integer("parent_assembly_id")
+      .notNull()
+      .references(() => inventoryItems.id, { onDelete: "cascade" }),
+    // Child — can be a part OR a sub-assembly.
+    childItemId: integer("child_item_id")
+      .notNull()
+      .references(() => inventoryItems.id, { onDelete: "cascade" }),
+    quantity: integer("quantity").notNull().default(1),
+    // Free-form ordering hint for the tree view (smaller = higher).
+    position: integer("position").notNull().default(0),
+    // Optional free-text — e.g. "M5 socket head, north wall".
+    notes: text("notes"),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    parentIdx: index("assembly_bom_parent_idx").on(t.parentAssemblyId),
+    childIdx: index("assembly_bom_child_idx").on(t.childItemId),
+    // One row per (parent, child) — adding the same child twice updates
+    // the quantity rather than duplicating the edge.
+    uniqEdgeIdx: uniqueIndex("assembly_bom_unique_edge_idx").on(
+      t.parentAssemblyId,
+      t.childItemId,
+    ),
+  }),
+);
+export type AssemblyBomRow = typeof assemblyBom.$inferSelect;

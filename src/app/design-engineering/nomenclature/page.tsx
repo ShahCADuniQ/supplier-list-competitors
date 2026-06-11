@@ -22,6 +22,7 @@ import {
   importStandardsFromFolder,
   listParts,
   listStandards,
+  listSupplierOptions,
 } from "./actions";
 import NomenclatureGenerator from "./NomenclatureGenerator";
 
@@ -54,12 +55,14 @@ export default async function NomenclaturePage({
   }
   const standards = await listStandards();
   const parts = await listParts();
+  const supplierOptions = await listSupplierOptions();
 
   return (
     <NomenclatureGenerator
       standards={standards}
       parts={parts}
       scanResult={scanResult}
+      supplierOptions={supplierOptions}
     />
   );
 }

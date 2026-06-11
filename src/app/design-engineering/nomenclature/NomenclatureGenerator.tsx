@@ -13,16 +13,23 @@
 
 import { useMemo, useState, useTransition } from "react";
 import {
+  addAssemblyChildAction,
   addUserStandard,
   deletePart,
   extractHardwareFromUrlAction,
+  getAssemblyTree,
+  listInventoryPickerOptions,
+  removeAssemblyChildAction,
   saveHardwarePart,
   savePartCode,
   suggestTemplateAction,
   updatePart,
+  type AssemblyTreeNode,
   type Configuration,
+  type InventoryPickerRow,
   type PartRow,
   type StandardRow,
+  type SupplierOption,
 } from "./actions";
 
 // Three fixed classification codes; every generated full-code starts
@@ -49,10 +56,12 @@ export default function NomenclatureGenerator({
   standards: initialStandards,
   parts: initialParts,
   scanResult,
+  supplierOptions,
 }: {
   standards: StandardRow[];
   parts: PartRow[];
   scanResult: ScanResult;
+  supplierOptions: SupplierOption[];
 }) {
   const [tab, setTab] = useState<Tab>("hardware");
   const [standards, setStandards] = useState<StandardRow[]>(initialStandards);
@@ -82,7 +91,10 @@ export default function NomenclatureGenerator({
         />
       )}
       {tab === "part" && (
-        <PartIdTab onSaved={(p) => setParts((prev) => [p, ...prev])} />
+        <PartIdTab
+          supplierOptions={supplierOptions}
+          onSaved={(p) => setParts((prev) => [p, ...prev])}
+        />
       )}
       {tab === "database" && (
         <DatabaseTab
@@ -875,8 +887,10 @@ function NewFamilyButton({
 // ── Part/Assembly ID Generator ──────────────────────────────────────────
 
 function PartIdTab({
+  supplierOptions,
   onSaved,
 }: {
+  supplierOptions: SupplierOption[];
   onSaved: (p: PartRow) => void;
 }) {
   const [classification, setClassification] = useState<
@@ -891,6 +905,8 @@ function PartIdTab({
   const [length, setLength] = useState<string>("");
   const [kind, setKind] = useState<"part" | "assembly">("part");
   const [configurations, setConfigurations] = useState<Configuration[]>([]);
+  const [supplierId, setSupplierId] = useState<number | "">("");
+  const [supplierUrl, setSupplierUrl] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [saving, start] = useTransition();
@@ -919,6 +935,14 @@ function PartIdTab({
           lengthMm: length.trim() ? Math.round(Number(length)) : null,
           kind,
           configurations,
+          supplierId:
+            classification === "PHS" && typeof supplierId === "number"
+              ? supplierId
+              : null,
+          supplierProductUrl:
+            classification === "PHS" && supplierUrl.trim()
+              ? supplierUrl.trim()
+              : null,
         });
         setGeneratedCode(r.fullCode);
         onSaved({
@@ -942,6 +966,8 @@ function PartIdTab({
         setDiameter("");
         setLength("");
         setConfigurations([]);
+        setSupplierId("");
+        setSupplierUrl("");
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Save failed");
       }
@@ -974,6 +1000,12 @@ function PartIdTab({
           <code>WXXXX</code> / <code>HXXXX</code> / <code>LXXXX</code> /{" "}
           <code>DXXXX</code> in the code. All segments are uppercased
           automatically.
+        </li>
+        <li>
+          When class code is <strong>PHS</strong>, picking a supplier
+          also writes a row into the supplier catalogue. Skip the
+          supplier and you can link it later from{" "}
+          <code>/suppliers</code>.
         </li>
       </ul>
 
@@ -1015,6 +1047,40 @@ function PartIdTab({
           />
         </label>
       </div>
+
+      {classification === "PHS" && (
+        <div style={{ ...ROW, gridTemplateColumns: "1fr 2fr" }}>
+          <label style={FIELD}>
+            <span style={LABEL}>Supplier (catalogue link)</span>
+            <select
+              value={supplierId === "" ? "" : String(supplierId)}
+              onChange={(e) =>
+                setSupplierId(
+                  e.target.value === "" ? "" : Number(e.target.value),
+                )
+              }
+              style={INPUT}
+            >
+              <option value="">Skip — set later from /suppliers</option>
+              {supplierOptions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                  {s.origin ? ` · ${s.origin}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={FIELD}>
+            <span style={LABEL}>Vendor product URL (optional)</span>
+            <input
+              value={supplierUrl}
+              onChange={(e) => setSupplierUrl(e.target.value)}
+              placeholder="https://mcmaster.com/91290A192"
+              style={INPUT}
+            />
+          </label>
+        </div>
+      )}
 
       <div style={ROW}>
         <label style={FIELD}>
@@ -1413,6 +1479,10 @@ function PartRowItem({
         </div>
       )}
 
+      {part.partOrAssembly === "A" && part.inventoryItemId != null && (
+        <AssemblyContentsSection inventoryItemId={part.inventoryItemId} />
+      )}
+
       {editing && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <label style={FIELD}>
@@ -1446,6 +1516,396 @@ function PartRowItem({
         </div>
       )}
     </li>
+  );
+}
+
+// ── Assembly contents (tree + add/remove) ───────────────────────────────
+
+function AssemblyContentsSection({
+  inventoryItemId,
+}: {
+  inventoryItemId: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [tree, setTree] = useState<AssemblyTreeNode | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const reload = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const t = await getAssemblyTree({ inventoryItemId });
+      setTree(t);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not load tree");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  function toggle() {
+    if (!open) reload();
+    setOpen((v) => !v);
+  }
+
+  return (
+    <div
+      style={{
+        borderTop: "1px dashed var(--lb-border)",
+        paddingTop: 10,
+        marginTop: 4,
+      }}
+    >
+      <button
+        type="button"
+        onClick={toggle}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: "var(--lb-accent)",
+          fontSize: 12.5,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          textTransform: "uppercase",
+          cursor: "pointer",
+          padding: 0,
+        }}
+      >
+        {open ? "▾" : "▸"} Assembly contents
+        {tree?.buildableFromStock != null && (
+          <span
+            style={{
+              marginLeft: 10,
+              padding: "2px 10px",
+              borderRadius: 999,
+              fontSize: 11,
+              fontWeight: 700,
+              background:
+                tree.buildableFromStock > 0
+                  ? "rgba(16,185,129,0.14)"
+                  : "rgba(239,68,68,0.12)",
+              color:
+                tree.buildableFromStock > 0 ? "#10b981" : "#dc2626",
+              border: `1px solid ${
+                tree.buildableFromStock > 0
+                  ? "rgba(16,185,129,0.40)"
+                  : "rgba(239,68,68,0.40)"
+              }`,
+            }}
+          >
+            Can build {tree.buildableFromStock}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          {loading && (
+            <div style={{ fontSize: 12, color: "var(--lb-text-3)" }}>
+              Loading tree…
+            </div>
+          )}
+          {err && <ErrorBox message={err} />}
+          {tree && (
+            <>
+              <TreeView node={tree} root />
+              <AddChildRow
+                parentInventoryItemId={inventoryItemId}
+                directChildren={tree.children}
+                onAdded={reload}
+              />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TreeView({ node, root }: { node: AssemblyTreeNode; root?: boolean }) {
+  const isAssembly = node.kind === "assembly";
+  const lacks =
+    !root &&
+    node.quantity > 0 &&
+    node.stock + (node.buildableFromStock ?? 0) < node.quantity;
+  return (
+    <ul
+      style={{
+        listStyle: "none",
+        paddingLeft: root ? 0 : 16,
+        margin: 0,
+        borderLeft: root ? "none" : "1px solid var(--lb-border)",
+      }}
+    >
+      <li
+        style={{
+          padding: "6px 8px",
+          borderRadius: 8,
+          background: root ? "transparent" : "var(--lb-bg-elev)",
+          marginLeft: root ? 0 : 6,
+          marginBottom: 6,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <span style={{ fontSize: 13 }}>{isAssembly ? "🧩" : "🔧"}</span>
+        <code style={{ fontSize: 12.5, fontWeight: 700 }}>{node.code}</code>
+        {node.name && (
+          <span style={{ fontSize: 12, color: "var(--lb-text-2)" }}>
+            · {node.name}
+          </span>
+        )}
+        {!root && (
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: "var(--lb-text-2)",
+              padding: "1px 7px",
+              borderRadius: 999,
+              background: "var(--lb-bg)",
+              border: "1px solid var(--lb-border)",
+            }}
+          >
+            × {node.quantity}
+          </span>
+        )}
+        <span
+          style={{
+            fontSize: 11,
+            color: lacks ? "#dc2626" : "var(--lb-text-3)",
+            marginLeft: "auto",
+          }}
+          title={
+            isAssembly
+              ? `${node.stock} on hand · ${node.buildableFromStock ?? 0} more buildable`
+              : `${node.stock} on hand`
+          }
+        >
+          stock {node.stock}
+          {isAssembly && node.buildableFromStock != null && (
+            <span style={{ marginLeft: 4, color: "var(--lb-text-3)" }}>
+              (+{node.buildableFromStock} buildable)
+            </span>
+          )}
+        </span>
+      </li>
+      {node.children.map((c) => (
+        <TreeView key={`${node.itemId}-${c.itemId}`} node={c} />
+      ))}
+    </ul>
+  );
+}
+
+function AddChildRow({
+  parentInventoryItemId,
+  directChildren,
+  onAdded,
+}: {
+  parentInventoryItemId: number;
+  directChildren: AssemblyTreeNode[];
+  onAdded: () => void;
+}) {
+  const [options, setOptions] = useState<InventoryPickerRow[]>([]);
+  const [childId, setChildId] = useState<number | "">("");
+  const [qty, setQty] = useState<string>("1");
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [pending, start] = useTransition();
+
+  async function loadOptions() {
+    setLoading(true);
+    try {
+      const opts = await listInventoryPickerOptions({
+        excludeItemId: parentInventoryItemId,
+      });
+      setOptions(opts);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function add() {
+    if (typeof childId !== "number") {
+      setErr("Pick a child first");
+      return;
+    }
+    setErr(null);
+    start(async () => {
+      try {
+        await addAssemblyChildAction({
+          parentInventoryItemId,
+          childInventoryItemId: childId,
+          quantity: Math.max(1, Math.floor(Number(qty) || 1)),
+        });
+        setChildId("");
+        setQty("1");
+        onAdded();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Could not add child");
+      }
+    });
+  }
+
+  function remove(childInventoryItemId: number) {
+    if (!confirm("Remove this child from the assembly?")) return;
+    setErr(null);
+    start(async () => {
+      try {
+        await removeAssemblyChildAction({
+          parentInventoryItemId,
+          childInventoryItemId,
+        });
+        onAdded();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Could not remove child");
+      }
+    });
+  }
+
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: 12,
+        borderRadius: 10,
+        border: "1px solid var(--lb-border)",
+        background: "var(--lb-bg)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 8,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            textTransform: "uppercase",
+            color: "var(--lb-text-3)",
+          }}
+        >
+          Add a child to this assembly
+        </span>
+        {!options.length && (
+          <button
+            type="button"
+            onClick={loadOptions}
+            disabled={loading}
+            style={LINK_BTN}
+          >
+            {loading ? "Loading…" : "Load picker"}
+          </button>
+        )}
+      </div>
+      {options.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "2fr 80px auto",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
+          <select
+            value={childId === "" ? "" : String(childId)}
+            onChange={(e) =>
+              setChildId(
+                e.target.value === "" ? "" : Number(e.target.value),
+              )
+            }
+            style={INPUT}
+          >
+            <option value="">Choose a part or assembly…</option>
+            {options.map((o) => (
+              <option key={o.itemId} value={o.itemId}>
+                {o.kind === "assembly" ? "🧩" : "🔧"} {o.code}
+                {o.name ? ` · ${o.name}` : ""} · stock {o.stock}
+              </option>
+            ))}
+          </select>
+          <input
+            value={qty}
+            onChange={(e) =>
+              setQty(e.target.value.replace(/[^0-9]/g, ""))
+            }
+            placeholder="Qty"
+            style={INPUT}
+          />
+          <button
+            type="button"
+            onClick={add}
+            disabled={pending || childId === ""}
+            style={PRIMARY_BTN}
+          >
+            {pending ? "Adding…" : "Add"}
+          </button>
+        </div>
+      )}
+      {err && (
+        <div style={{ marginTop: 8 }}>
+          <ErrorBox message={err} />
+        </div>
+      )}
+      {directChildren.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+            }}
+          >
+            Direct children
+          </span>
+          <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0" }}>
+            {directChildren.map((c) => (
+              <li
+                key={c.itemId}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "4px 0",
+                  fontSize: 12.5,
+                }}
+              >
+                <span>{c.kind === "assembly" ? "🧩" : "🔧"}</span>
+                <code style={{ fontWeight: 700 }}>{c.code}</code>
+                <span style={{ color: "var(--lb-text-3)" }}>
+                  × {c.quantity}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => remove(c.itemId)}
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: 11,
+                    color: "#dc2626",
+                    background: "transparent",
+                    border: "1px solid rgba(239,68,68,0.3)",
+                    borderRadius: 999,
+                    padding: "2px 8px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 
