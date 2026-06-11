@@ -26,6 +26,9 @@ import {
 } from "@/lib/permissions";
 import { CLIENT_CONFIG, CADUNIQ_PRODUCT_LABEL } from "@/lib/client-config";
 import { userEmailStatus } from "@/lib/email";
+import { getTenantIntegrationState } from "@/lib/email/integration-requests";
+import { getEmailSetupStatus, isProviderReady } from "@/app/settings/email/setup-status";
+import EmailIntegrationCard from "@/app/_home/EmailIntegrationCard";
 import CaduniqLogo from "@/components/CaduniqLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import ScrollAwareTopNav from "@/components/ScrollAwareTopNav";
@@ -283,11 +286,22 @@ export default async function Home() {
     }));
 
     const emailStatus = await userEmailStatus(profile.clerkUserId);
+    const pendingEmailIntegrationRequests = await (
+      await import("@/lib/email/integration-requests")
+    ).listPendingIntegrationRequests();
 
     return (
       <CaduniqHQDashboard
         displayName={profile.displayName ?? profile.email}
         emailStatus={emailStatus}
+        pendingEmailRequests={pendingEmailIntegrationRequests.map((r) => ({
+          clientId: r.clientId,
+          clientName: r.clientName,
+          status: r.status,
+          requestedBy: r.requestedBy,
+          requestedAt: r.requestedAt ? r.requestedAt.toISOString() : null,
+          notes: r.notes,
+        }))}
         clients={hqClients}
         suppliersAcrossTenants={hqSuppliers}
         usersAcrossTenants={hqUsers}
@@ -446,6 +460,30 @@ export default async function Home() {
     )
     .slice(0, 5);
 
+  // Email-integration state for the home page card. Bypassed if the
+  // user isn't attached to a tenant — should never happen here because
+  // we already redirected unattached users above, but be defensive.
+  const tenantEmailState =
+    profile.clientId != null
+      ? (await getTenantIntegrationState(profile.clientId)) ?? {
+          status: "none" as const,
+          requestedBy: null,
+          requestedAt: null,
+          decidedBy: null,
+          decidedAt: null,
+          notes: null,
+        }
+      : {
+          status: "none" as const,
+          requestedBy: null,
+          requestedAt: null,
+          decidedBy: null,
+          decidedAt: null,
+          notes: null,
+        };
+  const myEmailStatus = await userEmailStatus(profile.clerkUserId);
+  const nylasConfigured = isProviderReady(await getEmailSetupStatus());
+
   return (
     <div
       className="min-h-full"
@@ -453,6 +491,24 @@ export default async function Home() {
     >
       <div className="px-6 pt-6 pb-10" style={{ maxWidth: 1400, margin: "0 auto" }}>
         <BrandHero displayName={profile.displayName ?? profile.email} />
+
+        <div style={{ marginTop: 24 }}>
+          <EmailIntegrationCard
+            status={tenantEmailState.status}
+            userIsTenantAdmin={isAdmin(profile)}
+            userEmail={profile.email}
+            myConnection={
+              myEmailStatus.configured && myEmailStatus.provider
+                ? {
+                    provider: myEmailStatus.provider,
+                    emailAddress: myEmailStatus.fromAddress ?? "",
+                  }
+                : null
+            }
+            decisionNotes={tenantEmailState.notes}
+            nylasConfigured={nylasConfigured}
+          />
+        </div>
 
         <section
           className="mt-6 grid gap-5"

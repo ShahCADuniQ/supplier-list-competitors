@@ -10,7 +10,21 @@ import { cookies } from "next/headers";
 import { auth } from "@clerk/nextjs/server";
 import { buildAuthUrl } from "./nylas";
 import { signState, STATE_COOKIE } from "./oauth-state";
+import { getOrCreateProfile, isCaduniqUser } from "@/lib/permissions";
+import { isTenantApproved } from "./integration-requests";
 import type { EmailProvider } from "./types";
+
+function notApproved(provider: EmailProvider): Response {
+  return new Response(
+    `<!doctype html><html><body style="font-family:system-ui;max-width:640px;margin:48px auto;padding:0 20px;line-height:1.55;color:#111">
+      <h1 style="font-size:22px;margin:0 0 12px">Awaiting CADuniQ approval</h1>
+      <p>Your company has to be approved by CADuniQ HQ before users can connect their ${provider === "microsoft" ? "Outlook" : "Gmail"} mailbox.</p>
+      <p>Your company administrator can request the integration from the home page; CADuniQ usually decides within a business day.</p>
+      <p style="margin-top:24px"><a href="/">← Back to home</a></p>
+    </body></html>`,
+    { status: 403, headers: { "Content-Type": "text/html; charset=utf-8" } },
+  );
+}
 
 function diagnostic(provider: EmailProvider, missing: string[]): Response {
   const items = missing.map((m) => `<li><code>${m}</code></li>`).join("");
@@ -41,6 +55,19 @@ export async function handleOAuthStart(
   if (!process.env.NYLAS_CLIENT_ID) missing.push("NYLAS_CLIENT_ID");
   if (!process.env.NYLAS_API_KEY) missing.push("NYLAS_API_KEY");
   if (missing.length) return diagnostic(provider, missing);
+
+  // Tenant gate: only tenants CADuniQ HQ has approved can run the Nylas
+  // flow. CADuniQ staff bypass the gate so they can dogfood without
+  // approving themselves.
+  const profile = await getOrCreateProfile();
+  if (profile && !isCaduniqUser(profile)) {
+    if (profile.clientId == null) {
+      return notApproved(provider);
+    }
+    if (!(await isTenantApproved(profile.clientId))) {
+      return notApproved(provider);
+    }
+  }
 
   const state = signState({ u: userId, p: provider });
   const loginHint = new URL(request.url).searchParams.get("email") ?? undefined;

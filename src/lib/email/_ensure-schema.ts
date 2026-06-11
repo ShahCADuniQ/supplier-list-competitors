@@ -1,7 +1,9 @@
-// Self-healing schema helper for the per-user email connection feature.
-// One-shot memoised so repeated calls during a single process boot are
-// free. Called by every email-OAuth + send endpoint before they touch
-// user_email_connections.
+// Self-healing schema helper for the email integration feature.
+// Memoised one-shot so repeated calls during a single process boot are
+// free. Called by every email OAuth + send endpoint before they touch
+// user_email_connections, and also picks up the per-tenant approval
+// columns added to `clients` when the email-integration request flow
+// shipped.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -31,6 +33,15 @@ export function ensureEmailConnectionsSchema(): Promise<void> {
         )`);
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "user_email_connections_user_provider_idx" ON "user_email_connections" ("clerk_user_id","provider")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "user_email_connections_clerk_user_idx" ON "user_email_connections" ("clerk_user_id")`);
+
+      // Per-tenant approval gate. ADD COLUMN IF NOT EXISTS is idempotent
+      // so re-running this on already-migrated DBs is a no-op.
+      await db.execute(sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "email_integration_status" text NOT NULL DEFAULT 'none'`);
+      await db.execute(sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "email_integration_requested_by" text`);
+      await db.execute(sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "email_integration_requested_at" timestamp`);
+      await db.execute(sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "email_integration_decided_by" text`);
+      await db.execute(sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "email_integration_decided_at" timestamp`);
+      await db.execute(sql`ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "email_integration_notes" text`);
     } catch (e) {
       _ensured = null; // allow retry
       throw e;

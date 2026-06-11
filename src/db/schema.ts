@@ -166,6 +166,20 @@ export const clients = pgTable(
     canUseDesignEngineering: boolean("can_use_design_engineering").notNull().default(true),
     canUseCrm: boolean("can_use_crm").notNull().default(true),
     canUseOee: boolean("can_use_oee").notNull().default(true),
+    // Email integration is opt-in per tenant and gated by CADuniQ HQ.
+    // Lifecycle: none (default) → requested (tenant admin clicked the
+    // home-page "Connect work email" card) → approved | rejected
+    // (CADuniQ HQ decision). Only `approved` tenants can actually run
+    // the Nylas OAuth flow; the request columns capture audit info so
+    // the HQ queue shows who asked when.
+    emailIntegrationStatus: text("email_integration_status")
+      .notNull()
+      .default("none"),
+    emailIntegrationRequestedBy: text("email_integration_requested_by"),
+    emailIntegrationRequestedAt: timestamp("email_integration_requested_at"),
+    emailIntegrationDecidedBy: text("email_integration_decided_by"),
+    emailIntegrationDecidedAt: timestamp("email_integration_decided_at"),
+    emailIntegrationNotes: text("email_integration_notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

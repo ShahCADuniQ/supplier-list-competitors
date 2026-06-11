@@ -12,9 +12,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { getOrCreateProfile } from "@/lib/permissions";
+import { getOrCreateProfile, isCaduniqUser } from "@/lib/permissions";
 import { hasUserEmailConnection } from "@/lib/email";
 import { detectEmailProvider } from "@/lib/email/detect-provider";
+import { getTenantIntegrationState } from "@/lib/email/integration-requests";
 import { getEmailSetupStatus, isProviderReady } from "@/app/settings/email/setup-status";
 import CaduniqLogo from "@/components/CaduniqLogo";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -46,6 +47,16 @@ export default async function ConnectEmailStep({
 
   const setup = await getEmailSetupStatus();
   const nylasReady = isProviderReady(setup);
+
+  // Per-tenant approval gate. If the tenant hasn't been approved yet,
+  // skip this step entirely — the user will see the Request prompt on
+  // the home page card instead. CADuniQ staff bypass.
+  if (!isCaduniqUser(profile) && profile.clientId != null) {
+    const tenantState = await getTenantIntegrationState(profile.clientId);
+    if (tenantState?.status !== "approved") {
+      redirect(nextUrl);
+    }
+  }
 
   // Even when Nylas isn't configured (admin hasn't set NYLAS_CLIENT_ID),
   // we still show the page so the user knows the connection is coming,

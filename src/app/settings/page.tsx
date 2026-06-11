@@ -16,13 +16,14 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { clients } from "@/db/schema";
-import { getOrCreateProfile, isAdmin } from "@/lib/permissions";
+import { getOrCreateProfile, isAdmin, isCaduniqUser } from "@/lib/permissions";
 import { listMyEmailConnections } from "./email/actions";
 import { DisconnectButton } from "./email/DisconnectButton";
 import {
   getEmailSetupStatus,
   isProviderReady,
 } from "./email/setup-status";
+import { getTenantIntegrationState } from "@/lib/email/integration-requests";
 
 export const dynamic = "force-dynamic";
 
@@ -44,10 +45,6 @@ export default async function ManageAccountPage({
   const setup = await getEmailSetupStatus();
   const userIsAdmin = isAdmin(profile);
   const ready = isProviderReady(setup);
-  // With Nylas, both providers go through the same client/key, so they
-  // light up or stay dark together.
-  const microsoftReady = ready;
-  const googleReady = ready;
   const setupIncomplete = !ready;
   const missing: string[] = [];
   if (!setup.encryptionKey) missing.push("EMAIL_TOKEN_ENCRYPTION_KEY");
@@ -63,6 +60,21 @@ export default async function ManageAccountPage({
       .limit(1);
     tenantName = row?.name ?? null;
   }
+
+  // Per-tenant approval gate. CADuniQ staff bypass.
+  const tenantState =
+    profile.clientId != null
+      ? await getTenantIntegrationState(profile.clientId)
+      : null;
+  const tenantApproved =
+    isCaduniqUser(profile) || tenantState?.status === "approved";
+  // With Nylas, both providers go through the same client/key, so they
+  // light up or stay dark together. Additionally gated by the per-tenant
+  // approval workflow — CADuniQ HQ has to approve the tenant first.
+  const microsoftReady = ready;
+  const googleReady = ready;
+  const tenantPending = tenantState?.status === "requested";
+  const tenantRejected = tenantState?.status === "rejected";
 
   const initial = (profile.displayName ?? profile.email ?? "?")
     .trim()
@@ -340,6 +352,61 @@ export default async function ManageAccountPage({
           >
             Connect a mailbox
           </h3>
+          {tenantPending && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: 12,
+                borderRadius: 8,
+                background: "rgba(234,179,8,0.10)",
+                border: "1px solid rgba(234,179,8,0.35)",
+                color: "#a16207",
+                fontSize: 13,
+                lineHeight: 1.55,
+              }}
+            >
+              Your company has requested email integration. The Connect
+              buttons will activate as soon as CADuniQ HQ approves
+              (usually within a business day).
+            </div>
+          )}
+          {tenantRejected && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: 12,
+                borderRadius: 8,
+                background: "rgba(239,68,68,0.10)",
+                border: "1px solid rgba(239,68,68,0.35)",
+                color: "#dc2626",
+                fontSize: 13,
+                lineHeight: 1.55,
+              }}
+            >
+              CADuniQ HQ rejected your company&apos;s request for email
+              integration. Your administrator can re-submit from the home
+              page.
+            </div>
+          )}
+          {!tenantApproved && !tenantPending && !tenantRejected && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: 12,
+                borderRadius: 8,
+                background: "rgba(37,99,235,0.08)",
+                border: "1px solid rgba(37,99,235,0.30)",
+                color: "#1d4ed8",
+                fontSize: 13,
+                lineHeight: 1.55,
+              }}
+            >
+              Email integration is opt-in per company.{" "}
+              {userIsAdmin
+                ? "Open your home page and click “Request email integration” so CADuniQ HQ can enable it."
+                : "Ask your company administrator to request it from their home page."}
+            </div>
+          )}
           <div
             style={{
               display: "grid",
@@ -351,14 +418,14 @@ export default async function ManageAccountPage({
               href="/api/email/oauth/microsoft/start"
               brand="Outlook / Microsoft 365"
               hint="Microsoft Graph · Mail.Read + Mail.Send"
-              ready={microsoftReady}
+              ready={microsoftReady && tenantApproved}
               color="#0078D4"
             />
             <ProviderTile
               href="/api/email/oauth/google/start"
               brand="Gmail / Google Workspace"
               hint="Gmail API · readonly + send"
-              ready={googleReady}
+              ready={googleReady && tenantApproved}
               color="#EA4335"
             />
           </div>

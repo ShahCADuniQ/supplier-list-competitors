@@ -115,9 +115,19 @@ const PANEL: React.CSSProperties = {
 
 type Tab = "companies" | "suppliers" | "retailers" | "users";
 
+export type HQEmailIntegrationRequest = {
+  clientId: number;
+  clientName: string;
+  status: "requested" | "rejected" | "none" | "approved";
+  requestedBy: string | null;
+  requestedAt: string | null;
+  notes: string | null;
+};
+
 export default function CaduniqHQDashboard({
   displayName,
   emailStatus,
+  pendingEmailRequests,
   clients,
   suppliersAcrossTenants,
   usersAcrossTenants,
@@ -130,6 +140,7 @@ export default function CaduniqHQDashboard({
     provider: "microsoft" | "google" | null;
     fromAddress: string | null;
   };
+  pendingEmailRequests: HQEmailIntegrationRequest[];
   clients: HQClientRow[];
   suppliersAcrossTenants: HQSupplierRow[];
   usersAcrossTenants: HQUserRow[];
@@ -392,6 +403,25 @@ export default function CaduniqHQDashboard({
           </div>
         </section>
 
+        {/* Email integration requests */}
+        <section style={PANEL}>
+          <h2 className="lb-section-title" style={{ marginBottom: 4 }}>
+            Email integration requests
+          </h2>
+          <p
+            style={{
+              margin: "0 0 16px",
+              fontSize: 13,
+              color: "var(--lb-text-3)",
+            }}
+          >
+            Tenants that have requested the email-integration feature.
+            Approving unlocks the per-user Connect Outlook / Connect Gmail
+            flow for everyone on that tenant.
+          </p>
+          <EmailIntegrationRequestsPanel requests={pendingEmailRequests} />
+        </section>
+
         {/* Pending signups */}
         <section style={PANEL}>
           <h2 className="lb-section-title" style={{ marginBottom: 4 }}>
@@ -467,6 +497,150 @@ export default function CaduniqHQDashboard({
         </section>
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Email integration requests
+// ─────────────────────────────────────────────────────────────────────
+
+function EmailIntegrationRequestsPanel({
+  requests,
+}: {
+  requests: HQEmailIntegrationRequest[];
+}) {
+  if (requests.length === 0) {
+    return <Empty message="No pending email-integration requests." />;
+  }
+  return (
+    <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+      {requests.map((r) => (
+        <EmailIntegrationRow key={r.clientId} request={r} />
+      ))}
+    </ul>
+  );
+}
+
+function EmailIntegrationRow({
+  request,
+}: {
+  request: HQEmailIntegrationRequest;
+}) {
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<null | "approved" | "rejected">(null);
+
+  function decide(approve: boolean) {
+    setErr(null);
+    start(async () => {
+      try {
+        const { decideEmailIntegrationRequest } = await import(
+          "@/app/settings/email/integration-actions"
+        );
+        const r = await decideEmailIntegrationRequest({
+          clientId: request.clientId,
+          approve,
+        });
+        if (!r.ok) {
+          setErr(r.error || "Could not save decision");
+          return;
+        }
+        setDone(approve ? "approved" : "rejected");
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Could not save decision");
+      }
+    });
+  }
+
+  return (
+    <li
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: "12px 14px",
+        background: "var(--lb-bg-sunken)",
+        border: "1px solid var(--lb-border)",
+        borderRadius: "var(--lb-radius)",
+        marginBottom: 8,
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 600 }}>{request.clientName}</div>
+        <div style={{ fontSize: 12, color: "var(--lb-text-3)", marginTop: 2 }}>
+          {request.status === "rejected"
+            ? "Previously rejected · re-requested"
+            : "Pending"}
+          {request.requestedAt &&
+            ` · requested ${new Date(request.requestedAt).toLocaleDateString()}`}
+        </div>
+        {request.notes && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--lb-text-2)",
+              marginTop: 4,
+              fontStyle: "italic",
+            }}
+          >
+            “{request.notes}”
+          </div>
+        )}
+        {err && (
+          <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{err}</div>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {done ? (
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: done === "approved" ? "#10b981" : "#dc2626",
+            }}
+          >
+            {done === "approved" ? "Approved ✓" : "Rejected"}
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => decide(false)}
+              style={{
+                padding: "6px 12px",
+                fontSize: 12.5,
+                background: "transparent",
+                border: "1px solid var(--lb-border)",
+                borderRadius: 6,
+                color: "var(--lb-text-2)",
+                cursor: pending ? "default" : "pointer",
+              }}
+            >
+              Reject
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => decide(true)}
+              style={{
+                padding: "6px 14px",
+                fontSize: 12.5,
+                fontWeight: 700,
+                background: "#10b981",
+                border: "1px solid #10b981",
+                borderRadius: 6,
+                color: "#fff",
+                cursor: pending ? "default" : "pointer",
+              }}
+            >
+              {pending ? "…" : "Approve"}
+            </button>
+          </>
+        )}
+      </div>
+    </li>
   );
 }
 
