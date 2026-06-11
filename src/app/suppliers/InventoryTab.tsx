@@ -590,10 +590,70 @@ function ProductTreeView({
         justifyContent: "flex-end",
       }}
     >
+      {/* Connector-line CSS, mirrors the .lb-tree pattern used on the
+          Database tab so the Inventory tree looks visually identical
+          to the nomenclature page tree. Scoped via .lb-inv-tree so
+          it can't leak into other parts of /suppliers. */}
+      <style>{`
+        .lb-inv-tree { display: flex; flex-direction: column; align-items: center; }
+        .lb-inv-tree-children {
+          display: flex;
+          flex-wrap: nowrap;
+          justify-content: center;
+          gap: 24px;
+          position: relative;
+          padding-top: 28px;
+          margin-top: 0;
+        }
+        .lb-inv-tree-children::before {
+          content: "";
+          position: absolute;
+          top: 0;
+          left: 50%;
+          width: 2px;
+          height: 14px;
+          background: var(--lb-border);
+          transform: translateX(-50%);
+        }
+        .lb-inv-tree-children::after {
+          content: "";
+          position: absolute;
+          top: 14px;
+          left: 24px;
+          right: 24px;
+          height: 2px;
+          background: var(--lb-border);
+        }
+        .lb-inv-tree-children.lb-inv-tree-single::after { display: none; }
+        .lb-inv-tree-child {
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+        .lb-inv-tree-child::before {
+          content: "";
+          position: absolute;
+          top: -14px;
+          left: 50%;
+          width: 2px;
+          height: 14px;
+          background: var(--lb-border);
+          transform: translateX(-50%);
+        }
+        /* Vertical line between sibling roots so the forest still
+           reads as a connected whole when there are multiple roots. */
+        .lb-inv-roots {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 18px;
+        }
+      `}</style>
+
       <div
         style={{
           width: "100%",
-          maxWidth: 520,
           display: "flex",
           flexDirection: "column",
           gap: 12,
@@ -605,9 +665,8 @@ function ProductTreeView({
           </h2>
           <p style={{ margin: 0, fontSize: 12, color: "var(--lb-text-3)" }}>
             Filtered to starred Parts, Assemblies, Hardware, Electronics
-            and Adhesive / Sealants / Fillers. Edges follow the same
-            assembly BOM the nomenclature page renders, restricted to
-            this product.
+            and Adhesive / Sealants / Fillers. Click any card to open
+            it.
           </p>
         </header>
         {err && (
@@ -632,15 +691,23 @@ function ProductTreeView({
             they&apos;ll show up here.
           </Empty>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {tree.map((root) => (
-              <ProductTreeRow
-                key={root.inventoryItemId}
-                node={root}
-                depth={0}
-                onOpenItem={onOpenItem}
-              />
-            ))}
+          <div
+            style={{
+              overflowX: "auto",
+              padding: "8px 4px 12px",
+            }}
+          >
+            <div className="lb-inv-roots" style={{ minWidth: "fit-content" }}>
+              {tree.map((root) => (
+                <div key={root.inventoryItemId} className="lb-inv-tree">
+                  <ProductTreeNodeCard
+                    node={root}
+                    root
+                    onOpenItem={onOpenItem}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -656,116 +723,136 @@ const TREE_CLASS_LABEL: Record<ProductTreeNode["itemClass"], { label: string; to
   adhesive_sealant_filler: { label: "Adhesive/Sealant", tone: "#d97706" },
 };
 
-function ProductTreeRow({
+// Single tree node card + its descendants. Mirrors the nomenclature
+// page's TreeNodeCard layout: vertical drop line, horizontal sibling
+// bar, then each child below. Clicking the card body fires onOpenItem
+// so the unified InventoryDrawer pops open for that row.
+function ProductTreeNodeCard({
   node,
-  depth,
+  root,
   onOpenItem,
 }: {
   node: ProductTreeNode;
-  depth: number;
+  root?: boolean;
   onOpenItem: (inventoryItemId: number) => void;
 }) {
-  const meta =
-    TREE_CLASS_LABEL[node.itemClass] ?? TREE_CLASS_LABEL.part;
+  const meta = TREE_CLASS_LABEL[node.itemClass] ?? TREE_CLASS_LABEL.part;
   return (
-    <div
-      style={{
-        marginLeft: depth === 0 ? 0 : 16,
-        borderLeft:
-          depth === 0 ? "none" : "1px solid var(--lb-border)",
-        paddingLeft: depth === 0 ? 0 : 12,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
+    <>
       <button
         type="button"
         onClick={() => onOpenItem(node.inventoryItemId)}
+        title="Click to open details"
         style={{
+          width: 240,
           textAlign: "left",
-          padding: "8px 10px",
-          borderRadius: 10,
-          border: `1px solid ${meta.tone}33`,
-          background: `${meta.tone}10`,
+          padding: 12,
+          borderRadius: 12,
+          border: root
+            ? `2px solid ${meta.tone}`
+            : `1px solid ${meta.tone}55`,
+          background: root
+            ? `color-mix(in srgb, ${meta.tone} 8%, var(--lb-bg))`
+            : `color-mix(in srgb, ${meta.tone} 4%, var(--lb-bg))`,
           color: "var(--lb-text)",
           cursor: "pointer",
           display: "flex",
-          alignItems: "center",
-          gap: 10,
-          width: "100%",
+          flexDirection: "column",
+          gap: 6,
+          boxShadow: root
+            ? `0 4px 14px -8px ${meta.tone}66`
+            : "none",
+          transition: "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = "translateY(-1px)";
+          e.currentTarget.style.boxShadow = `0 8px 18px -10px ${meta.tone}80`;
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = "translateY(0)";
+          e.currentTarget.style.boxShadow = root
+            ? `0 4px 14px -8px ${meta.tone}66`
+            : "none";
         }}
       >
-        <span
-          style={{
-            fontSize: 9.5,
-            fontWeight: 800,
-            letterSpacing: 0.5,
-            textTransform: "uppercase",
-            padding: "1px 7px",
-            borderRadius: 999,
-            background: `${meta.tone}22`,
-            color: meta.tone,
-          }}
-        >
-          {meta.label}
-        </span>
-        <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-          <code style={{ fontSize: 11.5, fontWeight: 800, wordBreak: "break-all" }}>
-            {node.code}
-          </code>
-          {node.name && (
-            <span style={{ fontSize: 11, color: "var(--lb-text-2)" }}>
-              {node.name}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+            <span
+              style={{
+                fontSize: 9.5,
+                fontWeight: 800,
+                letterSpacing: 0.5,
+                textTransform: "uppercase",
+                padding: "1px 7px",
+                borderRadius: 999,
+                background: `${meta.tone}22`,
+                color: meta.tone,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {meta.label}
             </span>
-          )}
+            <code style={{ fontSize: 11, fontWeight: 800, wordBreak: "break-all", minWidth: 0 }}>
+              {node.code}
+            </code>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+            {node.isConfiguration && (
+              <span
+                style={{
+                  fontSize: 8.5,
+                  fontWeight: 800,
+                  letterSpacing: 0.5,
+                  textTransform: "uppercase",
+                  padding: "1px 6px",
+                  borderRadius: 999,
+                  background: "color-mix(in srgb, var(--lb-accent) 16%, transparent)",
+                  color: "var(--lb-accent)",
+                }}
+              >
+                CFG
+              </span>
+            )}
+            {!root && (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: "1px 7px",
+                  borderRadius: 999,
+                  background: "var(--lb-bg-elev)",
+                  border: "1px solid var(--lb-border)",
+                  color: "var(--lb-text-2)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                × {node.quantity}
+              </span>
+            )}
+          </div>
         </div>
-        {node.isConfiguration && (
-          <span
-            style={{
-              fontSize: 9,
-              fontWeight: 800,
-              letterSpacing: 0.5,
-              textTransform: "uppercase",
-              padding: "1px 6px",
-              borderRadius: 999,
-              background: "color-mix(in srgb, var(--lb-accent) 16%, transparent)",
-              color: "var(--lb-accent)",
-            }}
-          >
-            CFG
-          </span>
-        )}
-        {depth > 0 && (
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              padding: "1px 7px",
-              borderRadius: 999,
-              background: "var(--lb-bg)",
-              border: "1px solid var(--lb-border)",
-              color: "var(--lb-text-2)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            × {node.quantity}
-          </span>
+        {node.name && (
+          <div style={{ fontSize: 11, color: "var(--lb-text-2)" }}>
+            {node.name}
+          </div>
         )}
       </button>
+
       {node.children.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div
+          className={`lb-inv-tree-children${node.children.length === 1 ? " lb-inv-tree-single" : ""}`}
+        >
           {node.children.map((c) => (
-            <ProductTreeRow
-              key={c.inventoryItemId}
-              node={c}
-              depth={depth + 1}
-              onOpenItem={onOpenItem}
-            />
+            <div className="lb-inv-tree-child" key={c.inventoryItemId}>
+              <ProductTreeNodeCard
+                node={c}
+                onOpenItem={onOpenItem}
+              />
+            </div>
           ))}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
