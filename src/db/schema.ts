@@ -2814,6 +2814,9 @@ export const nomenclatureParts = pgTable(
     widthMm: integer("width_mm"),
     heightMm: integer("height_mm"),
     lengthMm: integer("length_mm"),
+    // Set when the part is circular — replaces WXXXX-HXXXX in the code
+    // with a single DXXXX segment (D = diameter).
+    diameterMm: integer("diameter_mm"),
     // 'P' for part, 'A' for assembly. Only populated for kind='hardware'
     // — the part/assembly generator uses inventory_items.kind for the
     // same distinction and doesn't embed P/A in the code itself.

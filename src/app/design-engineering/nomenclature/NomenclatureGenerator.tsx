@@ -176,7 +176,7 @@ function Hero({
           <Kpi label="Codes generated" value={parts.length} />
           <Kpi
             label="Free IDs"
-            value={`${(36 ** 4 - parts.length).toLocaleString()} of 1.68M`}
+            value={`${(36 ** 6 - parts.length).toLocaleString()} of 2.18B`}
           />
         </div>
       </div>
@@ -361,7 +361,7 @@ function HardwareTab({
           }}
         >
           Hardware code layout:{" "}
-          <code>CLS-XXXX-P|A-NOMENCLATURE</code>. The nomenclature itself
+          <code>CLS-XXXXXX-P|A-NOMENCLATURE</code>. The nomenclature itself
           follows the family&apos;s standard from the OneDrive HARDWARES
           folder.
         </p>
@@ -669,7 +669,7 @@ function HardwareForm({
         >
           {saving
             ? "Saving…"
-            : `Generate ${classification}-XXXX-${partOrAssembly} code`}
+            : `Generate ${classification}-XXXXXX-${partOrAssembly} code`}
         </button>
       </div>
     </div>
@@ -882,10 +882,12 @@ function PartIdTab({
   const [classification, setClassification] = useState<
     "FAB" | "PHS" | "TLG"
   >("FAB");
+  const [shape, setShape] = useState<"rect" | "circ">("rect");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [width, setWidth] = useState<string>("");
   const [height, setHeight] = useState<string>("");
+  const [diameter, setDiameter] = useState<string>("");
   const [length, setLength] = useState<string>("");
   const [kind, setKind] = useState<"part" | "assembly">("part");
   const [configurations, setConfigurations] = useState<Configuration[]>([]);
@@ -899,10 +901,21 @@ function PartIdTab({
       try {
         const r = await savePartCode({
           classification,
+          shape,
           name: name.trim() || null,
           description: description.trim() || null,
-          widthMm: width.trim() ? Math.round(Number(width)) : null,
-          heightMm: height.trim() ? Math.round(Number(height)) : null,
+          widthMm:
+            shape === "rect" && width.trim()
+              ? Math.round(Number(width))
+              : null,
+          heightMm:
+            shape === "rect" && height.trim()
+              ? Math.round(Number(height))
+              : null,
+          diameterMm:
+            shape === "circ" && diameter.trim()
+              ? Math.round(Number(diameter))
+              : null,
           lengthMm: length.trim() ? Math.round(Number(length)) : null,
           kind,
           configurations,
@@ -926,6 +939,7 @@ function PartIdTab({
         setDescription("");
         setWidth("");
         setHeight("");
+        setDiameter("");
         setLength("");
         setConfigurations([]);
       } catch (e) {
@@ -938,11 +952,24 @@ function PartIdTab({
     <section style={PANEL}>
       <h2 style={SECTION_TITLE}>Generate a Part / Assembly ID</h2>
       <p style={{ fontSize: 13, color: "var(--lb-text-3)", marginTop: 0 }}>
-        Allocates a fresh 4-character alphanumeric and builds a code like{" "}
-        <code>CLS-XXXX-WXXXX-HXXXX-LXXXX-DISPLAY_NAME</code>. The trailing
-        segment is the <strong>Display Name</strong>; leave any dimension
-        blank to drop it from the code.
+        Allocates a fresh 6-character A-Z + 0-9 ID. Code shape depends on
+        the part geometry:
       </p>
+      <ul
+        style={{
+          fontSize: 12.5,
+          color: "var(--lb-text-3)",
+          margin: "4px 0 14px 18px",
+          padding: 0,
+        }}
+      >
+        <li>
+          Rectangular: <code>CLS-XXXXXX-WXXXX-HXXXX-LXXXX-DISPLAY_NAME</code>
+        </li>
+        <li>
+          Circular: <code>CLS-XXXXXX-DXXXX-LXXXX-DISPLAY_NAME</code>
+        </li>
+      </ul>
 
       <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr 1fr" }}>
         <label style={FIELD}>
@@ -983,41 +1010,90 @@ function PartIdTab({
         </label>
       </div>
 
-      <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr 1fr" }}>
+      <div style={ROW}>
         <label style={FIELD}>
-          <span style={LABEL}>Width (mm)</span>
-          <input
-            value={width}
-            onChange={(e) =>
-              setWidth(e.target.value.replace(/[^0-9.]/g, ""))
-            }
-            placeholder="0–9999"
-            style={INPUT}
-          />
-        </label>
-        <label style={FIELD}>
-          <span style={LABEL}>Height (mm)</span>
-          <input
-            value={height}
-            onChange={(e) =>
-              setHeight(e.target.value.replace(/[^0-9.]/g, ""))
-            }
-            placeholder="0–9999"
-            style={INPUT}
-          />
-        </label>
-        <label style={FIELD}>
-          <span style={LABEL}>Length (mm)</span>
-          <input
-            value={length}
-            onChange={(e) =>
-              setLength(e.target.value.replace(/[^0-9.]/g, ""))
-            }
-            placeholder="0–9999"
-            style={INPUT}
-          />
+          <span style={LABEL}>Shape</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setShape("rect")}
+              style={shape === "rect" ? TOGGLE_ACTIVE : TOGGLE_INACTIVE}
+            >
+              Rectangular (W · H · L)
+            </button>
+            <button
+              type="button"
+              onClick={() => setShape("circ")}
+              style={shape === "circ" ? TOGGLE_ACTIVE : TOGGLE_INACTIVE}
+            >
+              Circular (D · L)
+            </button>
+          </div>
         </label>
       </div>
+
+      {shape === "rect" ? (
+        <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr 1fr" }}>
+          <label style={FIELD}>
+            <span style={LABEL}>Width (mm)</span>
+            <input
+              value={width}
+              onChange={(e) =>
+                setWidth(e.target.value.replace(/[^0-9.]/g, ""))
+              }
+              placeholder="0–9999"
+              style={INPUT}
+            />
+          </label>
+          <label style={FIELD}>
+            <span style={LABEL}>Height (mm)</span>
+            <input
+              value={height}
+              onChange={(e) =>
+                setHeight(e.target.value.replace(/[^0-9.]/g, ""))
+              }
+              placeholder="0–9999"
+              style={INPUT}
+            />
+          </label>
+          <label style={FIELD}>
+            <span style={LABEL}>Length (mm)</span>
+            <input
+              value={length}
+              onChange={(e) =>
+                setLength(e.target.value.replace(/[^0-9.]/g, ""))
+              }
+              placeholder="0–9999"
+              style={INPUT}
+            />
+          </label>
+        </div>
+      ) : (
+        <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr" }}>
+          <label style={FIELD}>
+            <span style={LABEL}>Diameter (mm)</span>
+            <input
+              value={diameter}
+              onChange={(e) =>
+                setDiameter(e.target.value.replace(/[^0-9.]/g, ""))
+              }
+              placeholder="0–9999"
+              style={INPUT}
+            />
+          </label>
+          <label style={FIELD}>
+            <span style={LABEL}>Length (mm)</span>
+            <input
+              value={length}
+              onChange={(e) =>
+                setLength(e.target.value.replace(/[^0-9.]/g, ""))
+              }
+              placeholder="0–9999"
+              style={INPUT}
+            />
+          </label>
+        </div>
+      )}
 
       <label style={FIELD}>
         <span style={LABEL}>Description</span>

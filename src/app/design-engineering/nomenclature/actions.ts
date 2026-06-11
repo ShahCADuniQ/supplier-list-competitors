@@ -311,8 +311,10 @@ export async function savePartCode(input: {
   classification: string; // FAB | PHS | TLG
   name?: string | null;
   description?: string | null;
+  shape?: "rect" | "circ";
   widthMm?: number | null;
   heightMm?: number | null;
+  diameterMm?: number | null;
   lengthMm?: number | null;
   kind?: "part" | "assembly";
   configurations?: Configuration[];
@@ -323,24 +325,30 @@ export async function savePartCode(input: {
   await ensureNomenclatureSchema();
 
   const classification = assertClassification(input.classification);
+  const isCircular = input.shape === "circ";
 
   const uniqueId = await allocateUniqueId();
-  const wSeg = dimensionSegment("W", input.widthMm ?? null);
-  const hSeg = dimensionSegment("H", input.heightMm ?? null);
+  // Circular parts use a single DXXXX segment in place of WXXXX-HXXXX.
+  // Length still applies in either shape.
+  const dimensionSegments = isCircular
+    ? [dimensionSegment("D", input.diameterMm ?? null)]
+    : [
+        dimensionSegment("W", input.widthMm ?? null),
+        dimensionSegment("H", input.heightMm ?? null),
+      ];
   const lSeg = dimensionSegment("L", input.lengthMm ?? null);
-  // The trailing segment is the Display Name (per V79 spec change),
-  // not the free-text description. Description still gets stored on the
-  // row + inventory for the listing UI, just not in the code itself.
+  // The trailing segment is the Display Name; description stays on
+  // the row for the listing UI but not the code.
   const nameSeg = slugify(input.name);
   const segments = [
     classification,
     uniqueId,
-    wSeg,
-    hSeg,
+    ...dimensionSegments,
     lSeg,
     nameSeg,
   ].filter(Boolean);
-  // CLS-UNIQUE-WXXXX-HXXXX-LXXXX-DISPLAY_NAME (all uppercase already)
+  // Rectangular: CLS-UNIQUE-WXXXX-HXXXX-LXXXX-DISPLAY_NAME
+  // Circular:    CLS-UNIQUE-DXXXX-LXXXX-DISPLAY_NAME
   const fullCode = segments.join("-").toUpperCase();
 
   const inventoryKind: "part" | "assembly" = input.kind ?? "part";
@@ -361,8 +369,9 @@ export async function savePartCode(input: {
       fullCode,
       name: input.name ?? null,
       description: input.description ?? null,
-      widthMm: input.widthMm ?? null,
-      heightMm: input.heightMm ?? null,
+      widthMm: isCircular ? null : input.widthMm ?? null,
+      heightMm: isCircular ? null : input.heightMm ?? null,
+      diameterMm: isCircular ? input.diameterMm ?? null : null,
       lengthMm: input.lengthMm ?? null,
       partOrAssembly: inventoryKind === "assembly" ? "A" : "P",
       configurations: input.configurations ?? [],

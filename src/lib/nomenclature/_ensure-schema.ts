@@ -57,6 +57,8 @@ export function ensureNomenclatureSchema(): Promise<void> {
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "nomenclature_parts_parent_idx" ON "nomenclature_parts" ("parent_part_id")`);
       // V77 — Class code is now FAB/PHS/TLG; hardware codes embed P/A.
       await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "part_or_assembly" text`);
+      // V80 — Circular shape support: DXXXX replaces WXXXX-HXXXX.
+      await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "diameter_mm" integer`);
     } catch (e) {
       _ensured = null;
       throw e;
