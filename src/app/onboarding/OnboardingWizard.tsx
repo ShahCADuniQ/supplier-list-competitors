@@ -145,7 +145,11 @@ function EngineeringFlow({ defaultEmail, defaultName }: { defaultEmail: string; 
         phone,
         website,
       });
-      router.push("/admin");
+      // One last frictionless step before they hit the admin dashboard:
+      // connect their work mailbox so RFQs go out from their real
+      // address. Auto-skipped if they already have a connection or have
+      // dismissed the prompt.
+      router.push("/onboarding/connect-email?next=/admin");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to create company");
       setBusy(false);
@@ -277,7 +281,7 @@ function SupplierFlow({
       // claimSupplier throws if the engineering company email doesn't
       // map to a real CADuniQ tenant, so reaching this point means the
       // supplier is now linked. /portal renders step 2 (compliance only).
-      router.push("/portal");
+      router.push("/onboarding/connect-email?next=/portal");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to submit");
       setBusy(false);
@@ -487,7 +491,7 @@ function RetailerFlow({ defaultEmail, defaultName }: { defaultEmail: string; def
       });
       // claimRetailer throws if no matching engineering company exists,
       // so reaching here means we landed on a real tenant.
-      router.push("/retailer");
+      router.push("/onboarding/connect-email?next=/retailer");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to submit");
       setBusy(false);

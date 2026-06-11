@@ -43,7 +43,8 @@ export async function handleOAuthStart(
   if (missing.length) return diagnostic(provider, missing);
 
   const state = signState({ u: userId, p: provider });
-  const url = buildAuthUrl({ provider, request, state });
+  const loginHint = new URL(request.url).searchParams.get("email") ?? undefined;
+  const url = buildAuthUrl({ provider, request, state, loginHint });
 
   const jar = await cookies();
   jar.set(STATE_COOKIE, state, {
