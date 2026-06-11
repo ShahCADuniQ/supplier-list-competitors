@@ -25,6 +25,7 @@ import {
   ADMIN_EMAIL_DOMAINS,
 } from "@/lib/permissions";
 import { CLIENT_CONFIG, CADUNIQ_PRODUCT_LABEL } from "@/lib/client-config";
+import { userEmailStatus } from "@/lib/email";
 import CaduniqLogo from "@/components/CaduniqLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import ScrollAwareTopNav from "@/components/ScrollAwareTopNav";
@@ -281,9 +282,12 @@ export default async function Home() {
       createdAt: r.createdAt,
     }));
 
+    const emailStatus = await userEmailStatus(profile.clerkUserId);
+
     return (
       <CaduniqHQDashboard
         displayName={profile.displayName ?? profile.email}
+        emailStatus={emailStatus}
         clients={hqClients}
         suppliersAcrossTenants={hqSuppliers}
         usersAcrossTenants={hqUsers}

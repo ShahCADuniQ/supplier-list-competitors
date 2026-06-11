@@ -17,6 +17,7 @@ import { redirect } from "next/navigation";
 import { getOrCreateProfile } from "@/lib/permissions";
 import { listMyEmailConnections } from "./actions";
 import { DisconnectButton } from "./DisconnectButton";
+import { getEmailSetupStatus, isProviderReady } from "./setup-status";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,57 @@ const PROVIDER_LABEL = {
   microsoft: "Outlook / Microsoft 365",
   google: "Gmail / Google Workspace",
 } as const;
+
+function ConnectButton({
+  href,
+  label,
+  ready,
+}: {
+  href: string;
+  label: string;
+  ready: boolean;
+}) {
+  const base = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    padding: "10px 14px",
+    borderRadius: 8,
+    textDecoration: "none",
+    fontSize: 13,
+  } as const;
+  if (!ready) {
+    return (
+      <span
+        aria-disabled
+        style={{
+          ...base,
+          border: "1px dashed var(--lb-border-1)",
+          color: "var(--lb-text-3)",
+          background: "transparent",
+          cursor: "not-allowed",
+        }}
+      >
+        <span>{label}</span>
+        <span style={{ fontSize: 11 }}>OAuth credentials not set</span>
+      </span>
+    );
+  }
+  return (
+    <a
+      href={href}
+      style={{
+        ...base,
+        border: "1px solid var(--lb-border-1)",
+        color: "var(--lb-text-1)",
+      }}
+    >
+      <span>{label}</span>
+      <span style={{ fontSize: 11, color: "var(--lb-text-3)" }}>→</span>
+    </a>
+  );
+}
 
 export default async function EmailSettingsPage({
   searchParams,
@@ -34,6 +86,16 @@ export default async function EmailSettingsPage({
   if (!profile) redirect("/sign-in");
   const connections = await listMyEmailConnections();
   const params = await searchParams;
+  const setup = await getEmailSetupStatus();
+  const microsoftReady = isProviderReady(setup, "microsoft");
+  const googleReady = isProviderReady(setup, "google");
+  const setupIncomplete = !microsoftReady && !googleReady;
+  const missing: string[] = [];
+  if (!setup.encryptionKey) missing.push("EMAIL_TOKEN_ENCRYPTION_KEY");
+  if (!setup.microsoft.clientId) missing.push("MICROSOFT_OAUTH_CLIENT_ID");
+  if (!setup.microsoft.clientSecret) missing.push("MICROSOFT_OAUTH_CLIENT_SECRET");
+  if (!setup.google.clientId) missing.push("GOOGLE_OAUTH_CLIENT_ID");
+  if (!setup.google.clientSecret) missing.push("GOOGLE_OAUTH_CLIENT_SECRET");
 
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: "32px 20px" }}>
@@ -66,6 +128,35 @@ export default async function EmailSettingsPage({
           {PROVIDER_LABEL[params.connected as keyof typeof PROVIDER_LABEL] ??
             params.connected}
           .
+        </div>
+      )}
+
+      {setupIncomplete && (
+        <div
+          style={{
+            marginTop: 16,
+            padding: 14,
+            borderRadius: 8,
+            background: "rgba(234,88,12,0.10)",
+            border: "1px solid rgba(234,88,12,0.40)",
+            color: "#ea580c",
+            fontSize: 13,
+            lineHeight: 1.55,
+          }}
+        >
+          <strong>Setup incomplete.</strong> The OAuth app credentials
+          aren&apos;t configured yet, so the Connect buttons won&apos;t
+          work. The following <code>.env</code> variables are still blank:
+          <ul style={{ margin: "8px 0 8px 18px", padding: 0 }}>
+            {missing.map((m) => (
+              <li key={m}>
+                <code>{m}</code>
+              </li>
+            ))}
+          </ul>
+          See <code>docs/rfq-email.md</code> for the Azure / Google Cloud
+          setup steps. After updating <code>.env</code>, restart{" "}
+          <code>next dev</code>.
         </div>
       )}
 
@@ -112,40 +203,16 @@ export default async function EmailSettingsPage({
           Connect a mailbox
         </h2>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <a
+          <ConnectButton
             href="/api/email/oauth/microsoft/start"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              padding: "10px 14px",
-              border: "1px solid var(--lb-border-1)",
-              borderRadius: 8,
-              textDecoration: "none",
-              color: "var(--lb-text-1)",
-              fontSize: 13,
-            }}
-          >
-            Connect Outlook / Microsoft 365
-          </a>
-          <a
+            label="Connect Outlook / Microsoft 365"
+            ready={microsoftReady}
+          />
+          <ConnectButton
             href="/api/email/oauth/google/start"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              padding: "10px 14px",
-              border: "1px solid var(--lb-border-1)",
-              borderRadius: 8,
-              textDecoration: "none",
-              color: "var(--lb-text-1)",
-              fontSize: 13,
-            }}
-          >
-            Connect Gmail / Google Workspace
-          </a>
+            label="Connect Gmail / Google Workspace"
+            ready={googleReady}
+          />
         </div>
         <p style={{ marginTop: 12, fontSize: 12, color: "var(--lb-text-3)" }}>
           We request read + send permission on your mailbox. Access and

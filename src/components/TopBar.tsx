@@ -105,6 +105,27 @@ export default function TopBar({
         <NotificationsBell />
       </Show>
 
+      <Show when="signed-in">
+        <Link
+          href="/settings/email"
+          title="Settings — email & integrations"
+          aria-label="Settings"
+          className="inline-flex items-center justify-center"
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 999,
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+            color: "var(--lb-text-2)",
+            textDecoration: "none",
+            fontSize: 16,
+          }}
+        >
+          ⚙
+        </Link>
+      </Show>
+
       <ThemeToggle />
 
       {/* CADuniQ pill. For staff (@caduniq.com) it's an internal link

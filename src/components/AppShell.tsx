@@ -1,6 +1,7 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
@@ -99,6 +100,26 @@ export default function AppShell({
         >
           <CaduniqLogo href="/" height={60} />
           <div className="flex items-center gap-3">
+            <Link
+              href="/settings/email"
+              title="Settings"
+              aria-label="Settings"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 36,
+                height: 36,
+                borderRadius: 999,
+                border: "1px solid var(--lb-border)",
+                background: "var(--lb-bg-elev)",
+                color: "var(--lb-text-2)",
+                textDecoration: "none",
+                fontSize: 15,
+              }}
+            >
+              ⚙
+            </Link>
             <ThemeToggle />
             <UserButton />
           </div>

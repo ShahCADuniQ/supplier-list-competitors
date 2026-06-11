@@ -117,6 +117,7 @@ type Tab = "companies" | "suppliers" | "retailers" | "users";
 
 export default function CaduniqHQDashboard({
   displayName,
+  emailStatus,
   clients,
   suppliersAcrossTenants,
   usersAcrossTenants,
@@ -124,6 +125,11 @@ export default function CaduniqHQDashboard({
   pendingSignups,
 }: {
   displayName: string;
+  emailStatus: {
+    configured: boolean;
+    provider: "microsoft" | "google" | null;
+    fromAddress: string | null;
+  };
   clients: HQClientRow[];
   suppliersAcrossTenants: HQSupplierRow[];
   usersAcrossTenants: HQUserRow[];
@@ -156,6 +162,82 @@ export default function CaduniqHQDashboard({
             overflow: "hidden",
           }}
         >
+          {/* Top-right controls: email-connection chip + settings link.
+              Sits above the gradient so it's always visible on the HQ
+              dashboard, which renders without the global TopBar. */}
+          <div
+            style={{
+              position: "absolute",
+              top: 16,
+              right: 16,
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              zIndex: 2,
+            }}
+          >
+            {emailStatus.configured ? (
+              <Link
+                href="/settings/email"
+                title={`Email connected: ${emailStatus.fromAddress ?? ""}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "6px 10px",
+                  borderRadius: 999,
+                  background: "rgba(16,185,129,0.18)",
+                  border: "1px solid rgba(16,185,129,0.55)",
+                  color: "#d1fae5",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  textDecoration: "none",
+                }}
+              >
+                ● {emailStatus.provider === "google" ? "Gmail" : "Outlook"}{" "}
+                connected
+              </Link>
+            ) : (
+              <Link
+                href="/settings/email"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "6px 12px",
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.16)",
+                  border: "1px solid rgba(255,255,255,0.40)",
+                  color: "#fff",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textDecoration: "none",
+                }}
+              >
+                ✉ Connect email
+              </Link>
+            )}
+            <Link
+              href="/settings/email"
+              title="Settings"
+              aria-label="Settings"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 32,
+                height: 32,
+                borderRadius: 999,
+                background: "rgba(255,255,255,0.10)",
+                border: "1px solid rgba(255,255,255,0.28)",
+                color: "#fff",
+                fontSize: 14,
+                textDecoration: "none",
+              }}
+            >
+              ⚙
+            </Link>
+          </div>
           <span
             style={{
               fontSize: 12,
