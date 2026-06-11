@@ -42,6 +42,35 @@ import {
   type SupplierOption,
 } from "./actions";
 
+// Parse the dragged inventory_item ids out of a HTML5 DataTransfer.
+// Prefers the multi-id key set by the palette (JSON array); falls
+// back to the legacy single-id key still set by every drag source
+// so all drop targets accept either shape. Returns a de-duped, >0
+// number[] — empty if nothing parseable was on the data transfer.
+function parseDraggedItemIds(dt: DataTransfer): number[] {
+  const out = new Set<number>();
+  const multi = dt.getData("application/x-lb-inventory-items");
+  if (multi) {
+    try {
+      const parsed = JSON.parse(multi);
+      if (Array.isArray(parsed)) {
+        for (const v of parsed) {
+          const n = Number(v);
+          if (Number.isFinite(n) && n > 0) out.add(n);
+        }
+      }
+    } catch {
+      // Bad JSON — fall through to the single-id read.
+    }
+  }
+  if (out.size === 0) {
+    const single = dt.getData("application/x-lb-inventory-item");
+    const n = Number(single);
+    if (Number.isFinite(n) && n > 0) out.add(n);
+  }
+  return Array.from(out);
+}
+
 // Three fixed classification codes; every generated full-code starts
 // with one of these.
 const CLASSIFICATIONS: Array<{
@@ -1375,16 +1404,19 @@ function DatabaseTab({
   }, [parts, filter, productView, childIdSet]);
 
   async function handleDrop(args: {
-    draggedItemId: number;
+    draggedItemIds: number[];
     targetItemId: number;
   }) {
     setDropError(null);
     try {
-      await addAssemblyChildAction({
-        parentInventoryItemId: args.targetItemId,
-        childInventoryItemId: args.draggedItemId,
-        quantity: 1,
-      });
+      for (const id of args.draggedItemIds) {
+        if (id === args.targetItemId) continue;
+        await addAssemblyChildAction({
+          parentInventoryItemId: args.targetItemId,
+          childInventoryItemId: id,
+          quantity: 1,
+        });
+      }
       setRefreshKey((k) => k + 1);
     } catch (e) {
       setDropError(e instanceof Error ? e.message : "Drop failed");
@@ -1604,7 +1636,7 @@ function PartRowItem({
   refreshKey: number;
   expandTreeByDefault: boolean;
   onDrop: (args: {
-    draggedItemId: number;
+    draggedItemIds: number[];
     targetItemId: number;
   }) => void;
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
@@ -1721,15 +1753,12 @@ function PartRowItem({
         e.preventDefault();
         setDragOver(false);
         if (part.inventoryItemId == null) return;
-        const raw = e.dataTransfer.getData(
-          "application/x-lb-inventory-item",
+        const ids = parseDraggedItemIds(e.dataTransfer).filter(
+          (id) => id !== part.inventoryItemId,
         );
-        const draggedItemId = Number(raw);
-        if (!draggedItemId || draggedItemId === part.inventoryItemId) {
-          return;
-        }
+        if (!ids.length) return;
         onDrop({
-          draggedItemId,
+          draggedItemIds: ids,
           targetItemId: part.inventoryItemId,
         });
       }}
@@ -2415,14 +2444,16 @@ function AssemblyTree({
   openDrawer: (id: number) => void;
   onMutated: () => void;
 }) {
-  async function dropOn(targetItemId: number, droppedItemId: number) {
-    if (droppedItemId === targetItemId) return;
+  async function dropOn(targetItemId: number, droppedItemIds: number[]) {
     try {
-      await addAssemblyChildAction({
-        parentInventoryItemId: targetItemId,
-        childInventoryItemId: droppedItemId,
-        quantity: 1,
-      });
+      for (const id of droppedItemIds) {
+        if (id === targetItemId) continue;
+        await addAssemblyChildAction({
+          parentInventoryItemId: targetItemId,
+          childInventoryItemId: id,
+          quantity: 1,
+        });
+      }
       onMutated();
     } catch (e) {
       console.warn("[nomenclature] drop on tree node failed:", e);
@@ -2540,7 +2571,7 @@ function TreeNodeCard({
   parentInventoryItemId: number | null;
   root?: boolean;
   openDrawer: (id: number) => void;
-  onDropOn: (targetItemId: number, droppedItemId: number) => void;
+  onDropOn: (targetItemId: number, droppedItemIds: number[]) => void;
   onRemove: (parentItemId: number, childItemId: number) => void;
 }) {
   const isAssembly = node.kind === "assembly";
@@ -2593,12 +2624,9 @@ function TreeNodeCard({
           e.preventDefault();
           e.stopPropagation();
           setDragOver(false);
-          const raw = e.dataTransfer.getData(
-            "application/x-lb-inventory-item",
-          );
-          const id = Number(raw);
-          if (!id) return;
-          onDropOn(node.itemId, id);
+          const ids = parseDraggedItemIds(e.dataTransfer);
+          if (!ids.length) return;
+          onDropOn(node.itemId, ids);
         }}
         onClick={(ev) => {
           // Only fire the drawer open when the user clicks the card
@@ -2882,12 +2910,11 @@ function ChildCard({
         e.preventDefault();
         e.stopPropagation();
         setDragOver(false);
-        const raw = e.dataTransfer.getData(
-          "application/x-lb-inventory-item",
+        const ids = parseDraggedItemIds(e.dataTransfer).filter(
+          (id) => id !== node.itemId,
         );
-        const id = Number(raw);
-        if (!id || id === node.itemId) return;
-        onDropOnCard(id, node.itemId);
+        if (!ids.length) return;
+        for (const id of ids) onDropOnCard(id, node.itemId);
       }}
       style={{
         padding: 14,
@@ -3400,6 +3427,9 @@ function ConfigurationsEditor({
 // and the user needs a way to reach everything else.
 function InventoryPalette({ parts }: { parts: PartRow[] }) {
   const [q, setQ] = useState("");
+  // Set of inventoryItemIds the user has checked. Multi-drag: when
+  // the user drags any selected row, the whole set rides along.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -3413,6 +3443,18 @@ function InventoryPalette({ parts }: { parts: PartRow[] }) {
         p.products.some((pp) => pp.toLowerCase().includes(needle)),
     );
   }, [parts, q]);
+
+  function toggle(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelected(new Set());
+  }
 
   return (
     <aside
@@ -3464,6 +3506,41 @@ function InventoryPalette({ parts }: { parts: PartRow[] }) {
             {filtered.length} of {parts.length}
           </span>
         </div>
+        {selected.size > 0 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              padding: "5px 10px",
+              borderRadius: 999,
+              background:
+                "color-mix(in srgb, var(--lb-accent) 14%, transparent)",
+              color: "var(--lb-accent)",
+              fontSize: 11,
+              fontWeight: 700,
+            }}
+          >
+            <span>{selected.size} selected</span>
+            <button
+              type="button"
+              onClick={clearSelection}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--lb-accent)",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "pointer",
+                textDecoration: "underline",
+                padding: 0,
+              }}
+            >
+              Clear
+            </button>
+          </div>
+        )}
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -3487,8 +3564,8 @@ function InventoryPalette({ parts }: { parts: PartRow[] }) {
             lineHeight: 1.45,
           }}
         >
-          Drag any row onto a master card or nested child card to add
-          it as a child of that target.
+          Click the checkbox to multi-select, then drag any selected
+          row onto a card to link them all as children of that target.
         </p>
       </header>
       <div
@@ -3514,7 +3591,17 @@ function InventoryPalette({ parts }: { parts: PartRow[] }) {
           </div>
         ) : (
           filtered.map((p) => (
-            <PaletteRow key={p.id} part={p} />
+            <PaletteRow
+              key={p.id}
+              part={p}
+              selected={
+                p.inventoryItemId != null && selected.has(p.inventoryItemId)
+              }
+              selectedIds={selected}
+              onToggle={() => {
+                if (p.inventoryItemId != null) toggle(p.inventoryItemId);
+              }}
+            />
           ))
         )}
       </div>
@@ -3522,7 +3609,17 @@ function InventoryPalette({ parts }: { parts: PartRow[] }) {
   );
 }
 
-function PaletteRow({ part }: { part: PartRow }) {
+function PaletteRow({
+  part,
+  selected,
+  selectedIds,
+  onToggle,
+}: {
+  part: PartRow;
+  selected: boolean;
+  selectedIds: Set<number>;
+  onToggle: () => void;
+}) {
   const [grabbing, setGrabbing] = useState(false);
   const isAssembly = part.partOrAssembly === "A";
 
@@ -3531,40 +3628,82 @@ function PaletteRow({ part }: { part: PartRow }) {
       draggable
       onDragStart={(e) => {
         if (part.inventoryItemId == null) return;
+        // Drag set:
+        //   • if THIS row is in the selection AND there are 2+
+        //     selected, drag the whole selected set
+        //   • else, drag just this row
+        const ids =
+          selected && selectedIds.size > 1
+            ? Array.from(selectedIds)
+            : [part.inventoryItemId];
+        // Both keys go on the data-transfer:
+        //   • application/x-lb-inventory-items — JSON array, the
+        //     new multi-drop format
+        //   • application/x-lb-inventory-item — single id, kept
+        //     for backward compat with drop targets that haven't
+        //     migrated yet (none right now, but cheap insurance)
+        e.dataTransfer.setData(
+          "application/x-lb-inventory-items",
+          JSON.stringify(ids),
+        );
         e.dataTransfer.setData(
           "application/x-lb-inventory-item",
-          String(part.inventoryItemId),
+          String(ids[0]),
         );
         e.dataTransfer.effectAllowed = "link";
         setGrabbing(true);
       }}
       onDragEnd={() => setGrabbing(false)}
-      title={`Drag onto an assembly to link ${part.fullCode} as a child`}
+      title={
+        selected && selectedIds.size > 1
+          ? `Drag to link ${selectedIds.size} selected items as children`
+          : `Drag onto an assembly to link ${part.fullCode} as a child`
+      }
       style={{
         padding: "9px 10px",
         borderRadius: 8,
-        border: "1px solid var(--lb-border)",
-        background: "var(--lb-bg)",
+        border: selected
+          ? "1px solid var(--lb-accent)"
+          : "1px solid var(--lb-border)",
+        background: selected
+          ? "color-mix(in srgb, var(--lb-accent) 10%, var(--lb-bg))"
+          : "var(--lb-bg)",
         display: "flex",
         flexDirection: "column",
         gap: 4,
         cursor: grabbing ? "grabbing" : "grab",
         opacity: grabbing ? 0.5 : 1,
         transition:
-          "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, opacity 120ms ease",
+          "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, opacity 120ms ease, background-color 160ms ease",
       }}
       onMouseEnter={(e) => {
-        if (!grabbing) {
+        if (!grabbing && !selected) {
           e.currentTarget.style.borderColor = "var(--lb-accent)";
           e.currentTarget.style.transform = "translateY(-1px)";
         }
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "var(--lb-border)";
+        if (!selected) {
+          e.currentTarget.style.borderColor = "var(--lb-border)";
+        }
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggle}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${part.fullCode}`}
+          style={{
+            width: 14,
+            height: 14,
+            cursor: "pointer",
+            accentColor: "var(--lb-accent)",
+            flexShrink: 0,
+          }}
+        />
         <span style={{ fontSize: 14 }}>
           {part.kind === "hardware" ? "🛠" : isAssembly ? "🧩" : "🔧"}
         </span>
@@ -3585,7 +3724,7 @@ function PaletteRow({ part }: { part: PartRow }) {
           style={{
             fontSize: 11,
             color: "var(--lb-text-3)",
-            paddingLeft: 22,
+            paddingLeft: 38,
           }}
         >
           {part.name}
@@ -3597,7 +3736,7 @@ function PaletteRow({ part }: { part: PartRow }) {
             display: "flex",
             flexWrap: "wrap",
             gap: 4,
-            paddingLeft: 22,
+            paddingLeft: 38,
           }}
         >
           {part.products.map((label) => (

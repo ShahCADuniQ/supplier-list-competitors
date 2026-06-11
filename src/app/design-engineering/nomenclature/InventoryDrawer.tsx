@@ -27,6 +27,31 @@ import {
   type InventoryDetails,
 } from "./actions";
 
+// Local copy of the multi-id parser. Mirrors the one in
+// NomenclatureGenerator.tsx; both files are client components and
+// keeping them independent avoids a circular cross-file import.
+function parseDraggedItemIdsLocal(dt: DataTransfer): number[] {
+  const out = new Set<number>();
+  const multi = dt.getData("application/x-lb-inventory-items");
+  if (multi) {
+    try {
+      const parsed = JSON.parse(multi);
+      if (Array.isArray(parsed)) {
+        for (const v of parsed) {
+          const n = Number(v);
+          if (Number.isFinite(n) && n > 0) out.add(n);
+        }
+      }
+    } catch {}
+  }
+  if (out.size === 0) {
+    const single = dt.getData("application/x-lb-inventory-item");
+    const n = Number(single);
+    if (Number.isFinite(n) && n > 0) out.add(n);
+  }
+  return Array.from(out);
+}
+
 const KINDS: Array<{
   value: DrawerAttachment["kind"];
   label: string;
@@ -567,10 +592,15 @@ function DropZoneSection({
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setOver(false);
-    const raw = e.dataTransfer.getData("application/x-lb-inventory-item");
-    const id = Number(raw);
-    if (!id || id === currentItemId) return;
-    onDrop(id);
+    // Support both the multi-id key (set by the catalogue palette)
+    // and the legacy single-id key (set by everything else). Loops
+    // through every id and fires the parent's onDrop callback once
+    // per child so the drawer's existing reload pipeline handles
+    // the batch.
+    const ids = parseDraggedItemIdsLocal(e.dataTransfer).filter(
+      (id) => id !== currentItemId,
+    );
+    for (const id of ids) onDrop(id);
   }
 
   return (
