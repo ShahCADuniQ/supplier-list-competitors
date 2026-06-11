@@ -586,7 +586,7 @@ function HardwareForm({
           product: products[0] ?? null,
           products,
           configurations,
-          inventoryItemId: null,
+          inventoryItemId: r.inventoryItemId ?? null,
           createdAt: new Date().toISOString(),
         });
         setNomenclature("");
@@ -1053,7 +1053,7 @@ function PartIdTab({
           product: products[0] ?? null,
           products,
           configurations,
-          inventoryItemId: null,
+          inventoryItemId: r.inventoryItemId ?? null,
           createdAt: new Date().toISOString(),
         });
         setName("");

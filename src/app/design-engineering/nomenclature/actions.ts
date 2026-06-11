@@ -383,7 +383,12 @@ export async function saveHardwarePart(input: {
   product?: string | null;
   products?: string[];
   configurations?: Configuration[];
-}): Promise<{ id: number; uniqueId: string; fullCode: string }> {
+}): Promise<{
+  id: number;
+  uniqueId: string;
+  fullCode: string;
+  inventoryItemId: number;
+}> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");
   await ensureNomenclatureSchema();
@@ -443,7 +448,7 @@ export async function saveHardwarePart(input: {
     profile.clerkUserId,
   );
 
-  return { id: inserted.id, uniqueId, fullCode };
+  return { id: inserted.id, uniqueId, fullCode, inventoryItemId: inventoryId };
 }
 
 // ── Part / Assembly ID save ─────────────────────────────────────────────
@@ -494,6 +499,7 @@ export async function savePartCode(input: {
   id: number;
   uniqueId: string;
   fullCode: string;
+  inventoryItemId: number;
   supplierProductId: number | null;
 }> {
   const profile = await getOrCreateProfile();
@@ -601,7 +607,13 @@ export async function savePartCode(input: {
     }
   }
 
-  return { id: inserted.id, uniqueId, fullCode, supplierProductId };
+  return {
+    id: inserted.id,
+    uniqueId,
+    fullCode,
+    inventoryItemId: inventoryId,
+    supplierProductId,
+  };
 }
 
 // ── Edit (name + description + configurations) ──────────────────────────
