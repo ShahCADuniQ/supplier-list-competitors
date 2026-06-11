@@ -4,8 +4,13 @@
 // new tables, so a freshly-deployed server doesn't 500 because Drizzle
 // migrations haven't been applied yet.
 
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
+import {
+  inventoryItems,
+  nomenclatureParts,
+  supplierProducts,
+} from "@/db/schema";
 
 let _ensured: Promise<void> | null = null;
 
@@ -106,10 +111,111 @@ export function ensureNomenclatureSchema(): Promise<void> {
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "assembly_bom_parent_idx" ON "assembly_bom" ("parent_assembly_id")`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "assembly_bom_child_idx" ON "assembly_bom" ("child_item_id")`);
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "assembly_bom_unique_edge_idx" ON "assembly_bom" ("parent_assembly_id","child_item_id")`);
+
+      // V90 — Auto-backfill: insert P / A after the unique ID in any
+      // legacy nomenclature_parts row whose fullCode is missing it.
+      // Idempotent; once every row is migrated the SELECT below
+      // returns nothing and this is a no-op on every subsequent boot.
+      await autoBackfillPartCodes();
     } catch (e) {
       _ensured = null;
       throw e;
     }
   })();
   return _ensured;
+}
+
+// V90 — One-time backfill that runs once per process boot inside the
+// schema-ensure promise. Walks every nomenclature_parts row of
+// kind='part' whose fullCode is missing the P/A segment after the
+// unique ID and rewrites it (plus the linked inventory_items.code
+// and any supplier_products.productCode pointing at the old code).
+// Idempotent: rows already in the new shape are filtered out by the
+// SQL split_part check, so this is a no-op on subsequent boots once
+// the migration is complete.
+async function autoBackfillPartCodes(): Promise<void> {
+  try {
+    // SELECT only rows that need fixing — segment 3 (1-indexed) is
+    // neither 'P' nor 'A'. Anything that doesn't split into at least
+    // 3 segments is skipped.
+    const rows = await db
+      .select({
+        id: nomenclatureParts.id,
+        fullCode: nomenclatureParts.fullCode,
+        partOrAssembly: nomenclatureParts.partOrAssembly,
+        inventoryItemId: nomenclatureParts.inventoryItemId,
+      })
+      .from(nomenclatureParts)
+      .where(
+        and(
+          eq(nomenclatureParts.kind, "part"),
+          sql`split_part(${nomenclatureParts.fullCode}, '-', 3) NOT IN ('P','A')`,
+        ),
+      );
+
+    for (const r of rows) {
+      let pa: "P" | "A" =
+        r.partOrAssembly === "A"
+          ? "A"
+          : r.partOrAssembly === "P"
+            ? "P"
+            : "P";
+      if (!r.partOrAssembly && r.inventoryItemId != null) {
+        const [inv] = await db
+          .select({ kind: inventoryItems.kind })
+          .from(inventoryItems)
+          .where(eq(inventoryItems.id, r.inventoryItemId))
+          .limit(1);
+        if (inv?.kind === "assembly") pa = "A";
+      }
+
+      const segments = r.fullCode.split("-");
+      if (segments.length < 2) continue;
+      // Skip if a concurrent write already inserted it.
+      if (segments[2] === "P" || segments[2] === "A") continue;
+
+      const rewritten = [
+        segments[0],
+        segments[1],
+        pa,
+        ...segments.slice(2),
+      ]
+        .join("-")
+        .toUpperCase();
+
+      await db
+        .update(nomenclatureParts)
+        .set({
+          fullCode: rewritten,
+          partOrAssembly: pa,
+          updatedAt: new Date(),
+        })
+        .where(eq(nomenclatureParts.id, r.id));
+
+      if (r.inventoryItemId != null) {
+        await db
+          .update(inventoryItems)
+          .set({ code: rewritten, updatedAt: new Date() })
+          .where(eq(inventoryItems.id, r.inventoryItemId));
+      }
+
+      await db
+        .update(supplierProducts)
+        .set({ productCode: rewritten, updatedAt: new Date() })
+        .where(eq(supplierProducts.productCode, r.fullCode));
+    }
+
+    if (rows.length > 0) {
+      console.log(
+        `[nomenclature] auto-backfilled ${rows.length} legacy code(s) with P/A`,
+      );
+    }
+  } catch (e) {
+    // Don't let a backfill error block schema-ensure. Worst case the
+    // user sees old codes and can hit the manual button.
+    console.warn(
+      "[nomenclature] auto-backfill failed:",
+      e instanceof Error ? e.message : e,
+    );
+  }
 }
