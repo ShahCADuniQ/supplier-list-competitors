@@ -13,10 +13,13 @@
 import { useEffect, useState, useTransition } from "react";
 import { upload } from "@vercel/blob/client";
 import {
+  addAssemblyChildAction,
   addInventoryAttachmentAction,
   getInventoryDetails,
   removeInventoryAttachmentAction,
   type DrawerAttachment,
+  type DrawerChild,
+  type DrawerParent,
   type InventoryDetails,
 } from "./actions";
 
@@ -99,18 +102,67 @@ export default function InventoryDrawer({
     setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
   }
 
+  // Add the dragged item as a child of the current item.
+  async function addAsChild(draggedItemId: number) {
+    if (draggedItemId === currentId) return;
+    try {
+      await addAssemblyChildAction({
+        parentInventoryItemId: currentId,
+        childInventoryItemId: draggedItemId,
+        quantity: 1,
+      });
+      load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Add failed");
+    }
+  }
+
+  // Add the current item as a child of the dragged item (i.e. the
+  // dragged item becomes a parent of this one).
+  async function addAsParent(draggedItemId: number) {
+    if (draggedItemId === currentId) return;
+    try {
+      await addAssemblyChildAction({
+        parentInventoryItemId: draggedItemId,
+        childInventoryItemId: currentId,
+        quantity: 1,
+      });
+      load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Add failed");
+    }
+  }
+
   return (
     <>
-      {/* Scrim */}
+      {/* Scrim — clickable to close, but pointer-events:none on drag
+          events so a card BEHIND the drawer (the database list) can
+          still be dragged into the drawer's drop zones. The scrim
+          still dims background visually. Close via the X button or
+          the Esc key when a drag is in progress. */}
       <div
         onClick={onClose}
         style={{
           position: "fixed",
           inset: 0,
-          background: "rgba(0,0,0,0.30)",
+          background: "rgba(0,0,0,0.18)",
           zIndex: 49,
-          opacity: 1,
           animation: "lb-fade-in 160ms ease",
+          // The trick: ignore drag-related pointer events so the
+          // source card behind us can fire dragstart, and our drop
+          // targets above receive dragenter/drop. Clicks still hit
+          // the scrim because they go through onClick.
+          pointerEvents: "auto",
+        }}
+        onDragEnter={(e) => {
+          // Forward the event so the underlying card is treated as
+          // the drag source — without this the browser may swallow
+          // dragenter on the scrim itself and we lose the drop.
+          e.preventDefault();
+        }}
+        onDragOver={(e) => {
+          // Same — allow drag traversal across the scrim.
+          e.preventDefault();
         }}
         aria-hidden
       />
@@ -280,6 +332,8 @@ export default function InventoryDrawer({
               details={details}
               onMutated={load}
               onNavigateTo={navigateTo}
+              onDropAsChild={addAsChild}
+              onDropAsParent={addAsParent}
             />
           )}
         </div>
@@ -292,10 +346,14 @@ function Body({
   details,
   onMutated,
   onNavigateTo,
+  onDropAsChild,
+  onDropAsParent,
 }: {
   details: InventoryDetails;
   onMutated: () => void;
   onNavigateTo: (id: number) => void;
+  onDropAsChild: (draggedItemId: number) => void;
+  onDropAsParent: (draggedItemId: number) => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -395,37 +453,32 @@ function Body({
         onMutated={onMutated}
       />
 
-      {details.children.length > 0 && (
-        <Section title={`Direct children (${details.children.length})`}>
-          <NavList
-            items={details.children.map((c) => ({
-              id: c.inventoryItemId,
-              icon: c.kind === "assembly" ? "🧩" : "🔧",
-              code: c.code,
-              name: c.name,
-              qty: c.quantity,
-              stock: c.stock,
-            }))}
-            onClick={onNavigateTo}
-          />
-        </Section>
-      )}
+      <DropZoneSection
+        title={`Direct children (${details.children.length})`}
+        tone="child"
+        emptyHint={`Drag any card from the database list here and drop — it becomes a child of ${details.code}.`}
+        items={details.children}
+        onNavigateTo={onNavigateTo}
+        onDrop={onDropAsChild}
+        currentItemId={details.inventoryItemId}
+      />
 
-      {details.parents.length > 0 && (
-        <Section title={`Used in (${details.parents.length})`}>
-          <NavList
-            items={details.parents.map((p) => ({
-              id: p.inventoryItemId,
-              icon: "🧩",
-              code: p.code,
-              name: p.name,
-              qty: p.quantity,
-              stock: null,
-            }))}
-            onClick={onNavigateTo}
-          />
-        </Section>
-      )}
+      <DropZoneSection
+        title={`Used in (${details.parents.length})`}
+        tone="parent"
+        emptyHint={`Drag a card here — that card becomes a parent assembly, and ${details.code} becomes its child.`}
+        items={details.parents.map((p) => ({
+          inventoryItemId: p.inventoryItemId,
+          code: p.code,
+          name: p.name,
+          kind: "assembly" as const,
+          quantity: p.quantity,
+          stock: 0,
+        }))}
+        onNavigateTo={onNavigateTo}
+        onDrop={onDropAsParent}
+        currentItemId={details.inventoryItemId}
+      />
 
       {details.supplierLinks.length > 0 && (
         <Section
@@ -468,6 +521,148 @@ function Body({
         </Section>
       )}
     </div>
+  );
+}
+
+// Drop-target section. Two visual modes:
+//   tone='child'  → blue accent ring + "Add as child" microcopy
+//   tone='parent' → purple ring + "Add as parent" microcopy
+// Each section already renders its NavList contents inside; the
+// drop-zone wraps the whole region so the user can drop on the
+// section header, the empty hint, or any of the existing rows.
+function DropZoneSection({
+  title,
+  tone,
+  emptyHint,
+  items,
+  onNavigateTo,
+  onDrop,
+  currentItemId,
+}: {
+  title: string;
+  tone: "child" | "parent";
+  emptyHint: string;
+  items: DrawerChild[] | DrawerParent[];
+  onNavigateTo: (id: number) => void;
+  onDrop: (draggedItemId: number) => void;
+  currentItemId: number;
+}) {
+  const [over, setOver] = useState(false);
+  const accent = tone === "child" ? "#2563eb" : "#7c3aed";
+  const accentLight =
+    tone === "child"
+      ? "color-mix(in srgb, #2563eb 12%, transparent)"
+      : "color-mix(in srgb, #7c3aed 12%, transparent)";
+
+  function handleDragOver(e: React.DragEvent) {
+    if (
+      !e.dataTransfer.types.includes("application/x-lb-inventory-item")
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "link";
+    if (!over) setOver(true);
+  }
+  function handleDragLeave(e: React.DragEvent) {
+    // Only clear when the cursor actually leaves the wrapper (not when
+    // crossing a child row).
+    if (
+      !e.relatedTarget ||
+      !(e.relatedTarget instanceof Node) ||
+      !e.currentTarget.contains(e.relatedTarget)
+    ) {
+      setOver(false);
+    }
+  }
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setOver(false);
+    const raw = e.dataTransfer.getData("application/x-lb-inventory-item");
+    const id = Number(raw);
+    if (!id || id === currentItemId) return;
+    onDrop(id);
+  }
+
+  return (
+    <section
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      style={{
+        padding: 10,
+        borderRadius: 12,
+        border: over
+          ? `2px dashed ${accent}`
+          : "2px dashed transparent",
+        background: over ? accentLight : "transparent",
+        transition:
+          "background-color 160ms ease, border-color 160ms ease",
+      }}
+    >
+      <h3
+        style={{
+          margin: "0 0 8px",
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 0.6,
+          textTransform: "uppercase",
+          color: over ? accent : "var(--lb-text-3)",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        {title}
+        {over && (
+          <span
+            style={{
+              padding: "2px 8px",
+              borderRadius: 999,
+              background: accent,
+              color: "#fff",
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing: 0.4,
+            }}
+          >
+            {tone === "child" ? "Add as child" : "Add as parent"}
+          </span>
+        )}
+      </h3>
+      {items.length === 0 ? (
+        <div
+          style={{
+            padding: "12px 14px",
+            borderRadius: 10,
+            border: `1px dashed ${over ? accent : "var(--lb-border)"}`,
+            background: over ? accentLight : "var(--lb-bg-elev)",
+            color: over ? accent : "var(--lb-text-3)",
+            fontSize: 12.5,
+            lineHeight: 1.5,
+            textAlign: "center",
+          }}
+        >
+          {emptyHint}
+        </div>
+      ) : (
+        <NavList
+          items={items.map((it) => {
+            const kind = "kind" in it ? it.kind : "assembly";
+            const stock = "stock" in it ? it.stock : null;
+            return {
+              id: it.inventoryItemId,
+              icon: kind === "assembly" ? "🧩" : "🔧",
+              code: it.code,
+              name: it.name,
+              qty: it.quantity,
+              stock,
+            };
+          })}
+          onClick={onNavigateTo}
+        />
+      )}
+    </section>
   );
 }
 
