@@ -1163,7 +1163,7 @@ function PartIdTab({
         </li>
         <li>
           The <strong>P</strong> / <strong>A</strong> segment is driven
-          by the Kind selector — Part/Configuration → P, Assembly → A.
+          by the Kind selector — Part → P, Assembly → A.
         </li>
         <li>
           Leave a dimension blank and it stays as literal{" "}
@@ -1203,7 +1203,7 @@ function PartIdTab({
             onChange={(e) => setKind(e.target.value as "part" | "assembly")}
             style={INPUT}
           >
-            <option value="part">Part / Configuration</option>
+            <option value="part">Part</option>
             <option value="assembly">Assembly</option>
           </select>
         </label>

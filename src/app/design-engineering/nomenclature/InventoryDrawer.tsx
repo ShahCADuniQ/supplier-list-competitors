@@ -1010,7 +1010,7 @@ function Body({
               details.partOrAssembly === "A"
                 ? "Assembly"
                 : details.partOrAssembly === "P"
-                  ? "Part / Configuration"
+                  ? "Part"
                   : details.kind
             }
           />
