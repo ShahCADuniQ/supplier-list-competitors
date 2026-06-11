@@ -130,9 +130,10 @@ export async function listParts(): Promise<PartRow[]> {
 
 export async function importStandardsFromFolder() {
   await ensureNomenclatureSchema();
-  const result = await scanHardwaresFolder();
-  revalidatePath("/design-engineering/nomenclature");
-  return result;
+  // No revalidatePath here — the page reads listStandards() right after
+  // calling this, and Next 16 forbids cache mutations inside a render.
+  // For UI-triggered re-scans the page reloads via ?rescan=1.
+  return await scanHardwaresFolder();
 }
 
 // ── Inventory upsert helper (shared by both save paths) ─────────────────
