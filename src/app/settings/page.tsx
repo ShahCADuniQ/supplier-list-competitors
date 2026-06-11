@@ -43,16 +43,16 @@ export default async function ManageAccountPage({
   const connections = await listMyEmailConnections();
   const setup = await getEmailSetupStatus();
   const userIsAdmin = isAdmin(profile);
-  const microsoftReady = isProviderReady(setup, "microsoft");
-  const googleReady = isProviderReady(setup, "google");
-  const setupIncomplete = !microsoftReady && !googleReady;
+  const ready = isProviderReady(setup);
+  // With Nylas, both providers go through the same client/key, so they
+  // light up or stay dark together.
+  const microsoftReady = ready;
+  const googleReady = ready;
+  const setupIncomplete = !ready;
   const missing: string[] = [];
   if (!setup.encryptionKey) missing.push("EMAIL_TOKEN_ENCRYPTION_KEY");
-  if (!setup.microsoft.clientId) missing.push("MICROSOFT_OAUTH_CLIENT_ID");
-  if (!setup.microsoft.clientSecret)
-    missing.push("MICROSOFT_OAUTH_CLIENT_SECRET");
-  if (!setup.google.clientId) missing.push("GOOGLE_OAUTH_CLIENT_ID");
-  if (!setup.google.clientSecret) missing.push("GOOGLE_OAUTH_CLIENT_SECRET");
+  if (!setup.nylas.clientId) missing.push("NYLAS_CLIENT_ID");
+  if (!setup.nylas.apiKey) missing.push("NYLAS_API_KEY");
 
   let tenantName: string | null = null;
   if (profile.clientId != null) {
@@ -219,19 +219,34 @@ export default async function ManageAccountPage({
           >
             {userIsAdmin ? (
               <>
-                <strong>One-time OAuth app setup needed.</strong> To let
-                users connect their mailboxes, you need to register an
-                OAuth app on Azure AD (for Outlook) and/or Google Cloud
-                (for Gmail) once, then add the credentials to{" "}
-                <code>.env</code> on the server. This is a deployment
-                config — not something you can do from this page.
-                <div style={{ marginTop: 10, fontWeight: 600 }}>
-                  Steps:
-                </div>
+                <strong>One-time Nylas setup needed.</strong> Email is
+                routed through Nylas, which handles the Outlook + Gmail
+                OAuth dance for us. To finish setup, grab your client id
+                and an API key from the Nylas dashboard and add them
+                to <code>.env</code> on the server.
+                <div style={{ marginTop: 10, fontWeight: 600 }}>Steps:</div>
                 <ol style={{ margin: "4px 0 8px 20px", padding: 0 }}>
                   <li>
-                    Follow the walkthrough in{" "}
-                    <code>docs/rfq-email.md</code> (~10 min per provider).
+                    Create a free Nylas account at{" "}
+                    <a
+                      href="https://dashboard-v3.nylas.com/"
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: "#ea580c", textDecoration: "underline" }}
+                    >
+                      dashboard-v3.nylas.com
+                    </a>
+                    .
+                  </li>
+                  <li>
+                    Whitelist this app&apos;s callback as a redirect URI:{" "}
+                    <code>
+                      {(process.env.APP_BASE_URL ||
+                        process.env.NEXT_PUBLIC_APP_URL ||
+                        "http://localhost:3000"
+                      ).replace(/\/$/, "")}
+                      /api/email/oauth/callback
+                    </code>
                   </li>
                   <li>
                     Fill these values in <code>.env</code>:
@@ -244,14 +259,13 @@ export default async function ManageAccountPage({
                     </ul>
                   </li>
                   <li>
-                    Restart <code>next dev</code> (or redeploy in
-                    production).
+                    Restart <code>next dev</code> (or redeploy in production).
                   </li>
                 </ol>
                 <div style={{ marginTop: 8 }}>
-                  Once configured, every user — including you — can
-                  click Connect below to link their own Outlook or
-                  Gmail account.
+                  Once configured, every user — including you — can click
+                  Connect below to link their own Outlook or Gmail
+                  account through Nylas&apos;s hosted consent flow.
                 </div>
               </>
             ) : (

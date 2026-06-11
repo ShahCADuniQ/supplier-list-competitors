@@ -1,15 +1,13 @@
-// Shared OAuth callback logic for /api/email/oauth/{microsoft,google}/callback.
-// The two routes are 99% identical; only the provider id changes.
+// Single OAuth callback for the Nylas hosted-auth flow. Nylas redirects
+// here for BOTH Outlook and Gmail (one redirect URI whitelisted in the
+// dashboard); the signed state cookie tells us which provider the user
+// originally chose and which Clerk user owns the grant.
 
 import { cookies } from "next/headers";
 import { auth } from "@clerk/nextjs/server";
-import {
-  exchangeCodeForTokens,
-  fetchEmailAddress,
-  upsertConnection,
-} from "./connections";
+import { upsertConnection } from "./connections";
+import { exchangeCodeForGrant } from "./nylas";
 import { STATE_COOKIE, verifyState } from "./oauth-state";
-import type { EmailProvider } from "./types";
 
 function html(body: string, status = 200): Response {
   return new Response(
@@ -20,7 +18,6 @@ function html(body: string, status = 200): Response {
 
 export async function handleOAuthCallback(
   request: Request,
-  provider: EmailProvider,
 ): Promise<Response> {
   const { userId } = await auth();
   if (!userId) return html("<h1>Sign in required</h1>", 401);
@@ -59,34 +56,25 @@ export async function handleOAuthCallback(
       400,
     );
   }
-  if (verified.p !== provider) {
-    return html("<h1>Provider mismatch</h1>", 400);
-  }
 
   try {
-    const tokens = await exchangeCodeForTokens({
-      provider,
-      code,
-      request,
-    });
-    const emailAddress = await fetchEmailAddress({
-      provider,
-      accessToken: tokens.access_token,
-    });
-    const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
+    const exchange = await exchangeCodeForGrant({ code, request });
+    // Map Nylas's provider hint back to our enum. IMAP is unlikely here
+    // (we only ever request microsoft/google), but if it shows up we
+    // default it to google so it still stores cleanly.
+    const provider =
+      exchange.provider === "microsoft" ? "microsoft" : "google";
     await upsertConnection({
       clerkUserId: userId,
       provider,
-      emailAddress,
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token ?? null,
-      expiresAt,
-      scope: tokens.scope ?? null,
+      emailAddress: exchange.email,
+      grantId: exchange.grant_id,
+      scope: exchange.scope ?? null,
     });
     jar.delete(STATE_COOKIE);
     return new Response(null, {
       status: 302,
-      headers: { Location: "/settings?connected=" + provider + "#email" },
+      headers: { Location: `/settings?connected=${provider}#email` },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
