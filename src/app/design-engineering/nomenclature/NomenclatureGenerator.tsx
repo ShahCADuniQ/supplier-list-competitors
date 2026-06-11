@@ -35,6 +35,7 @@ import {
   updatePart,
   type AssemblyTreeNode,
   type Configuration,
+  type ConfigurationOption,
   type InventoryPickerRow,
   type PartRow,
   type StandardRow,
@@ -68,6 +69,7 @@ export default function NomenclatureGenerator({
   supplierOptions,
   productOptions,
   childItemIds,
+  configurationOptions,
 }: {
   standards: StandardRow[];
   parts: PartRow[];
@@ -75,6 +77,7 @@ export default function NomenclatureGenerator({
   supplierOptions: SupplierOption[];
   productOptions: string[];
   childItemIds: number[];
+  configurationOptions: ConfigurationOption[];
 }) {
   const [tab, setTab] = useState<Tab>("hardware");
   const [standards, setStandards] = useState<StandardRow[]>(initialStandards);
@@ -103,6 +106,7 @@ export default function NomenclatureGenerator({
         <HardwareTab
           standards={standards}
           productOptions={productOptions}
+          configurationOptions={configurationOptions}
           onAddStandard={(s) => setStandards((prev) => [...prev, s])}
           onSaved={(p) => setParts((prev) => [p, ...prev])}
         />
@@ -111,6 +115,7 @@ export default function NomenclatureGenerator({
         <PartIdTab
           supplierOptions={supplierOptions}
           productOptions={productOptions}
+          configurationOptions={configurationOptions}
           onSaved={(p) => setParts((prev) => [p, ...prev])}
         />
       )}
@@ -126,6 +131,7 @@ export default function NomenclatureGenerator({
           parts={parts}
           supplierOptions={supplierOptions}
           productOptions={productOptions}
+          configurationOptions={configurationOptions}
           childItemIds={childItemIds}
           openDrawer={(id) => setDrawerItemId(id)}
           onUpdate={(updated) =>
@@ -375,11 +381,13 @@ function Tabs({
 function HardwareTab({
   standards,
   productOptions,
+  configurationOptions,
   onAddStandard,
   onSaved,
 }: {
   standards: StandardRow[];
   productOptions: string[];
+  configurationOptions: ConfigurationOption[];
   onAddStandard: (s: StandardRow) => void;
   onSaved: (p: PartRow) => void;
 }) {
@@ -467,6 +475,7 @@ function HardwareTab({
           <HardwareForm
             standard={selected}
             productOptions={productOptions}
+            configurationOptions={configurationOptions}
             onSaved={onSaved}
           />
         )}
@@ -478,10 +487,12 @@ function HardwareTab({
 function HardwareForm({
   standard,
   productOptions,
+  configurationOptions,
   onSaved,
 }: {
   standard: StandardRow;
   productOptions: string[];
+  configurationOptions: ConfigurationOption[];
   onSaved: (p: PartRow) => void;
 }) {
   const [classification, setClassification] = useState<
@@ -713,6 +724,7 @@ function HardwareForm({
         label="Configurations (optional)"
         configs={configurations}
         setConfigs={setConfigurations}
+        knownConfigurations={configurationOptions}
       />
 
       {err && <ErrorBox message={err} />}
@@ -937,10 +949,12 @@ function NewFamilyButton({
 function PartIdTab({
   supplierOptions,
   productOptions,
+  configurationOptions,
   onSaved,
 }: {
   supplierOptions: SupplierOption[];
   productOptions: string[];
+  configurationOptions: ConfigurationOption[];
   onSaved: (p: PartRow) => void;
 }) {
   const [classification, setClassification] = useState<
@@ -1248,6 +1262,7 @@ function PartIdTab({
         label="Configurations (optional)"
         configs={configurations}
         setConfigs={setConfigurations}
+        knownConfigurations={configurationOptions}
       />
 
       {err && <ErrorBox message={err} />}
@@ -1275,6 +1290,7 @@ function DatabaseTab({
   parts,
   supplierOptions,
   productOptions,
+  configurationOptions,
   childItemIds,
   openDrawer,
   onUpdate,
@@ -1283,6 +1299,7 @@ function DatabaseTab({
   parts: PartRow[];
   supplierOptions: SupplierOption[];
   productOptions: string[];
+  configurationOptions: ConfigurationOption[];
   childItemIds: number[];
   openDrawer: (inventoryItemId: number) => void;
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
@@ -1550,6 +1567,7 @@ function DatabaseTab({
               part={p}
               supplierOptions={supplierOptions}
               productOptions={productList.products}
+              configurationOptions={configurationOptions}
               refreshKey={refreshKey}
               expandTreeByDefault={productSpecific}
               onDrop={handleDrop}
@@ -1571,6 +1589,7 @@ function PartRowItem({
   part,
   supplierOptions,
   productOptions,
+  configurationOptions,
   refreshKey,
   expandTreeByDefault,
   onDrop,
@@ -1581,6 +1600,7 @@ function PartRowItem({
   part: PartRow;
   supplierOptions: SupplierOption[];
   productOptions: string[];
+  configurationOptions: ConfigurationOption[];
   refreshKey: number;
   expandTreeByDefault: boolean;
   onDrop: (args: {
@@ -2021,6 +2041,7 @@ function PartRowItem({
             label="Configurations"
             configs={chips}
             setConfigs={setChips}
+            knownConfigurations={configurationOptions}
           />
           {err && <ErrorBox message={err} />}
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -3199,11 +3220,16 @@ function ConfigurationsEditor({
   label,
   configs,
   setConfigs,
+  knownConfigurations,
 }: {
   label: string;
   configs: Configuration[];
   setConfigs: (next: Configuration[]) => void;
+  knownConfigurations?: ConfigurationOption[];
 }) {
+  const options = knownConfigurations ?? [];
+  const datalistId = `config-options-${options.length}-${options
+    .reduce((s, o) => s + o.name.length, 0)}`;
   function add() {
     setConfigs([...configs, { name: "", description: null }]);
   }
@@ -3212,6 +3238,23 @@ function ConfigurationsEditor({
   }
   function removeAt(i: number) {
     setConfigs(configs.filter((_, j) => j !== i));
+  }
+  // When the user picks an existing option, auto-fill the description
+  // ONLY if the current row's description is empty so we don't
+  // overwrite anything they've typed.
+  function autoFillFromOption(i: number, rawName: string) {
+    const name = rawName.trim().toUpperCase();
+    const current = configs[i];
+    const match = options.find((o) => o.name.toUpperCase() === name);
+    if (!match) {
+      updateAt(i, { name });
+      return;
+    }
+    if (!current.description || !current.description.trim()) {
+      updateAt(i, { name, description: match.description });
+    } else {
+      updateAt(i, { name });
+    }
   }
   return (
     <label style={FIELD}>
@@ -3236,7 +3279,7 @@ function ConfigurationsEditor({
             }}
           >
             No configurations yet — click <strong>+ Add configuration</strong>{" "}
-            to add one. Each gets a name and a description.
+            to add one. Pick from existing names or type a new one.
           </span>
         )}
         {configs.map((c, i) => (
@@ -3255,7 +3298,13 @@ function ConfigurationsEditor({
               onChange={(e) =>
                 updateAt(i, { name: e.target.value.toUpperCase() })
               }
-              placeholder="e.g. ENC"
+              onBlur={(e) => autoFillFromOption(i, e.target.value)}
+              list={datalistId}
+              placeholder={
+                options.length
+                  ? "Pick or type (e.g. ENC)"
+                  : "e.g. ENC"
+              }
               aria-label={`Configuration ${i + 1} name`}
               style={{
                 ...INPUT,
@@ -3271,7 +3320,10 @@ function ConfigurationsEditor({
                   description: e.target.value ? e.target.value : null,
                 })
               }
-              placeholder="Description (optional)"
+              placeholder={
+                options.find((o) => o.name === c.name.trim().toUpperCase())
+                  ?.description ?? "Description (optional)"
+              }
               aria-label={`Configuration ${i + 1} description`}
               style={INPUT}
             />
@@ -3312,6 +3364,24 @@ function ConfigurationsEditor({
         >
           + Add configuration
         </button>
+        {options.length > 0 && (
+          <datalist id={datalistId}>
+            {options
+              .filter(
+                (o) =>
+                  !configs.some(
+                    (c) => c.name.trim().toUpperCase() === o.name,
+                  ),
+              )
+              .map((o) => (
+                <option
+                  key={o.id}
+                  value={o.name}
+                  label={o.description ?? undefined}
+                />
+              ))}
+          </datalist>
+        )}
       </div>
     </label>
   );

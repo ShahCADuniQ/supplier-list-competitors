@@ -26,6 +26,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   assemblyBom,
+  configurationOptions,
   inventoryAttachments,
   inventoryItems,
   nomenclatureParts,
@@ -152,6 +153,79 @@ function readProducts(
   if (cleaned.length > 0) return cleaned;
   if (legacy && legacy.trim()) return [legacy.trim()];
   return [];
+}
+
+// Public type for the catalogue picker. id is server-assigned.
+export type ConfigurationOption = {
+  id: number;
+  name: string;
+  description: string | null;
+};
+
+// Upsert every {name, description} pair from a Configuration[] into
+// the global configuration_options catalogue. Idempotent: existing
+// rows have their description updated only when the incoming entry
+// has a non-empty description and the existing row's description is
+// null/empty (so we don't overwrite a richer description with a
+// shorter one). Called from every save path so the catalogue grows
+// automatically as new names appear.
+async function upsertConfigurationOptions(
+  configs: Configuration[],
+  createdByClerkId: string | null,
+): Promise<void> {
+  for (const c of configs) {
+    const name = c.name.trim().toUpperCase();
+    if (!name) continue;
+    const description = c.description?.trim() || null;
+    const existing = await db
+      .select({
+        id: configurationOptions.id,
+        description: configurationOptions.description,
+      })
+      .from(configurationOptions)
+      .where(eq(configurationOptions.name, name))
+      .limit(1);
+    if (existing.length) {
+      // Only update description when we have one AND the stored one
+      // is missing — keeps user-curated descriptions stable.
+      const current = existing[0].description?.trim() ?? null;
+      if (description && !current) {
+        await db
+          .update(configurationOptions)
+          .set({ description, updatedAt: new Date() })
+          .where(eq(configurationOptions.id, existing[0].id));
+      }
+      continue;
+    }
+    try {
+      await db.insert(configurationOptions).values({
+        name,
+        description,
+        createdByClerkId,
+      });
+    } catch {
+      // Concurrent insert from another tab won the unique race — fine.
+    }
+  }
+}
+
+export async function listConfigurationOptionsAction(): Promise<
+  ConfigurationOption[]
+> {
+  await ensureNomenclatureSchema();
+  const rows = await db
+    .select({
+      id: configurationOptions.id,
+      name: configurationOptions.name,
+      description: configurationOptions.description,
+    })
+    .from(configurationOptions)
+    .orderBy(asc(configurationOptions.name));
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    description: r.description ?? null,
+  }));
 }
 
 // Normalize either the new {name, description}[] shape OR the legacy
@@ -364,6 +438,11 @@ export async function saveHardwarePart(input: {
     })
     .returning({ id: nomenclatureParts.id });
 
+  await upsertConfigurationOptions(
+    input.configurations ?? [],
+    profile.clerkUserId,
+  );
+
   return { id: inserted.id, uniqueId, fullCode };
 }
 
@@ -490,6 +569,11 @@ export async function savePartCode(input: {
     })
     .returning({ id: nomenclatureParts.id });
 
+  await upsertConfigurationOptions(
+    input.configurations ?? [],
+    profile.clerkUserId,
+  );
+
   // PHS-only side effect: also create a row in the supplier catalogue
   // so this code shows up under /suppliers → catalogue. We only do
   // this when the caller passes a supplierId; without one we leave the
@@ -564,7 +648,19 @@ export async function updatePart(input: {
         updatedAt: new Date(),
       })
       .where(eq(inventoryItems.id, row.inv));
+    // Mirror configurations onto inventory too.
+    await db
+      .update(inventoryItems)
+      .set({
+        configurations: input.configurations ?? [],
+        updatedAt: new Date(),
+      })
+      .where(eq(inventoryItems.id, row.inv));
   }
+  await upsertConfigurationOptions(
+    input.configurations ?? [],
+    profile.clerkUserId,
+  );
   revalidatePath("/design-engineering/nomenclature");
 }
 
@@ -1320,6 +1416,7 @@ export async function setInventoryConfigurationsAction(input: {
     .update(nomenclatureParts)
     .set({ configurations: clean, updatedAt: new Date() })
     .where(eq(nomenclatureParts.inventoryItemId, input.inventoryItemId));
+  await upsertConfigurationOptions(clean, profile.clerkUserId);
   return { ok: true };
 }
 

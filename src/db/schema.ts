@@ -2958,3 +2958,30 @@ export const inventoryAttachments = pgTable(
 );
 export type InventoryAttachmentRow =
   typeof inventoryAttachments.$inferSelect;
+
+// Global catalogue of configuration names + their default
+// descriptions. Every configuration ever attached to a nomenclature
+// part / assembly / hardware gets upserted here, so the chip-editor
+// can offer typeahead suggestions across the whole company and the
+// user doesn't have to re-type "ENC" + "Enclosed variant" for every
+// new part.
+export const configurationOptions = pgTable(
+  "configuration_options",
+  {
+    id: serial("id").primaryKey(),
+    // Uppercase, dash-friendly identifier (e.g. "ENC", "CHBHS").
+    name: text("name").notNull(),
+    // Free-form default description shown when the user picks this
+    // name from the typeahead. Can be overridden per-part by leaving
+    // a different description in the editor.
+    description: text("description"),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    nameIdx: uniqueIndex("configuration_options_name_idx").on(t.name),
+  }),
+);
+export type ConfigurationOptionRow =
+  typeof configurationOptions.$inferSelect;

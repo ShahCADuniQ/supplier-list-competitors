@@ -123,6 +123,19 @@ export function ensureNomenclatureSchema(): Promise<void> {
       // inventory_items so the InventoryDrawer can edit them on any
       // row, including those auto-minted from RFQs.
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "configurations" jsonb DEFAULT '[]'::jsonb`);
+      // V98 — Global configuration_options catalogue. Every config
+      // name ever attached to a part / assembly / hardware gets
+      // upserted here so the chip-editor can offer typeahead.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "configuration_options" (
+          "id" serial PRIMARY KEY,
+          "name" text NOT NULL,
+          "description" text,
+          "created_by_clerk_id" text,
+          "created_at" timestamp NOT NULL DEFAULT now(),
+          "updated_at" timestamp NOT NULL DEFAULT now()
+        )`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "configuration_options_name_idx" ON "configuration_options" ("name")`);
       // Backfill from the existing scalar so the array is populated
       // for rows created before V92.
       await db.execute(sql`UPDATE "nomenclature_parts" SET "products" = jsonb_build_array("product") WHERE "product" IS NOT NULL AND ("products" IS NULL OR jsonb_array_length("products") = 0)`);

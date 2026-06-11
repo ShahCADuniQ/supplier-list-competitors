@@ -16,9 +16,11 @@ import {
   addAssemblyChildAction,
   addInventoryAttachmentAction,
   getInventoryDetails,
+  listConfigurationOptionsAction,
   removeInventoryAttachmentAction,
   setInventoryConfigurationsAction,
   type Configuration,
+  type ConfigurationOption,
   type DrawerAttachment,
   type DrawerChild,
   type DrawerParent,
@@ -68,6 +70,19 @@ export default function InventoryDrawer({
   const [details, setDetails] = useState<InventoryDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Global configuration catalogue — fetched once per drawer mount
+  // and re-fetched whenever the user saves a fresh config so the
+  // typeahead picks up brand-new names without a full page reload.
+  const [configOptions, setConfigOptions] = useState<ConfigurationOption[]>([]);
+
+  async function loadOptions() {
+    try {
+      const opts = await listConfigurationOptionsAction();
+      setConfigOptions(opts);
+    } catch {
+      // Non-fatal — datalist will just be empty.
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -84,6 +99,7 @@ export default function InventoryDrawer({
 
   useEffect(() => {
     load();
+    loadOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId]);
 
@@ -333,7 +349,11 @@ export default function InventoryDrawer({
           {details && (
             <Body
               details={details}
-              onMutated={load}
+              configOptions={configOptions}
+              onMutated={() => {
+                load();
+                loadOptions();
+              }}
               onNavigateTo={navigateTo}
               onDropAsChild={addAsChild}
               onDropAsParent={addAsParent}
@@ -347,12 +367,14 @@ export default function InventoryDrawer({
 
 function Body({
   details,
+  configOptions,
   onMutated,
   onNavigateTo,
   onDropAsChild,
   onDropAsParent,
 }: {
   details: InventoryDetails;
+  configOptions: ConfigurationOption[];
   onMutated: () => void;
   onNavigateTo: (id: number) => void;
   onDropAsChild: (draggedItemId: number) => void;
@@ -410,6 +432,7 @@ function Body({
       <ConfigurationsSection
         inventoryItemId={details.inventoryItemId}
         initialConfigurations={details.configurations}
+        configOptions={configOptions}
         onMutated={onMutated}
       />
 
@@ -783,12 +806,15 @@ function NavList({
 function ConfigurationsSection({
   inventoryItemId,
   initialConfigurations,
+  configOptions,
   onMutated,
 }: {
   inventoryItemId: number;
   initialConfigurations: Configuration[];
+  configOptions: ConfigurationOption[];
   onMutated: () => void;
 }) {
+  const datalistId = `drawer-config-options-${inventoryItemId}`;
   const [editing, setEditing] = useState(false);
   const [draftConfigs, setDraftConfigs] = useState<Configuration[]>(
     initialConfigurations,
@@ -837,6 +863,25 @@ function ConfigurationsSection({
   }
   function removeAt(i: number) {
     setDraftConfigs((prev) => prev.filter((_, j) => j !== i));
+  }
+  // Auto-fill the description when the user picks a known name from
+  // the typeahead — but only when their description field is empty
+  // so we never overwrite something they typed.
+  function autoFillFromOption(i: number, rawName: string) {
+    const name = rawName.trim().toUpperCase();
+    setDraftConfigs((prev) =>
+      prev.map((c, j) => {
+        if (j !== i) return c;
+        const match = configOptions.find(
+          (o) => o.name.toUpperCase() === name,
+        );
+        if (!match) return { ...c, name };
+        if (!c.description || !c.description.trim()) {
+          return { name, description: match.description };
+        }
+        return { ...c, name };
+      }),
+    );
   }
 
   const title = `Configurations (${initialConfigurations.length})`;
@@ -1015,7 +1060,13 @@ function ConfigurationsSection({
                 onChange={(e) =>
                   updateAt(i, { name: e.target.value.toUpperCase() })
                 }
-                placeholder="e.g. ENC"
+                onBlur={(e) => autoFillFromOption(i, e.target.value)}
+                list={datalistId}
+                placeholder={
+                  configOptions.length
+                    ? "Pick or type (e.g. ENC)"
+                    : "e.g. ENC"
+                }
                 aria-label={`Configuration ${i + 1} name`}
                 style={{
                   padding: "8px 10px",
@@ -1037,7 +1088,11 @@ function ConfigurationsSection({
                     description: e.target.value ? e.target.value : null,
                   })
                 }
-                placeholder="Description (optional)"
+                placeholder={
+                  configOptions.find(
+                    (o) => o.name === c.name.trim().toUpperCase(),
+                  )?.description ?? "Description (optional)"
+                }
                 aria-label={`Configuration ${i + 1} description`}
                 style={{
                   padding: "8px 10px",
@@ -1086,6 +1141,24 @@ function ConfigurationsSection({
           >
             + Add configuration
           </button>
+          {configOptions.length > 0 && (
+            <datalist id={datalistId}>
+              {configOptions
+                .filter(
+                  (o) =>
+                    !draftConfigs.some(
+                      (c) => c.name.trim().toUpperCase() === o.name,
+                    ),
+                )
+                .map((o) => (
+                  <option
+                    key={o.id}
+                    value={o.name}
+                    label={o.description ?? undefined}
+                  />
+                ))}
+            </datalist>
+          )}
           {err && (
             <div
               style={{
