@@ -13,7 +13,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { clients } from "@/db/schema";
-import { ensureEmailConnectionsSchema } from "./_ensure-schema";
+import { ensureClientsEmailColumns } from "./_ensure-schema";
 
 export type EmailIntegrationStatus =
   | "none"
@@ -30,11 +30,8 @@ export type EmailIntegrationState = {
   notes: string | null;
 };
 
-export async function getTenantIntegrationState(
-  clientId: number,
-): Promise<EmailIntegrationState | null> {
-  await ensureEmailConnectionsSchema();
-  const [row] = await db
+async function selectTenantIntegrationRow(clientId: number) {
+  return db
     .select({
       status: clients.emailIntegrationStatus,
       requestedBy: clients.emailIntegrationRequestedBy,
@@ -46,6 +43,42 @@ export async function getTenantIntegrationState(
     .from(clients)
     .where(eq(clients.id, clientId))
     .limit(1);
+}
+
+export async function getTenantIntegrationState(
+  clientId: number,
+): Promise<EmailIntegrationState | null> {
+  await ensureClientsEmailColumns();
+  // Self-heal + retry once if the column truly didn't exist (e.g. an
+  // older process never ran the V73 ALTERs and ours got cached before
+  // the column appeared). Returning a safe `none` default also keeps
+  // the home page rendering when the DB is in a weird state.
+  let row: Awaited<ReturnType<typeof selectTenantIntegrationRow>>[number];
+  try {
+    [row] = await selectTenantIntegrationRow(clientId);
+  } catch (e) {
+    console.warn(
+      "[email] tenant integration state select failed, attempting self-heal:",
+      e,
+    );
+    try {
+      await ensureClientsEmailColumns();
+      [row] = await selectTenantIntegrationRow(clientId);
+    } catch (e2) {
+      console.error(
+        "[email] tenant integration state self-heal failed; assuming 'none':",
+        e2,
+      );
+      return {
+        status: "none",
+        requestedBy: null,
+        requestedAt: null,
+        decidedBy: null,
+        decidedAt: null,
+        notes: null,
+      };
+    }
+  }
   if (!row) return null;
   return {
     status: (row.status ?? "none") as EmailIntegrationStatus,
@@ -77,17 +110,33 @@ export type PendingIntegrationRequest = {
 export async function listPendingIntegrationRequests(): Promise<
   PendingIntegrationRequest[]
 > {
-  await ensureEmailConnectionsSchema();
-  const rows = await db
-    .select({
-      clientId: clients.id,
-      clientName: clients.name,
-      status: clients.emailIntegrationStatus,
-      requestedBy: clients.emailIntegrationRequestedBy,
-      requestedAt: clients.emailIntegrationRequestedAt,
-      notes: clients.emailIntegrationNotes,
-    })
-    .from(clients);
+  await ensureClientsEmailColumns();
+  let rows: Array<{
+    clientId: number;
+    clientName: string;
+    status: string | null;
+    requestedBy: string | null;
+    requestedAt: Date | null;
+    notes: string | null;
+  }>;
+  try {
+    rows = await db
+      .select({
+        clientId: clients.id,
+        clientName: clients.name,
+        status: clients.emailIntegrationStatus,
+        requestedBy: clients.emailIntegrationRequestedBy,
+        requestedAt: clients.emailIntegrationRequestedAt,
+        notes: clients.emailIntegrationNotes,
+      })
+      .from(clients);
+  } catch (e) {
+    console.warn(
+      "[email] listPendingIntegrationRequests failed, degrading to empty list:",
+      e,
+    );
+    return [];
+  }
   return rows
     .filter((r) => r.status === "requested" || r.status === "rejected")
     .map((r) => ({
@@ -107,7 +156,7 @@ export async function setTenantStatus(args: {
   decidedBy?: string;
   notes?: string | null;
 }): Promise<void> {
-  await ensureEmailConnectionsSchema();
+  await ensureClientsEmailColumns();
   const now = new Date();
   const patch: Record<string, unknown> = {
     emailIntegrationStatus: args.status,
