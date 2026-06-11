@@ -16,7 +16,7 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { clients } from "@/db/schema";
-import { getOrCreateProfile } from "@/lib/permissions";
+import { getOrCreateProfile, isAdmin } from "@/lib/permissions";
 import { listMyEmailConnections } from "./email/actions";
 import { DisconnectButton } from "./email/DisconnectButton";
 import {
@@ -42,6 +42,7 @@ export default async function ManageAccountPage({
   const params = await searchParams;
   const connections = await listMyEmailConnections();
   const setup = await getEmailSetupStatus();
+  const userIsAdmin = isAdmin(profile);
   const microsoftReady = isProviderReady(setup, "microsoft");
   const googleReady = isProviderReady(setup, "google");
   const setupIncomplete = !microsoftReady && !googleReady;
@@ -216,18 +217,51 @@ export default async function ManageAccountPage({
               lineHeight: 1.55,
             }}
           >
-            <strong>Setup incomplete.</strong> Your administrator hasn&apos;t
-            registered the OAuth apps yet, so the Connect buttons can&apos;t
-            launch. Missing <code>.env</code> values:
-            <ul style={{ margin: "8px 0 8px 18px", padding: 0 }}>
-              {missing.map((m) => (
-                <li key={m}>
-                  <code>{m}</code>
-                </li>
-              ))}
-            </ul>
-            See <code>docs/rfq-email.md</code> for the Azure / Google Cloud
-            setup walkthrough.
+            {userIsAdmin ? (
+              <>
+                <strong>One-time OAuth app setup needed.</strong> To let
+                users connect their mailboxes, you need to register an
+                OAuth app on Azure AD (for Outlook) and/or Google Cloud
+                (for Gmail) once, then add the credentials to{" "}
+                <code>.env</code> on the server. This is a deployment
+                config — not something you can do from this page.
+                <div style={{ marginTop: 10, fontWeight: 600 }}>
+                  Steps:
+                </div>
+                <ol style={{ margin: "4px 0 8px 20px", padding: 0 }}>
+                  <li>
+                    Follow the walkthrough in{" "}
+                    <code>docs/rfq-email.md</code> (~10 min per provider).
+                  </li>
+                  <li>
+                    Fill these values in <code>.env</code>:
+                    <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                      {missing.map((m) => (
+                        <li key={m}>
+                          <code>{m}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                  <li>
+                    Restart <code>next dev</code> (or redeploy in
+                    production).
+                  </li>
+                </ol>
+                <div style={{ marginTop: 8 }}>
+                  Once configured, every user — including you — can
+                  click Connect below to link their own Outlook or
+                  Gmail account.
+                </div>
+              </>
+            ) : (
+              <>
+                <strong>Mailbox connection isn&apos;t available yet.</strong>{" "}
+                Your administrator needs to finish a one-time OAuth setup
+                before anyone can connect their Outlook or Gmail account.
+                Check back once they&apos;ve completed it.
+              </>
+            )}
           </div>
         )}
 
