@@ -160,26 +160,46 @@ export default function Sidebar({
           })}
       </nav>
 
-      {/* Footer — settings (placeholder) + user avatar */}
+      {/* Footer — settings + user avatar. The gear opens /settings/email
+          (currently the only settings surface) and is available to every
+          signed-in user, regardless of tenant access. */}
       <div className="flex flex-col items-center gap-2 mt-auto">
-        <button
-          type="button"
-          title="Settings"
+        <Link
+          href="/settings/email"
+          title="Settings — connect email"
           aria-label="Settings"
+          aria-current={
+            pathname === "/settings/email" ||
+            pathname.startsWith("/settings/")
+              ? "page"
+              : undefined
+          }
           className="inline-flex items-center justify-center transition-colors"
           style={{
             width: 40,
             height: 40,
             borderRadius: 14,
-            background: "var(--lb-bg-elev)",
-            color: "var(--lb-text-2)",
-            border: "1px solid var(--lb-border)",
-            cursor: "pointer",
+            background:
+              pathname.startsWith("/settings/")
+                ? "var(--lb-accent)"
+                : "var(--lb-bg-elev)",
+            color:
+              pathname.startsWith("/settings/")
+                ? "var(--lb-accent-fg)"
+                : "var(--lb-text-2)",
+            border:
+              pathname.startsWith("/settings/")
+                ? "1px solid var(--lb-accent)"
+                : "1px solid var(--lb-border)",
+            boxShadow: pathname.startsWith("/settings/")
+              ? "var(--lb-glow-accent)"
+              : "none",
             fontSize: 16,
+            textDecoration: "none",
           }}
         >
           ⚙
-        </button>
+        </Link>
         {email && (
           <div
             title={`${email}${role && role !== "member" ? ` · ${role}` : ""}`}
