@@ -1761,16 +1761,35 @@ function PartRowItem({
             </span>
           )}
           <div style={{ minWidth: 0 }}>
-          <code
-            style={{
-              fontSize: 14,
-              fontWeight: 700,
-              letterSpacing: 0.2,
-              color: "var(--lb-text)",
-            }}
-          >
-            {part.fullCode}
-          </code>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <code
+              style={{
+                fontSize: 14,
+                fontWeight: 700,
+                letterSpacing: 0.2,
+                color: "var(--lb-text)",
+              }}
+            >
+              {part.fullCode}
+            </code>
+            {dragOver && (
+              <span
+                style={{
+                  padding: "2px 10px",
+                  borderRadius: 999,
+                  background: "var(--lb-accent)",
+                  color: "#fff",
+                  fontSize: 10.5,
+                  fontWeight: 800,
+                  letterSpacing: 0.4,
+                  textTransform: "uppercase",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Drop inside {part.uniqueId}
+              </span>
+            )}
+          </div>
           <div
             style={{
               marginTop: 4,
@@ -2316,6 +2335,18 @@ function AssemblyBrowser({
               }
               onOpenDrawer={() => openDrawer(c.itemId)}
               parentInventoryItemId={current.node.itemId}
+              onDropOnCard={async (droppedItemId, targetItemId) => {
+                try {
+                  await addAssemblyChildAction({
+                    parentInventoryItemId: targetItemId,
+                    childInventoryItemId: droppedItemId,
+                    quantity: 1,
+                  });
+                  onMutated();
+                } catch (e) {
+                  console.warn("[nomenclature] drop on child failed:", e);
+                }
+              }}
               onRemoved={onMutated}
             />
           ))}
@@ -2340,17 +2371,24 @@ function ChildCard({
   onOpen,
   onOpenDrawer,
   parentInventoryItemId,
+  onDropOnCard,
   onRemoved,
 }: {
   node: AssemblyTreeNode;
   onOpen: (() => void) | undefined;
   onOpenDrawer: () => void;
   parentInventoryItemId: number;
+  // Called when an inventory card is dropped on THIS card. The card's
+  // own inventory id is the new parent for the dragged item; the
+  // browser-level handler swaps them when calling
+  // addAssemblyChildAction.
+  onDropOnCard: (droppedItemId: number, targetItemId: number) => void;
   onRemoved: () => void;
 }) {
   const isAssembly = node.kind === "assembly";
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const effectiveStock =
     node.stock + (isAssembly ? node.buildableFromStock ?? 0 : 0);
   const lacks = node.quantity > 0 && effectiveStock < node.quantity;
@@ -2375,30 +2413,81 @@ function ChildCard({
   return (
     <div
       onClick={onOpen}
+      onDragOver={(e) => {
+        if (
+          !e.dataTransfer.types.includes("application/x-lb-inventory-item")
+        ) {
+          return;
+        }
+        // Mark THIS card as the active drop target so the parent
+        // (AssemblyBrowser's outer container) doesn't also light up.
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "link";
+        if (!dragOver) setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        // Only clear when leaving the card itself, not when crossing
+        // an inner button or text node.
+        if (
+          !e.relatedTarget ||
+          !(e.relatedTarget instanceof Node) ||
+          !e.currentTarget.contains(e.relatedTarget)
+        ) {
+          setDragOver(false);
+        }
+      }}
+      onDrop={(e) => {
+        if (
+          !e.dataTransfer.types.includes("application/x-lb-inventory-item")
+        ) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        setDragOver(false);
+        const raw = e.dataTransfer.getData(
+          "application/x-lb-inventory-item",
+        );
+        const id = Number(raw);
+        if (!id || id === node.itemId) return;
+        onDropOnCard(id, node.itemId);
+      }}
       style={{
         padding: 14,
         borderRadius: 12,
-        border: lacks
-          ? "1px solid rgba(239,68,68,0.45)"
-          : "1px solid var(--lb-border)",
-        background: lacks
-          ? "rgba(239,68,68,0.04)"
-          : "var(--lb-bg)",
+        border: dragOver
+          ? "2px solid var(--lb-accent)"
+          : lacks
+            ? "1px solid rgba(239,68,68,0.45)"
+            : "1px solid var(--lb-border)",
+        background: dragOver
+          ? "color-mix(in srgb, var(--lb-accent) 10%, var(--lb-bg))"
+          : lacks
+            ? "rgba(239,68,68,0.04)"
+            : "var(--lb-bg)",
         display: "flex",
         flexDirection: "column",
         gap: 8,
         cursor: onOpen ? "pointer" : "default",
-        transition: "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease",
+        transform: dragOver ? "translateY(-2px) scale(1.01)" : "translateY(0)",
+        boxShadow: dragOver
+          ? "0 12px 28px -10px color-mix(in srgb, var(--lb-accent) 50%, transparent), 0 0 0 4px color-mix(in srgb, var(--lb-accent) 18%, transparent)"
+          : "none",
+        transition:
+          "transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 200ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 160ms ease, border-color 160ms ease",
       }}
       onMouseEnter={(e) => {
-        if (onOpen) {
+        if (onOpen && !dragOver) {
           e.currentTarget.style.transform = "translateY(-1px)";
           e.currentTarget.style.boxShadow = "0 8px 18px -10px rgba(0,0,0,0.18)";
         }
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.transform = "translateY(0)";
-        e.currentTarget.style.boxShadow = "none";
+        if (!dragOver) {
+          e.currentTarget.style.transform = "translateY(0)";
+          e.currentTarget.style.boxShadow = "none";
+        }
       }}
     >
       <div
@@ -2457,6 +2546,7 @@ function ChildCard({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          gap: 8,
           fontSize: 11.5,
           color: lacks ? "#dc2626" : "var(--lb-text-3)",
           marginTop: "auto",
@@ -2468,15 +2558,21 @@ function ChildCard({
             <span> · +{node.buildableFromStock} buildable</span>
           )}
         </span>
-        {isAssembly && (
+        {dragOver && (
           <span
             style={{
-              color: "var(--lb-accent)",
-              fontWeight: 600,
-              fontSize: 11,
+              padding: "2px 10px",
+              borderRadius: 999,
+              background: "var(--lb-accent)",
+              color: "#fff",
+              fontSize: 10.5,
+              fontWeight: 800,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+              whiteSpace: "nowrap",
             }}
           >
-            Open →
+            Drop inside {node.code.split("-").slice(0, 2).join("-")}
           </span>
         )}
       </div>
