@@ -1520,6 +1520,15 @@ function DatabaseTab({
           <ErrorBox message={dropError} />
         </div>
       )}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          gap: 14,
+          alignItems: "flex-start",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
       {filtered.length === 0 ? (
         <div
           style={{
@@ -1551,6 +1560,9 @@ function DatabaseTab({
           ))}
         </ul>
       )}
+        </div>
+        {productSpecific && <InventoryPalette parts={parts} />}
+      </div>
     </section>
   );
 }
@@ -2907,6 +2919,238 @@ function ConfigurationsEditor({
 // types a name + Enter to add a chip; existing labels appear as
 // datalist suggestions; click × on a chip to remove. Supports the
 // legacy single-string callers via the values prop being string[].
+// Right-side palette: a sticky, scrollable, searchable list of every
+// nomenclature code that exists. Each row is draggable using the same
+// data-transfer key as the database rows, so it drops cleanly onto
+// any PartRowItem master OR ChildCard target. Shown only in the
+// product-specific view, where the main list is filtered to masters
+// and the user needs a way to reach everything else.
+function InventoryPalette({ parts }: { parts: PartRow[] }) {
+  const [q, setQ] = useState("");
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const list = parts.filter((p) => p.inventoryItemId != null);
+    if (!needle) return list;
+    return list.filter(
+      (p) =>
+        p.fullCode.toLowerCase().includes(needle) ||
+        (p.name ?? "").toLowerCase().includes(needle) ||
+        p.uniqueId.toLowerCase().includes(needle) ||
+        p.products.some((pp) => pp.toLowerCase().includes(needle)),
+    );
+  }, [parts, q]);
+
+  return (
+    <aside
+      style={{
+        position: "sticky",
+        top: 16,
+        alignSelf: "flex-start",
+        width: 320,
+        flexShrink: 0,
+        maxHeight: "calc(100vh - 32px)",
+        display: "flex",
+        flexDirection: "column",
+        background: "var(--lb-bg-elev)",
+        border: "1px solid var(--lb-border)",
+        borderRadius: 14,
+        overflow: "hidden",
+      }}
+      aria-label="Catalogue palette — drag any item into the assembly tree on the left"
+    >
+      <header
+        style={{
+          padding: "12px 14px",
+          borderBottom: "1px solid var(--lb-border)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            gap: 8,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              color: "var(--lb-text-3)",
+            }}
+          >
+            Catalogue
+          </span>
+          <span style={{ fontSize: 11, color: "var(--lb-text-3)" }}>
+            {filtered.length} of {parts.length}
+          </span>
+        </div>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search catalogue…"
+          style={{
+            width: "100%",
+            padding: "7px 10px",
+            fontSize: 12.5,
+            border: "1px solid var(--lb-border)",
+            borderRadius: 8,
+            background: "var(--lb-bg)",
+            color: "var(--lb-text)",
+            outline: "none",
+          }}
+        />
+        <p
+          style={{
+            margin: 0,
+            fontSize: 11,
+            color: "var(--lb-text-3)",
+            lineHeight: 1.45,
+          }}
+        >
+          Drag any row onto a master card or nested child card to add
+          it as a child of that target.
+        </p>
+      </header>
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: 8,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        {filtered.length === 0 ? (
+          <div
+            style={{
+              padding: "16px 12px",
+              fontSize: 12.5,
+              color: "var(--lb-text-3)",
+              textAlign: "center",
+            }}
+          >
+            Nothing matches.
+          </div>
+        ) : (
+          filtered.map((p) => (
+            <PaletteRow key={p.id} part={p} />
+          ))
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function PaletteRow({ part }: { part: PartRow }) {
+  const [grabbing, setGrabbing] = useState(false);
+  const isAssembly = part.partOrAssembly === "A";
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        if (part.inventoryItemId == null) return;
+        e.dataTransfer.setData(
+          "application/x-lb-inventory-item",
+          String(part.inventoryItemId),
+        );
+        e.dataTransfer.effectAllowed = "link";
+        setGrabbing(true);
+      }}
+      onDragEnd={() => setGrabbing(false)}
+      title={`Drag onto an assembly to link ${part.fullCode} as a child`}
+      style={{
+        padding: "9px 10px",
+        borderRadius: 8,
+        border: "1px solid var(--lb-border)",
+        background: "var(--lb-bg)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        cursor: grabbing ? "grabbing" : "grab",
+        opacity: grabbing ? 0.5 : 1,
+        transition:
+          "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, opacity 120ms ease",
+      }}
+      onMouseEnter={(e) => {
+        if (!grabbing) {
+          e.currentTarget.style.borderColor = "var(--lb-accent)";
+          e.currentTarget.style.transform = "translateY(-1px)";
+        }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = "var(--lb-border)";
+        e.currentTarget.style.transform = "translateY(0)";
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 14 }}>
+          {part.kind === "hardware" ? "🛠" : isAssembly ? "🧩" : "🔧"}
+        </span>
+        <code
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            wordBreak: "break-all",
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
+          {part.fullCode}
+        </code>
+      </div>
+      {part.name && (
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--lb-text-3)",
+            paddingLeft: 22,
+          }}
+        >
+          {part.name}
+        </div>
+      )}
+      {part.products.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 4,
+            paddingLeft: 22,
+          }}
+        >
+          {part.products.map((label) => (
+            <span
+              key={label}
+              style={{
+                padding: "0 6px",
+                borderRadius: 999,
+                background:
+                  "color-mix(in srgb, var(--lb-accent) 14%, transparent)",
+                color: "var(--lb-accent)",
+                fontSize: 9.5,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                textTransform: "uppercase",
+              }}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProductInput({
   values,
   onChange,
