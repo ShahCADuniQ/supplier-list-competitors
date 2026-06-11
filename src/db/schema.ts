@@ -22,6 +22,50 @@ import { relations, sql } from "drizzle-orm";
 
 export const userRole = pgEnum("user_role", ["admin", "member", "pending"]);
 
+// Per-user email connections. One row per user per provider — the user
+// can connect Outlook AND Gmail if they want, with the most-recently-
+// updated row winning when the platform needs to pick a sender.
+// access_token + refresh_token are AES-256-GCM encrypted at rest (see
+// src/lib/email/crypto.ts). expires_at is the absolute UTC moment the
+// access token stops working; the transport refreshes on demand.
+export const emailProvider = pgEnum("email_provider", [
+  "microsoft", // Outlook + Microsoft 365 via Microsoft Graph
+  "google",    // Gmail via Gmail API
+]);
+
+export const userEmailConnections = pgTable(
+  "user_email_connections",
+  {
+    id: serial("id").primaryKey(),
+    clerkUserId: text("clerk_user_id").notNull(),
+    provider: emailProvider("provider").notNull(),
+    // The actual address the OAuth flow returned. Stored separately
+    // from the user_profiles email so a personal Gmail connection
+    // doesn't override a tenant user_profile.
+    emailAddress: text("email_address").notNull(),
+    // Encrypted blobs — never log these. The encryption helper handles
+    // base64 framing of the IV + ciphertext + auth tag.
+    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    refreshTokenEncrypted: text("refresh_token_encrypted"),
+    expiresAt: timestamp("expires_at").notNull(),
+    scope: text("scope"),
+    // Audit. lastSyncAt is bumped each time we fetch inbox messages so
+    // the user can see when the last refresh happened.
+    lastSyncAt: timestamp("last_sync_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    // Only one row per (user, provider) pair — reconnecting overwrites.
+    userProviderIdx: uniqueIndex("user_email_connections_user_provider_idx").on(
+      t.clerkUserId,
+      t.provider,
+    ),
+    clerkUserIdx: index("user_email_connections_clerk_user_idx").on(t.clerkUserId),
+  }),
+);
+export type UserEmailConnection = typeof userEmailConnections.$inferSelect;
+
 export const userProfiles = pgTable(
   "user_profiles",
   {

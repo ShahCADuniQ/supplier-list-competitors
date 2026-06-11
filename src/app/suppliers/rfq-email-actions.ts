@@ -6,10 +6,12 @@
 // procurement (currently imendo@lightbase.ca) for review. Procurement
 // approves with optional edits → goes out; or rejects with a comment.
 //
-// Wraps src/lib/email/index.ts for the actual transport. When no
-// RESEND_API_KEY is configured the transport logs to the console + saves
-// the draft as "sent" with a dev message id so the workflow can be
-// exercised without real email delivery.
+// Wraps src/lib/email/index.ts for the actual transport. Each user
+// dispatches through their own connected mailbox (Outlook via Microsoft
+// Graph, or Gmail) — see /api/email/oauth/{microsoft,google}/start.
+// When the composer hasn't connected one yet the transport logs to the
+// console + saves the draft as "sent" with a dev message id so the
+// workflow can still be exercised without real email delivery.
 
 import { revalidatePath } from "next/cache";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -26,7 +28,7 @@ import {
 } from "@/db/schema";
 import { getOrCreateProfile, requireSupplierEditor } from "@/lib/permissions";
 import { ensureOrdersSchema } from "./_ensure-orders-schema";
-import { sendEmail, defaultFromAddress } from "@/lib/email";
+import { sendEmail, userEmailStatus } from "@/lib/email";
 import { claudeClient, CLAUDE_MODEL } from "@/lib/ai/claude";
 
 // Procurement contacts. PROCUREMENT_EMAIL is comma-separated so multiple
@@ -467,6 +469,7 @@ export async function submitRfqEmailDraft(input: {
   if (draft.procurementViaEmail && PROCUREMENT_EMAILS.length > 0) {
     try {
       await sendEmail({
+        fromUserId: profile.clerkUserId,
         to: PROCUREMENT_EMAILS.map((email) => ({
           email,
           name: PROCUREMENT_NAME,
@@ -540,8 +543,13 @@ async function deliverDraftToSupplier(
       bodyParts.push("Submit your quote here (no account needed):");
       bodyParts.push(recipientPortalUrl);
     }
+    if (!draft.composedByClerkId) {
+      throw new Error(
+        "Cannot send: draft is missing its composer. Re-create the draft and try again.",
+      );
+    }
     const result = await sendEmail({
-      from: defaultFromAddress(),
+      fromUserId: draft.composedByClerkId,
       to: draft.toName
         ? { email: draft.toEmail, name: draft.toName }
         : draft.toEmail,
@@ -821,16 +829,22 @@ export async function sendInitialRfqDeliveries(input: {
   return { sentCount, queuedCount, failures };
 }
 
-// Quick check: does this tenant have the email transport configured?
-// Surfaced on the compose dialog so the user knows when their send is
-// going to fall back to the console-log dev path.
+// Quick check: does this user have their mailbox connected? Surfaced on
+// the compose dialog so the buyer sees their own From: address and gets
+// a "Connect email" CTA when they haven't done the OAuth dance yet.
 export async function getEmailTransportStatus(): Promise<{
   configured: boolean;
+  provider: "microsoft" | "google" | null;
   fromAddress: string;
 }> {
-  await getOrCreateProfile();
+  const profile = await getOrCreateProfile();
+  if (!profile) {
+    return { configured: false, provider: null, fromAddress: "" };
+  }
+  const status = await userEmailStatus(profile.clerkUserId);
   return {
-    configured: !!process.env.RESEND_API_KEY,
-    fromAddress: defaultFromAddress(),
+    configured: status.configured,
+    provider: status.provider,
+    fromAddress: status.fromAddress ?? "",
   };
 }

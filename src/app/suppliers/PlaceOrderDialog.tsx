@@ -277,8 +277,12 @@ export default function PlaceOrderDialog({
               fontSize: 12,
             }}
           >
-            ⚠ Email transport not configured — outbound mail will go to the
-            server console (in-app notifications still work).
+            ⚠ You haven&apos;t connected an email account yet.{" "}
+            <a href="/settings/email" style={{ color: "#ea580c", textDecoration: "underline" }}>
+              Connect Outlook or Gmail
+            </a>{" "}
+            so suppliers see your real address. Until then, outbound mail logs
+            to the server console (in-app notifications still work).
           </div>
         )}
 

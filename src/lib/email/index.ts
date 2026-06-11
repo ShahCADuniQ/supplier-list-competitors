@@ -1,130 +1,114 @@
-// Centralised transactional email transport.
+// Per-user transactional email transport.
 //
-// All outbound mail (RFQ emails, supplier invites, procurement routing,
-// future password resets) goes through here so we keep one place to swap
-// providers, throttle, add headers, or fall back when an API key isn't
-// configured.
+// Each user connects their own Outlook (Microsoft Graph) or Gmail
+// account via OAuth — see /api/email/oauth/{microsoft,google}/start —
+// and outbound mail (RFQ emails, supplier invites, procurement routing)
+// flows through THAT user's mailbox. There is no shared sender; the
+// supplier sees the buyer's real address.
 //
-// Configuration (set in .env):
+// When the composer hasn't connected an account, sendEmail logs the
+// payload and returns a dev-stub result so the rest of the pipeline
+// (status transitions, audit rows) still works. The caller can decide
+// to surface a "connect email" banner.
 //
-//   RESEND_API_KEY        Resend API key (re_xxx). Required to actually
-//                         deliver mail. Without it, sendEmail() logs the
-//                         payload to console + returns a dev "stub" id so
-//                         the rest of the pipeline keeps working in
-//                         development.
-//   EMAIL_FROM_ADDRESS    Verified sender (e.g. "rfq@caduniq.com").
-//                         Default: "rfq@caduniq.com"
-//   EMAIL_FROM_NAME       Friendly name on the From header.
-//                         Default: "CADuniQ"
-//   EMAIL_REPLY_TO        Default Reply-To when the caller doesn't pass
-//                         one. Usually a user's real address. Optional.
+// Required env (only for actual delivery — dev stub needs nothing):
+//
+//   MICROSOFT_OAUTH_CLIENT_ID / MICROSOFT_OAUTH_CLIENT_SECRET
+//   GOOGLE_OAUTH_CLIENT_ID    / GOOGLE_OAUTH_CLIENT_SECRET
+//   EMAIL_TOKEN_ENCRYPTION_KEY (also signs OAuth state cookies)
 
-import { Resend } from "resend";
+import { sendGmail } from "./transport-gmail";
+import { sendGraphMail } from "./transport-graph";
+import {
+  getPrimaryConnection,
+  getValidAccessToken,
+} from "./connections";
+import type {
+  EmailAddress,
+  SendEmailInput,
+  SendEmailResult,
+} from "./types";
 
-export type EmailAddress =
-  | string
-  | { email: string; name?: string };
+export type {
+  EmailAddress,
+  EmailAttachment,
+  SendEmailInput,
+  SendEmailResult,
+} from "./types";
 
-function formatAddress(addr: EmailAddress): string {
+export function formatAddress(addr: EmailAddress): string {
   if (typeof addr === "string") return addr;
   return addr.name ? `${addr.name} <${addr.email}>` : addr.email;
 }
 
-export type EmailAttachment = {
-  filename: string;
-  // Either content (base64) or a public URL Resend can fetch.
-  content?: string;
-  path?: string;
-  contentType?: string;
-};
-
-export type SendEmailInput = {
-  to: EmailAddress | EmailAddress[];
-  cc?: EmailAddress | EmailAddress[];
-  bcc?: EmailAddress | EmailAddress[];
-  replyTo?: string;
-  from?: EmailAddress;
-  subject: string;
-  // Plain text body. Required.
-  text: string;
-  // HTML body. Optional — when omitted, Resend uses the text body alone.
-  html?: string;
-  attachments?: EmailAttachment[];
-  // Custom headers — useful for threading / unsubscribe / tagging.
-  headers?: Record<string, string>;
-};
-
-export type SendEmailResult = {
-  id: string;
-  // True when the email actually went out via the provider.
-  // False = dev stub (no API key configured).
-  sent: boolean;
-};
-
-export function hasEmailTransport(): boolean {
-  return !!process.env.RESEND_API_KEY;
-}
-
-export function defaultFromAddress(): string {
-  const addr = process.env.EMAIL_FROM_ADDRESS || "rfq@caduniq.com";
-  const name = process.env.EMAIL_FROM_NAME || "CADuniQ";
-  return `${name} <${addr}>`;
-}
-
-let _resend: Resend | null = null;
-function client(): Resend {
-  if (!_resend) {
-    const key = process.env.RESEND_API_KEY;
-    if (!key) throw new Error("RESEND_API_KEY not configured");
-    _resend = new Resend(key);
-  }
-  return _resend;
-}
-
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
-  const to = Array.isArray(input.to)
-    ? input.to.map(formatAddress)
-    : [formatAddress(input.to)];
+  const conn = await getPrimaryConnection(input.fromUserId);
 
-  // Dev fallback: no API key → log + return stub so the rest of the
-  // pipeline (status transitions, audit rows) keeps working in
-  // development without a Resend account.
-  if (!process.env.RESEND_API_KEY) {
+  if (!conn) {
+    // Dev fallback — no connected mailbox. Log + return stub so the
+    // rest of the pipeline keeps working in development. Production
+    // callers should check hasUserEmailConnection() before composing.
+    const to = Array.isArray(input.to)
+      ? input.to.map(formatAddress)
+      : [formatAddress(input.to)];
     console.warn(
-      "[email] No RESEND_API_KEY configured — logging the email instead of sending.",
+      "[email] User has no connected mailbox — logging instead of sending.",
       {
-        from: input.from ? formatAddress(input.from) : defaultFromAddress(),
+        fromUserId: input.fromUserId,
         to,
         cc: input.cc,
         bcc: input.bcc,
-        replyTo: input.replyTo ?? process.env.EMAIL_REPLY_TO ?? null,
         subject: input.subject,
         body: input.text.slice(0, 400),
         attachments: input.attachments?.length ?? 0,
       },
     );
-    return { id: `dev-${crypto.randomUUID()}`, sent: false };
+    return {
+      id: `dev-${crypto.randomUUID()}`,
+      provider: "microsoft",
+      sent: false,
+    };
   }
 
-  const result = await client().emails.send({
-    from: input.from ? formatAddress(input.from) : defaultFromAddress(),
-    to,
-    cc: input.cc
-      ? (Array.isArray(input.cc) ? input.cc : [input.cc]).map(formatAddress)
-      : undefined,
-    bcc: input.bcc
-      ? (Array.isArray(input.bcc) ? input.bcc : [input.bcc]).map(formatAddress)
-      : undefined,
-    replyTo: input.replyTo ?? process.env.EMAIL_REPLY_TO ?? undefined,
-    subject: input.subject,
-    text: input.text,
-    html: input.html,
-    attachments: input.attachments,
-    headers: input.headers,
+  const accessToken = await getValidAccessToken(conn);
+  if (conn.provider === "microsoft") {
+    const id = await sendGraphMail({
+      accessToken,
+      fromAddress: conn.emailAddress,
+      input,
+    });
+    return { id, provider: "microsoft", sent: true };
+  }
+  const id = await sendGmail({
+    accessToken,
+    fromAddress: conn.emailAddress,
+    input,
   });
+  return { id, provider: "google", sent: true };
+}
 
-  if (result.error) {
-    throw new Error(`Resend error: ${result.error.message}`);
+// True when the user has at least one connected mailbox. Cheap (no API
+// call) — used by the compose dialog to decide whether to show a
+// "Connect email" banner.
+export async function hasUserEmailConnection(
+  clerkUserId: string,
+): Promise<boolean> {
+  const conn = await getPrimaryConnection(clerkUserId);
+  return !!conn;
+}
+
+export async function userEmailStatus(clerkUserId: string): Promise<{
+  configured: boolean;
+  provider: "microsoft" | "google" | null;
+  fromAddress: string | null;
+}> {
+  const conn = await getPrimaryConnection(clerkUserId);
+  if (!conn) {
+    return { configured: false, provider: null, fromAddress: null };
   }
-  return { id: result.data?.id ?? "", sent: true };
+  return {
+    configured: true,
+    provider: conn.provider,
+    fromAddress: conn.emailAddress,
+  };
 }
