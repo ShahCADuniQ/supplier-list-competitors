@@ -7,6 +7,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  configurationOptions,
   inventoryItems,
   nomenclatureParts,
   supplierProducts,
@@ -146,6 +147,11 @@ export function ensureNomenclatureSchema(): Promise<void> {
       // Idempotent; once every row is migrated the SELECT below
       // returns nothing and this is a no-op on every subsequent boot.
       await autoBackfillPartCodes();
+      // V100 — Backfill configuration_options from every existing
+      // nomenclature_parts.configurations + inventory_items.configurations
+      // entry. Pre-V98 rows never went through the auto-upsert path,
+      // so the catalogue would otherwise stay empty for legacy data.
+      await autoBackfillConfigurationOptions();
     } catch (e) {
       _ensured = null;
       throw e;
@@ -244,6 +250,106 @@ async function autoBackfillPartCodes(): Promise<void> {
     // user sees old codes and can hit the manual button.
     console.warn(
       "[nomenclature] auto-backfill failed:",
+      e instanceof Error ? e.message : e,
+    );
+  }
+}
+
+// V100 — Walk every nomenclature_parts and inventory_items row that
+// carries a configurations array and upsert each entry into the
+// configuration_options catalogue. Idempotent: existing rows are
+// skipped (or their description is filled in if empty); duplicates
+// across rows collapse into one catalogue entry. Errors are caught
+// so a transient hiccup never blocks the rest of schema-ensure.
+async function autoBackfillConfigurationOptions(): Promise<void> {
+  try {
+    const seen = new Map<string, string | null>();
+    const sources: Array<{ configurations: unknown }> = [];
+    try {
+      const a = await db
+        .select({ configurations: nomenclatureParts.configurations })
+        .from(nomenclatureParts);
+      sources.push(...a);
+    } catch {
+      // nomenclature_parts.configurations might not exist on very
+      // fresh databases — that's fine, we'll still pick up inventory.
+    }
+    try {
+      const b = await db
+        .select({ configurations: inventoryItems.configurations })
+        .from(inventoryItems);
+      sources.push(...b);
+    } catch {
+      // Same idea — column might be missing during a partial migration.
+    }
+
+    for (const row of sources) {
+      const arr = row.configurations;
+      if (!Array.isArray(arr)) continue;
+      for (const item of arr) {
+        let name = "";
+        let description: string | null = null;
+        if (typeof item === "string") {
+          name = item.trim();
+        } else if (item && typeof item === "object") {
+          const obj = item as { name?: unknown; description?: unknown };
+          name = typeof obj.name === "string" ? obj.name.trim() : "";
+          description =
+            typeof obj.description === "string" && obj.description.trim()
+              ? obj.description.trim()
+              : null;
+        }
+        if (!name) continue;
+        const key = name.toUpperCase();
+        const existing = seen.get(key);
+        // Keep the first non-null description we encounter so the
+        // catalogue ends up with the richest version available.
+        if (description && !existing) {
+          seen.set(key, description);
+        } else if (!seen.has(key)) {
+          seen.set(key, null);
+        }
+      }
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    for (const [name, description] of seen.entries()) {
+      const existing = await db
+        .select({
+          id: configurationOptions.id,
+          description: configurationOptions.description,
+        })
+        .from(configurationOptions)
+        .where(eq(configurationOptions.name, name))
+        .limit(1);
+      if (existing.length) {
+        const current = existing[0].description?.trim() ?? null;
+        if (description && !current) {
+          await db
+            .update(configurationOptions)
+            .set({ description, updatedAt: new Date() })
+            .where(eq(configurationOptions.id, existing[0].id));
+          updated++;
+        }
+        continue;
+      }
+      try {
+        await db.insert(configurationOptions).values({ name, description });
+        inserted++;
+      } catch {
+        // Concurrent boot won the unique race — fine.
+      }
+    }
+
+    if (inserted > 0 || updated > 0) {
+      console.log(
+        `[nomenclature] auto-backfilled configuration_options: ${inserted} new, ${updated} descriptions filled in.`,
+      );
+    }
+  } catch (e) {
+    console.warn(
+      "[nomenclature] configuration_options auto-backfill failed:",
       e instanceof Error ? e.message : e,
     );
   }
