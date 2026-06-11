@@ -124,6 +124,27 @@ export function ensureNomenclatureSchema(): Promise<void> {
       // inventory_items so the InventoryDrawer can edit them on any
       // row, including those auto-minted from RFQs.
       await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "configurations" jsonb DEFAULT '[]'::jsonb`);
+      // V102 — Starred flag for the Lightbase Inventory list. ADD +
+      // UPDATE in one DO block so the assembly back-fill ONLY runs
+      // the first time we create the column. Subsequent boots skip
+      // both because the column already exists.
+      await db.execute(sql`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'inventory_items'
+              AND column_name = 'starred'
+          ) THEN
+            ALTER TABLE "inventory_items"
+              ADD COLUMN "starred" boolean NOT NULL DEFAULT true;
+            UPDATE "inventory_items"
+              SET "starred" = false
+              WHERE "kind" = 'assembly';
+          END IF;
+        END $$;
+      `);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_starred_idx" ON "inventory_items" ("starred")`);
       // V98 — Global configuration_options catalogue. Every config
       // name ever attached to a part / assembly / hardware gets
       // upserted here so the chip-editor can offer typeahead.

@@ -2725,6 +2725,13 @@ export const inventoryItems = pgTable(
     configurations: jsonb("configurations")
       .$type<Array<{ name: string; description: string | null }>>()
       .default([]),
+    // Whether this item shows up in the /suppliers → Lightbase
+    // Inventory list. Parts and hardware are starred by default
+    // (they're the things we always want to track on hand); sub-
+    // assemblies default to unstarred so the team can curate which
+    // assemblies actually need inventory accounting. User-toggleable
+    // from the Database tab card AND the InventoryDrawer header.
+    starred: boolean("starred").notNull().default(true),
     createdByClerkId: text("created_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),

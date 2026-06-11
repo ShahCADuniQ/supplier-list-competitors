@@ -63,6 +63,12 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
   // and remembered automatically — once an item carries a label, it
   // appears in this dropdown for everyone.
   const [productFilter, setProductFilter] = useState<string>("__all__");
+  // Starred filter. Defaults to on so the tab shows only the curated
+  // "shows up in Lightbase Inventory" rows — that's parts/hardware by
+  // default plus any assembly the user has explicitly opted in via the
+  // star button on the Database tab card. Toggling Show all reveals
+  // everything for diagnostic / cleanup tasks.
+  const [showAll, setShowAll] = useState(false);
 
   // Normalise products field for each row. Handles both the legacy
   // scalar `product` column and the V92 `products` jsonb array.
@@ -94,7 +100,8 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = items ?? [];
-    const byKind = list.filter(
+    const byStar = showAll ? list : list.filter((i) => i.starred);
+    const byKind = byStar.filter(
       (i) => i.kind === (view === "assemblies" ? "assembly" : "part"),
     );
     const byProduct = byKind.filter((i) => {
@@ -110,9 +117,14 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
         .toLowerCase()
         .includes(q);
     });
-  }, [items, search, view, productFilter]);
-  const partsCount = (items ?? []).filter((i) => i.kind !== "assembly").length;
-  const assembliesCount = (items ?? []).filter((i) => i.kind === "assembly").length;
+  }, [items, search, view, productFilter, showAll]);
+  // Counts respect the starred filter so the tab pills reflect what
+  // the user will actually see when they click through. Toggling Show
+  // all switches both pills to the full population.
+  const visibleByStar = (items ?? []).filter((i) => showAll || i.starred);
+  const partsCount = visibleByStar.filter((i) => i.kind !== "assembly").length;
+  const assembliesCount = visibleByStar.filter((i) => i.kind === "assembly").length;
+  const hiddenByStarCount = (items ?? []).filter((i) => !i.starred).length;
 
   return (
     <div style={{ padding: 24, background: "var(--lb-bg)", minHeight: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -226,6 +238,36 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
             fontSize: 13,
           }}
         />
+        <label
+          title={
+            showAll
+              ? "Showing every inventory row, including assemblies that aren't starred"
+              : "Only showing items starred for Lightbase Inventory. Hidden: " +
+                hiddenByStarCount
+          }
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 14px",
+            borderRadius: 999,
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+            color: "var(--lb-text)",
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showAll}
+            onChange={(e) => setShowAll(e.target.checked)}
+            style={{ cursor: "pointer" }}
+          />
+          Show all{hiddenByStarCount > 0 && !showAll ? ` (+${hiddenByStarCount} hidden)` : ""}
+        </label>
       </div>
 
       <section

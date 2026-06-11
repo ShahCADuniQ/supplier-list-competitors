@@ -118,6 +118,11 @@ export type PartRow = {
   products: string[];
   configurations: Configuration[];
   inventoryItemId: number | null;
+  // Whether the linked inventory row is starred (shown in
+  // /suppliers → Lightbase Inventory). When inventoryItemId is null
+  // (very rare, only during in-flight first-save), this defaults to
+  // false so the UI shows the empty star until the row is hydrated.
+  starred: boolean;
   createdAt: string;
 };
 
@@ -271,12 +276,17 @@ export async function listParts(): Promise<PartRow[]> {
       products: nomenclatureParts.products,
       configurations: nomenclatureParts.configurations,
       inventoryItemId: nomenclatureParts.inventoryItemId,
+      starred: inventoryItems.starred,
       createdAt: nomenclatureParts.createdAt,
     })
     .from(nomenclatureParts)
     .leftJoin(
       nomenclatureStandards,
       eq(nomenclatureStandards.id, nomenclatureParts.standardId),
+    )
+    .leftJoin(
+      inventoryItems,
+      eq(inventoryItems.id, nomenclatureParts.inventoryItemId),
     );
   return rows
     .sort(
@@ -300,6 +310,7 @@ export async function listParts(): Promise<PartRow[]> {
       description: r.description ?? null,
       product: r.product ?? null,
       products: readProducts(r.product, r.products),
+      starred: r.starred ?? false,
       configurations: normalizeConfigurations(r.configurations),
       inventoryItemId: r.inventoryItemId ?? null,
       createdAt: r.createdAt.toISOString(),
@@ -362,6 +373,10 @@ async function upsertInventoryItem(args: {
       kind: args.kind,
       product: args.product ?? null,
       products: args.products ?? [],
+      // Parts + hardware-as-part default to starred (in inventory);
+      // assemblies default to UNstarred and the user opts each one
+      // in from the Database tab star button.
+      starred: args.kind !== "assembly",
       // Every nomenclature-generated row is a top-level "parent" entry
       // — never a child of an assembly.
       parentAssemblyId: null,
@@ -1208,6 +1223,7 @@ export type InventoryDetails = {
   uniqueId: string | null;
   configurations: Configuration[];
   standardName: string | null;
+  starred: boolean;
   attachments: DrawerAttachment[];
   supplierLinks: DrawerSupplierLink[];
   children: DrawerChild[];
@@ -1371,6 +1387,7 @@ export async function getInventoryDetails(input: {
       return normalizeConfigurations(nomRow?.configurations);
     })(),
     standardName,
+    starred: item.starred ?? false,
     attachments,
     supplierLinks,
     children,
@@ -1429,6 +1446,25 @@ export async function setInventoryConfigurationsAction(input: {
     .set({ configurations: clean, updatedAt: new Date() })
     .where(eq(nomenclatureParts.inventoryItemId, input.inventoryItemId));
   await upsertConfigurationOptions(clean, profile.clerkUserId);
+  return { ok: true };
+}
+
+// Toggle the starred flag on an inventory row. Star = "show this in
+// the Lightbase Inventory tab". Parts/hardware default to starred at
+// creation; assemblies default to unstarred so the team curates which
+// sub-assemblies need explicit inventory tracking. The Database tab
+// card and the InventoryDrawer header both call this.
+export async function setInventoryStarredAction(input: {
+  inventoryItemId: number;
+  starred: boolean;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureOrdersSchema();
+  await db
+    .update(inventoryItems)
+    .set({ starred: input.starred, updatedAt: new Date() })
+    .where(eq(inventoryItems.id, input.inventoryItemId));
   return { ok: true };
 }
 

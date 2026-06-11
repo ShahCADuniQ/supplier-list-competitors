@@ -31,6 +31,7 @@ import {
   removeAssemblyChildAction,
   saveHardwarePart,
   savePartCode,
+  setInventoryStarredAction,
   suggestTemplateAction,
   updatePart,
   type AssemblyTreeNode,
@@ -587,6 +588,10 @@ function HardwareForm({
           products,
           configurations,
           inventoryItemId: r.inventoryItemId ?? null,
+          // Hardware is always treated as a part on the inventory side,
+          // so it's starred by default — matches the server's
+          // upsertInventoryItem behaviour.
+          starred: partOrAssembly !== "A",
           createdAt: new Date().toISOString(),
         });
         setNomenclature("");
@@ -1054,6 +1059,9 @@ function PartIdTab({
           products,
           configurations,
           inventoryItemId: r.inventoryItemId ?? null,
+          // Mirrors the server: parts default starred, assemblies don't
+          // (assemblies are opt-in for the Lightbase Inventory tab).
+          starred: kind !== "assembly",
           createdAt: new Date().toISOString(),
         });
         setName("");
@@ -1898,6 +1906,13 @@ function PartRowItem({
             e.stopPropagation();
           }}
         >
+          {part.inventoryItemId != null && (
+            <StarToggleButton
+              inventoryItemId={part.inventoryItemId}
+              starred={part.starred}
+              onChanged={(next) => onUpdate({ id: part.id, starred: next })}
+            />
+          )}
           {part.inventoryItemId != null && (
             <button
               type="button"
@@ -3889,6 +3904,67 @@ function ProductInput({
         </datalist>
       </div>
     </label>
+  );
+}
+
+// Star toggle — controls whether this inventory item shows up in the
+// /suppliers → Lightbase Inventory tab. Parts/hardware are starred by
+// default; assemblies start unstarred so the team explicitly opts in
+// to inventory-track each one. The button does an optimistic flip and
+// rolls back on error.
+function StarToggleButton({
+  inventoryItemId,
+  starred,
+  onChanged,
+}: {
+  inventoryItemId: number;
+  starred: boolean;
+  onChanged: (next: boolean) => void;
+}) {
+  const [pending, start] = useTransition();
+  function toggle() {
+    const next = !starred;
+    // Optimistic — flip immediately so the UI feels instant.
+    onChanged(next);
+    start(async () => {
+      try {
+        await setInventoryStarredAction({
+          inventoryItemId,
+          starred: next,
+        });
+      } catch (e) {
+        // Roll back on failure.
+        onChanged(starred);
+        alert(e instanceof Error ? e.message : "Star toggle failed");
+      }
+    });
+  }
+  return (
+    <button
+      type="button"
+      draggable={false}
+      onClick={toggle}
+      disabled={pending}
+      style={{
+        ...LINK_BTN,
+        color: starred ? "#d97706" : "var(--lb-text-3)",
+        borderColor: starred
+          ? "color-mix(in srgb, #d97706 40%, var(--lb-border))"
+          : "var(--lb-border)",
+        background: starred
+          ? "color-mix(in srgb, #d97706 8%, transparent)"
+          : "transparent",
+        fontWeight: 700,
+        opacity: pending ? 0.6 : 1,
+      }}
+      title={
+        starred
+          ? "Starred — shown in Lightbase Inventory. Click to unstar."
+          : "Not starred — hidden from Lightbase Inventory. Click to star."
+      }
+    >
+      {starred ? "★" : "☆"}
+    </button>
   );
 }
 

@@ -19,6 +19,7 @@ import {
   listConfigurationOptionsAction,
   removeInventoryAttachmentAction,
   setInventoryConfigurationsAction,
+  setInventoryStarredAction,
   type Configuration,
   type ConfigurationOption,
   type DrawerAttachment,
@@ -289,6 +290,13 @@ export default function InventoryDrawer({
                   >
                     {details.code}
                   </code>
+                  <DrawerStarToggle
+                    inventoryItemId={details.inventoryItemId}
+                    starred={details.starred}
+                    onChanged={(next) =>
+                      setDetails((d) => (d ? { ...d, starred: next } : d))
+                    }
+                  />
                   {details.products.map((label) => (
                     <span
                       key={label}
@@ -387,6 +395,66 @@ export default function InventoryDrawer({
         </div>
       </aside>
     </>
+  );
+}
+
+// Star control rendered inline in the drawer header. Same semantics
+// as the Database tab card button — flips inventory_items.starred so
+// the row appears (or stops appearing) in the Lightbase Inventory tab
+// over in /suppliers. Optimistic flip; rolls back on error.
+function DrawerStarToggle({
+  inventoryItemId,
+  starred,
+  onChanged,
+}: {
+  inventoryItemId: number;
+  starred: boolean;
+  onChanged: (next: boolean) => void;
+}) {
+  const [pending, start] = useTransition();
+  function toggle() {
+    const next = !starred;
+    onChanged(next);
+    start(async () => {
+      try {
+        await setInventoryStarredAction({ inventoryItemId, starred: next });
+      } catch (e) {
+        onChanged(starred);
+        alert(e instanceof Error ? e.message : "Star toggle failed");
+      }
+    });
+  }
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={pending}
+      title={
+        starred
+          ? "Starred — shown in Lightbase Inventory. Click to unstar."
+          : "Not starred — hidden from Lightbase Inventory. Click to star."
+      }
+      style={{
+        appearance: "none",
+        border: "1px solid",
+        borderColor: starred
+          ? "color-mix(in srgb, #d97706 40%, var(--lb-border))"
+          : "var(--lb-border)",
+        background: starred
+          ? "color-mix(in srgb, #d97706 8%, transparent)"
+          : "transparent",
+        color: starred ? "#d97706" : "var(--lb-text-3)",
+        borderRadius: 8,
+        fontSize: 14,
+        fontWeight: 700,
+        padding: "2px 8px",
+        cursor: pending ? "default" : "pointer",
+        opacity: pending ? 0.6 : 1,
+        lineHeight: 1.2,
+      }}
+    >
+      {starred ? "★" : "☆"}
+    </button>
   );
 }
 
