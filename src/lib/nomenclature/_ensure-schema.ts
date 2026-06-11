@@ -63,6 +63,11 @@ export function ensureNomenclatureSchema(): Promise<void> {
       // V85 — Free-form product / line grouping (e.g. "Lightline-X").
       await db.execute(sql`ALTER TABLE "nomenclature_parts" ADD COLUMN IF NOT EXISTS "product" text`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS "nomenclature_parts_product_idx" ON "nomenclature_parts" ("product")`);
+      // V86 — Mirror the product label onto inventory_items so the
+      // /suppliers → Lightbase Inventory list can filter without
+      // joining nomenclature_parts.
+      await db.execute(sql`ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "product" text`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS "inventory_items_product_idx" ON "inventory_items" ("product")`);
 
       // V83 — assembly_bom: many-to-many edge table for the
       // assembly tree. Lazy-created here so the nomenclature page works

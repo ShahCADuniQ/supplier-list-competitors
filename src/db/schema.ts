@@ -2711,6 +2711,10 @@ export const inventoryItems = pgTable(
     // expensive join on every list.
     pendingQty: integer("pending_qty").notNull().default(0),
     confirmedQty: integer("confirmed_qty").notNull().default(0),
+    // Free-form product / line name (e.g. "Lightline-X") for grouping
+    // in the inventory tab. Mirrored from nomenclature_parts.product
+    // on save so the inventory listing can filter without joining.
+    product: text("product"),
     createdByClerkId: text("created_by_clerk_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),

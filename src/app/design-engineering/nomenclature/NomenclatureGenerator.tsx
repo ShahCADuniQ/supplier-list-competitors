@@ -11,7 +11,13 @@
 //                       name + description + configurations, delete
 //                       (delete frees the unique ID for reuse)
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import {
   addAssemblyChildAction,
   addUserStandard,
@@ -1414,6 +1420,7 @@ function PartRowItem({
   const [busy, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [linkPickerOpen, setLinkPickerOpen] = useState(false);
 
   function save() {
@@ -1460,74 +1467,132 @@ function PartRowItem({
     });
   }
 
+  const liRef = useRef<HTMLLIElement>(null);
+  const canDrag = part.inventoryItemId != null;
+
   return (
     <li
+      ref={liRef}
+      draggable={canDrag}
+      onDragStart={(e) => {
+        if (!canDrag || part.inventoryItemId == null) return;
+        e.dataTransfer.setData(
+          "application/x-lb-inventory-item",
+          String(part.inventoryItemId),
+        );
+        e.dataTransfer.effectAllowed = "link";
+        // Use the whole row as the drag image so the entire card
+        // visually moves with the cursor rather than just the spot
+        // the user grabbed. Offset puts the cursor near the grab
+        // point.
+        if (liRef.current) {
+          const rect = liRef.current.getBoundingClientRect();
+          const offsetX = Math.min(40, e.clientX - rect.left);
+          const offsetY = Math.min(40, e.clientY - rect.top);
+          e.dataTransfer.setDragImage(liRef.current, offsetX, offsetY);
+        }
+        // Small async flip so the browser captures the drag image
+        // before we dim the original.
+        requestAnimationFrame(() => setIsDragging(true));
+      }}
+      onDragEnd={() => setIsDragging(false)}
+      onDragOver={(e) => {
+        const ok = e.dataTransfer.types.includes(
+          "application/x-lb-inventory-item",
+        );
+        if (!ok || part.inventoryItemId == null) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "link";
+        if (!dragOver) setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        // Only clear when we actually leave the li, not when entering
+        // a child element. relatedTarget is null when leaving the
+        // window entirely.
+        if (
+          !e.relatedTarget ||
+          !(e.relatedTarget instanceof Node) ||
+          !liRef.current?.contains(e.relatedTarget)
+        ) {
+          setDragOver(false);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        if (part.inventoryItemId == null) return;
+        const raw = e.dataTransfer.getData(
+          "application/x-lb-inventory-item",
+        );
+        const draggedItemId = Number(raw);
+        if (!draggedItemId || draggedItemId === part.inventoryItemId) {
+          return;
+        }
+        onDrop({
+          draggedItemId,
+          targetItemId: part.inventoryItemId,
+        });
+      }}
       style={{
         padding: "12px 14px",
-        borderRadius: 10,
-        border: "1px solid var(--lb-border)",
-        background: "var(--lb-bg)",
+        borderRadius: 12,
+        border: dragOver
+          ? "1px solid var(--lb-accent)"
+          : "1px solid var(--lb-border)",
+        background: dragOver
+          ? "color-mix(in srgb, var(--lb-accent) 8%, var(--lb-bg))"
+          : "var(--lb-bg)",
         display: "flex",
         flexDirection: "column",
         gap: 8,
+        cursor: canDrag ? (isDragging ? "grabbing" : "grab") : "default",
+        opacity: isDragging ? 0.45 : 1,
+        transform: dragOver
+          ? "translateY(-1px) scale(1.003)"
+          : isDragging
+            ? "scale(0.985)"
+            : "scale(1)",
+        boxShadow: dragOver
+          ? "0 8px 24px -8px color-mix(in srgb, var(--lb-accent) 50%, transparent), 0 0 0 4px color-mix(in srgb, var(--lb-accent) 18%, transparent)"
+          : isDragging
+            ? "0 2px 6px rgba(0,0,0,0.05)"
+            : "none",
+        transition:
+          "transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 200ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 160ms ease, border-color 160ms ease, opacity 160ms ease",
+        willChange: isDragging ? "transform, opacity" : "auto",
       }}
     >
       <div
-        draggable={part.inventoryItemId != null}
-        onDragStart={(e) => {
-          if (part.inventoryItemId == null) return;
-          e.dataTransfer.setData(
-            "application/x-lb-inventory-item",
-            String(part.inventoryItemId),
-          );
-          e.dataTransfer.effectAllowed = "link";
-        }}
-        onDragOver={(e) => {
-          const id = e.dataTransfer.types.includes(
-            "application/x-lb-inventory-item",
-          );
-          if (!id || part.inventoryItemId == null) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "link";
-          if (!dragOver) setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          if (part.inventoryItemId == null) return;
-          const raw = e.dataTransfer.getData(
-            "application/x-lb-inventory-item",
-          );
-          const draggedItemId = Number(raw);
-          if (!draggedItemId || draggedItemId === part.inventoryItemId) {
-            return;
-          }
-          onDrop({
-            draggedItemId,
-            targetItemId: part.inventoryItemId,
-          });
-        }}
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: 12,
           flexWrap: "wrap",
-          padding: dragOver ? "6px 8px" : 0,
-          margin: dragOver ? "-6px -8px" : 0,
-          borderRadius: dragOver ? 8 : 0,
-          background: dragOver
-            ? "color-mix(in srgb, var(--lb-accent) 12%, transparent)"
-            : "transparent",
-          outline: dragOver
-            ? "2px dashed var(--lb-accent)"
-            : "none",
-          transition: "background 120ms ease, outline-color 120ms ease",
-          cursor: part.inventoryItemId != null ? "grab" : "default",
         }}
       >
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, display: "flex", alignItems: "flex-start", gap: 10 }}>
+          {canDrag && (
+            <span
+              aria-hidden
+              title="Drag to link as a child of another assembly"
+              style={{
+                display: "inline-flex",
+                flexDirection: "column",
+                gap: 2,
+                color: "var(--lb-text-3)",
+                fontSize: 12,
+                lineHeight: 1,
+                marginTop: 3,
+                userSelect: "none",
+                opacity: 0.7,
+                transition: "opacity 120ms ease",
+              }}
+            >
+              <span>⋮⋮</span>
+            </span>
+          )}
+          <div style={{ minWidth: 0 }}>
           <code
             style={{
               fontSize: 14,
@@ -1575,9 +1640,18 @@ function PartRowItem({
             <span>· created {new Date(part.createdAt).toLocaleDateString()}</span>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        </div>
+        <div
+          style={{ display: "flex", gap: 8 }}
+          onMouseDown={(e) => {
+            // Stop the li's drag from initiating when the user is
+            // pressing a button — we want clicks to work cleanly.
+            e.stopPropagation();
+          }}
+        >
           <button
             type="button"
+            draggable={false}
             onClick={() => navigator.clipboard.writeText(part.fullCode)}
             style={LINK_BTN}
             title="Copy code to clipboard"
@@ -1587,6 +1661,7 @@ function PartRowItem({
           {part.inventoryItemId != null && (
             <button
               type="button"
+              draggable={false}
               onClick={() => setLinkPickerOpen((v) => !v)}
               style={LINK_BTN}
               title="Link to a supplier catalogue entry"
@@ -1596,6 +1671,7 @@ function PartRowItem({
           )}
           <button
             type="button"
+            draggable={false}
             onClick={() => setEditing((v) => !v)}
             style={LINK_BTN}
           >
@@ -1603,6 +1679,7 @@ function PartRowItem({
           </button>
           <button
             type="button"
+            draggable={false}
             onClick={remove}
             disabled={busy}
             style={{ ...LINK_BTN, color: "#dc2626" }}

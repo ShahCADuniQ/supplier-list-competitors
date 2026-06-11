@@ -57,18 +57,45 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
   // assemblies excludes parts. Both sections show standalone parts that
   // don't have a parent.
   const [view, setView] = useState<"assemblies" | "parts">("parts");
+  // Product / line filter. "__all__" shows every product, "__none__"
+  // shows only items with no product set, anything else filters to
+  // exact-match. Product labels are extracted from the loaded items
+  // and remembered automatically — once an item carries a label, it
+  // appears in this dropdown for everyone.
+  const [productFilter, setProductFilter] = useState<string>("__all__");
+
+  const productOptions = useMemo(() => {
+    const set = new Set<string>();
+    let hasNone = false;
+    for (const i of items ?? []) {
+      const p = (i.product ?? "").trim();
+      if (p) set.add(p);
+      else hasNone = true;
+    }
+    return {
+      products: Array.from(set).sort((a, b) => a.localeCompare(b)),
+      hasNone,
+    };
+  }, [items]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = items ?? [];
-    const byKind = list.filter((i) => i.kind === (view === "assemblies" ? "assembly" : "part"));
-    if (!q) return byKind;
-    return byKind.filter((i) =>
-      `${i.code} ${i.name ?? ""} ${i.description ?? ""} ${i.category ?? ""} ${i.material ?? ""}`
+    const byKind = list.filter(
+      (i) => i.kind === (view === "assemblies" ? "assembly" : "part"),
+    );
+    const byProduct = byKind.filter((i) => {
+      if (productFilter === "__all__") return true;
+      if (productFilter === "__none__") return !(i.product ?? "").trim();
+      return (i.product ?? "").trim() === productFilter;
+    });
+    if (!q) return byProduct;
+    return byProduct.filter((i) =>
+      `${i.code} ${i.name ?? ""} ${i.description ?? ""} ${i.category ?? ""} ${i.material ?? ""} ${i.product ?? ""}`
         .toLowerCase()
         .includes(q),
     );
-  }, [items, search, view]);
+  }, [items, search, view, productFilter]);
   const partsCount = (items ?? []).filter((i) => i.kind !== "assembly").length;
   const assembliesCount = (items ?? []).filter((i) => i.kind === "assembly").length;
 
@@ -143,6 +170,31 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
             🧩 Assemblies ({assembliesCount})
           </button>
         </div>
+        <select
+          value={productFilter}
+          onChange={(e) => setProductFilter(e.target.value)}
+          aria-label="Product / line"
+          style={{
+            padding: "10px 14px",
+            borderRadius: 999,
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+            color: "var(--lb-text)",
+            fontSize: 13,
+            minWidth: 200,
+            cursor: "pointer",
+          }}
+        >
+          <option value="__all__">All products ({items?.length ?? 0})</option>
+          {productOptions.hasNone && (
+            <option value="__none__">No product set</option>
+          )}
+          {productOptions.products.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
         <input
           type="search"
           value={search}

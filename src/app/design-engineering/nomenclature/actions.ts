@@ -207,6 +207,7 @@ async function upsertInventoryItem(args: {
   name: string | null;
   description: string | null;
   kind: "part" | "assembly";
+  product?: string | null;
   createdByClerkId: string | null;
 }): Promise<number> {
   // The inventory_items table + its columns live behind the suppliers
@@ -227,6 +228,7 @@ async function upsertInventoryItem(args: {
         name: args.name,
         description: args.description,
         kind: args.kind,
+        product: args.product ?? null,
         archived: false,
         updatedAt: new Date(),
       })
@@ -240,6 +242,7 @@ async function upsertInventoryItem(args: {
       name: args.name,
       description: args.description,
       kind: args.kind,
+      product: args.product ?? null,
       // Every nomenclature-generated row is a top-level "parent" entry
       // — never a child of an assembly.
       parentAssemblyId: null,
@@ -288,6 +291,7 @@ export async function saveHardwarePart(input: {
     name: input.name ?? std.name,
     description: input.description ?? null,
     kind: partOrAssembly === "A" ? "assembly" : "part",
+    product: input.product?.trim() || null,
     createdByClerkId: profile.clerkUserId,
   });
 
@@ -398,6 +402,7 @@ export async function savePartCode(input: {
     name: input.name ?? null,
     description: input.description ?? null,
     kind: inventoryKind,
+    product: input.product?.trim() || null,
     createdByClerkId: profile.clerkUserId,
   });
 
@@ -475,7 +480,7 @@ export async function updatePart(input: {
       updatedAt: new Date(),
     })
     .where(eq(nomenclatureParts.id, input.id));
-  // Mirror to inventory row name+description.
+  // Mirror to inventory row name + description + product.
   const [row] = await db
     .select({ inv: nomenclatureParts.inventoryItemId })
     .from(nomenclatureParts)
@@ -487,6 +492,7 @@ export async function updatePart(input: {
       .set({
         name: input.name ?? null,
         description: input.description ?? null,
+        product: input.product?.trim() || null,
         updatedAt: new Date(),
       })
       .where(eq(inventoryItems.id, row.inv));
