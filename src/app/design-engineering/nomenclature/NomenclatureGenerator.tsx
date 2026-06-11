@@ -2029,14 +2029,11 @@ function AssemblyContentsSection({
           )}
           {err && <ErrorBox message={err} />}
           {tree && (
-            <>
-              <TreeView node={tree} root />
-              <AddChildRow
-                parentInventoryItemId={inventoryItemId}
-                directChildren={tree.children}
-                onAdded={reload}
-              />
-            </>
+            <AssemblyBrowser
+              rootTree={tree}
+              parentInventoryItemId={inventoryItemId}
+              onMutated={reload}
+            />
           )}
         </div>
       )}
@@ -2044,85 +2041,393 @@ function AssemblyContentsSection({
   );
 }
 
-function TreeView({ node, root }: { node: AssemblyTreeNode; root?: boolean }) {
-  const isAssembly = node.kind === "assembly";
-  const lacks =
-    !root &&
-    node.quantity > 0 &&
-    node.stock + (node.buildableFromStock ?? 0) < node.quantity;
+// Card-based assembly browser with breadcrumb drill-down. The root
+// node is the assembly the user is already looking at (it lives in the
+// PartRowItem header above) so we don't render it again as a duplicate
+// — the browser starts at the root's CHILDREN.
+function AssemblyBrowser({
+  rootTree,
+  parentInventoryItemId,
+  onMutated,
+}: {
+  rootTree: AssemblyTreeNode;
+  parentInventoryItemId: number;
+  onMutated: () => void;
+}) {
+  // Each path entry is { node, parentId }. The browser shows the
+  // children of path[path.length - 1].node. Clicking a child appends
+  // it; clicking a breadcrumb truncates back to that level.
+  type Crumb = { node: AssemblyTreeNode; parentInventoryItemId: number };
+  const [path, setPath] = useState<Crumb[]>([
+    { node: rootTree, parentInventoryItemId },
+  ]);
+
+  // When the tree refreshes (e.g. after add/remove), re-derive the
+  // current crumb's node by following the indexes from the rootTree.
+  // Simplest: reset to root on every fresh rootTree (id-equal check).
+  useEffect(() => {
+    setPath((prev) => {
+      if (!prev.length) return [{ node: rootTree, parentInventoryItemId }];
+      // Try to walk the new tree using the same itemId chain.
+      const ids = prev.map((c) => c.node.itemId);
+      let cursor: AssemblyTreeNode | undefined = rootTree;
+      const rebuilt: Crumb[] = [];
+      for (let i = 0; i < ids.length; i++) {
+        if (!cursor || cursor.itemId !== ids[i]) break;
+        rebuilt.push({
+          node: cursor,
+          parentInventoryItemId:
+            i === 0
+              ? parentInventoryItemId
+              : rebuilt[i - 1].node.itemId,
+        });
+        cursor = cursor.children.find(
+          (c) => c.itemId === ids[i + 1],
+        );
+      }
+      return rebuilt.length
+        ? rebuilt
+        : [{ node: rootTree, parentInventoryItemId }];
+    });
+  }, [rootTree, parentInventoryItemId]);
+
+  const current = path[path.length - 1];
+
+  function drillInto(child: AssemblyTreeNode) {
+    if (child.kind !== "assembly") return;
+    setPath((prev) => [
+      ...prev,
+      { node: child, parentInventoryItemId: current.node.itemId },
+    ]);
+  }
+
+  function jumpTo(index: number) {
+    setPath((prev) => prev.slice(0, index + 1));
+  }
+
   return (
-    <ul
-      style={{
-        listStyle: "none",
-        paddingLeft: root ? 0 : 16,
-        margin: 0,
-        borderLeft: root ? "none" : "1px solid var(--lb-border)",
-      }}
-    >
-      <li
-        style={{
-          padding: "6px 8px",
-          borderRadius: 8,
-          background: root ? "transparent" : "var(--lb-bg-elev)",
-          marginLeft: root ? 0 : 6,
-          marginBottom: 6,
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        <span style={{ fontSize: 13 }}>{isAssembly ? "🧩" : "🔧"}</span>
-        <code style={{ fontSize: 12.5, fontWeight: 700 }}>{node.code}</code>
-        {node.name && (
-          <span style={{ fontSize: 12, color: "var(--lb-text-2)" }}>
-            · {node.name}
-          </span>
-        )}
-        {!root && (
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              color: "var(--lb-text-2)",
-              padding: "1px 7px",
-              borderRadius: 999,
-              background: "var(--lb-bg)",
-              border: "1px solid var(--lb-border)",
-            }}
-          >
-            × {node.quantity}
-          </span>
-        )}
-        <span
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* Breadcrumb — only render when we've drilled past the root. */}
+      {path.length > 1 && (
+        <nav
+          aria-label="Assembly path"
           style={{
-            fontSize: 11,
-            color: lacks ? "#dc2626" : "var(--lb-text-3)",
-            marginLeft: "auto",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 12,
+            color: "var(--lb-text-3)",
           }}
-          title={
-            isAssembly
-              ? `${node.stock} on hand · ${node.buildableFromStock ?? 0} more buildable`
-              : `${node.stock} on hand`
-          }
         >
-          stock {node.stock}
-          {isAssembly && node.buildableFromStock != null && (
-            <span style={{ marginLeft: 4, color: "var(--lb-text-3)" }}>
-              (+{node.buildableFromStock} buildable)
+          {path.map((c, i) => {
+            const last = i === path.length - 1;
+            return (
+              <span
+                key={`${c.node.itemId}-${i}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+              >
+                <button
+                  type="button"
+                  onClick={() => jumpTo(i)}
+                  disabled={last}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    cursor: last ? "default" : "pointer",
+                    color: last
+                      ? "var(--lb-text)"
+                      : "var(--lb-accent)",
+                    fontWeight: last ? 700 : 600,
+                    fontFamily: "var(--lb-font-mono, monospace)",
+                    fontSize: 12,
+                  }}
+                >
+                  {c.node.code}
+                </button>
+                {!last && <span aria-hidden>›</span>}
+              </span>
+            );
+          })}
+        </nav>
+      )}
+
+      {/* Current level header — only when we're below the root. The root
+          info already shows in the parent row above. */}
+      {path.length > 1 && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontSize: 12.5,
+            color: "var(--lb-text-2)",
+            padding: "8px 12px",
+            background: "var(--lb-bg)",
+            borderRadius: 10,
+            border: "1px solid var(--lb-border)",
+          }}
+        >
+          <span>
+            Inside <strong>{current.node.code}</strong>
+            {current.node.name && ` · ${current.node.name}`}
+          </span>
+          {current.node.buildableFromStock != null && (
+            <span
+              style={{
+                padding: "2px 10px",
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 700,
+                background:
+                  current.node.buildableFromStock > 0
+                    ? "rgba(16,185,129,0.14)"
+                    : "rgba(239,68,68,0.12)",
+                color:
+                  current.node.buildableFromStock > 0
+                    ? "#10b981"
+                    : "#dc2626",
+              }}
+            >
+              Can build {current.node.buildableFromStock}
             </span>
           )}
+        </div>
+      )}
+
+      {/* Children as a grid of cards. */}
+      {current.node.children.length === 0 ? (
+        <div
+          style={{
+            padding: "20px 16px",
+            borderRadius: 10,
+            border: "1px dashed var(--lb-border)",
+            textAlign: "center",
+            color: "var(--lb-text-3)",
+            fontSize: 13,
+          }}
+        >
+          No children yet — use the picker below to add one.
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+            gap: 10,
+          }}
+        >
+          {current.node.children.map((c) => (
+            <ChildCard
+              key={c.itemId}
+              node={c}
+              onOpen={
+                c.kind === "assembly" ? () => drillInto(c) : undefined
+              }
+              parentInventoryItemId={current.node.itemId}
+              onRemoved={onMutated}
+            />
+          ))}
+        </div>
+      )}
+
+      <AddChildRow
+        parentInventoryItemId={current.node.itemId}
+        directChildren={current.node.children}
+        onAdded={onMutated}
+      />
+    </div>
+  );
+}
+
+// One card per direct child. Click the body to drill in (assemblies
+// only), or click Remove to detach. Mirrors the visual language of the
+// rest of the database list — code on top in mono, name below, kind
+// icon at the corner.
+function ChildCard({
+  node,
+  onOpen,
+  parentInventoryItemId,
+  onRemoved,
+}: {
+  node: AssemblyTreeNode;
+  onOpen: (() => void) | undefined;
+  parentInventoryItemId: number;
+  onRemoved: () => void;
+}) {
+  const isAssembly = node.kind === "assembly";
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  const effectiveStock =
+    node.stock + (isAssembly ? node.buildableFromStock ?? 0 : 0);
+  const lacks = node.quantity > 0 && effectiveStock < node.quantity;
+
+  function remove(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm(`Remove ${node.code} from this assembly?`)) return;
+    setErr(null);
+    start(async () => {
+      try {
+        await removeAssemblyChildAction({
+          parentInventoryItemId,
+          childInventoryItemId: node.itemId,
+        });
+        onRemoved();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Could not remove");
+      }
+    });
+  }
+
+  return (
+    <div
+      onClick={onOpen}
+      style={{
+        padding: 14,
+        borderRadius: 12,
+        border: lacks
+          ? "1px solid rgba(239,68,68,0.45)"
+          : "1px solid var(--lb-border)",
+        background: lacks
+          ? "rgba(239,68,68,0.04)"
+          : "var(--lb-bg)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        cursor: onOpen ? "pointer" : "default",
+        transition: "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease",
+      }}
+      onMouseEnter={(e) => {
+        if (onOpen) {
+          e.currentTarget.style.transform = "translateY(-1px)";
+          e.currentTarget.style.boxShadow = "0 8px 18px -10px rgba(0,0,0,0.18)";
+        }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = "none";
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            minWidth: 0,
+            flex: 1,
+          }}
+        >
+          <span style={{ fontSize: 16, lineHeight: 1 }}>
+            {isAssembly ? "🧩" : "🔧"}
+          </span>
+          <code
+            style={{
+              fontSize: 12.5,
+              fontWeight: 700,
+              letterSpacing: 0.2,
+              wordBreak: "break-all",
+            }}
+          >
+            {node.code}
+          </code>
+        </div>
+        <span
+          style={{
+            fontSize: 10.5,
+            fontWeight: 700,
+            color: "var(--lb-text-2)",
+            padding: "2px 8px",
+            borderRadius: 999,
+            background: "var(--lb-bg-elev)",
+            border: "1px solid var(--lb-border)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          × {node.quantity}
         </span>
-      </li>
-      {node.children.map((c) => (
-        <TreeView key={`${node.itemId}-${c.itemId}`} node={c} />
-      ))}
-    </ul>
+      </div>
+      {node.name && (
+        <div style={{ fontSize: 12, color: "var(--lb-text-2)" }}>
+          {node.name}
+        </div>
+      )}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          fontSize: 11.5,
+          color: lacks ? "#dc2626" : "var(--lb-text-3)",
+          marginTop: "auto",
+        }}
+      >
+        <span>
+          Stock {node.stock}
+          {isAssembly && node.buildableFromStock != null && (
+            <span> · +{node.buildableFromStock} buildable</span>
+          )}
+        </span>
+        {isAssembly && (
+          <span
+            style={{
+              color: "var(--lb-accent)",
+              fontWeight: 600,
+              fontSize: 11,
+            }}
+          >
+            Open →
+          </span>
+        )}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          marginTop: 4,
+        }}
+      >
+        <button
+          type="button"
+          onClick={remove}
+          disabled={pending}
+          draggable={false}
+          style={{
+            fontSize: 11,
+            color: "#dc2626",
+            background: "transparent",
+            border: "1px solid rgba(239,68,68,0.3)",
+            borderRadius: 999,
+            padding: "3px 10px",
+            cursor: pending ? "default" : "pointer",
+          }}
+        >
+          {pending ? "…" : "Remove"}
+        </button>
+      </div>
+      {err && (
+        <div style={{ marginTop: 4 }}>
+          <ErrorBox message={err} />
+        </div>
+      )}
+    </div>
   );
 }
 
 function AddChildRow({
   parentInventoryItemId,
-  directChildren,
+  // Kept for prop-shape compatibility with the AssemblyBrowser call
+  // site; the new card grid handles direct-children display, so we
+  // don't render the list here anymore.
+  directChildren: _directChildren,
   onAdded,
 }: {
   parentInventoryItemId: number;
@@ -2135,6 +2440,7 @@ function AddChildRow({
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [pending, start] = useTransition();
+  void _directChildren;
 
   async function loadOptions() {
     setLoading(true);
@@ -2166,22 +2472,6 @@ function AddChildRow({
         onAdded();
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Could not add child");
-      }
-    });
-  }
-
-  function remove(childInventoryItemId: number) {
-    if (!confirm("Remove this child from the assembly?")) return;
-    setErr(null);
-    start(async () => {
-      try {
-        await removeAssemblyChildAction({
-          parentInventoryItemId,
-          childInventoryItemId,
-        });
-        onAdded();
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : "Could not remove child");
       }
     });
   }
@@ -2273,57 +2563,6 @@ function AddChildRow({
       {err && (
         <div style={{ marginTop: 8 }}>
           <ErrorBox message={err} />
-        </div>
-      )}
-      {directChildren.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: 0.5,
-              textTransform: "uppercase",
-              color: "var(--lb-text-3)",
-            }}
-          >
-            Direct children
-          </span>
-          <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0" }}>
-            {directChildren.map((c) => (
-              <li
-                key={c.itemId}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "4px 0",
-                  fontSize: 12.5,
-                }}
-              >
-                <span>{c.kind === "assembly" ? "🧩" : "🔧"}</span>
-                <code style={{ fontWeight: 700 }}>{c.code}</code>
-                <span style={{ color: "var(--lb-text-3)" }}>
-                  × {c.quantity}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => remove(c.itemId)}
-                  style={{
-                    marginLeft: "auto",
-                    fontSize: 11,
-                    color: "#dc2626",
-                    background: "transparent",
-                    border: "1px solid rgba(239,68,68,0.3)",
-                    borderRadius: 999,
-                    padding: "2px 8px",
-                    cursor: "pointer",
-                  }}
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
         </div>
       )}
     </div>
