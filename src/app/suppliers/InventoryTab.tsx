@@ -159,10 +159,18 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
         .includes(q);
     });
   }, [items, search, view, productFilter, showAll]);
-  // Counts respect the starred filter so the tab pills reflect what
-  // the user will actually see when they click through. Toggling Show
-  // all switches the pills to the full population.
-  const visibleByStar = (items ?? []).filter((i) => showAll || i.starred);
+  // V124 — tab counts respect BOTH the starred filter AND the active
+  // product filter so the Parts/Assemblies/Hardware/… pills only
+  // reflect the rows the user will actually see. Pre-V124 the counts
+  // were across every starred row in the database, which made the
+  // pills disagree with the Tree tab for a product-scoped view.
+  const visibleByStar = (items ?? []).filter((i) => {
+    if (!showAll && !i.starred) return false;
+    if (productFilter === "__all__") return true;
+    const ps = rowProducts(i);
+    if (productFilter === "__none__") return ps.length === 0;
+    return ps.includes(productFilter);
+  });
   const classCounts: Record<Exclude<CatalogueTab, "tree">, number> = {
     parts: 0,
     assemblies: 0,
@@ -178,7 +186,15 @@ export default function InventoryTab({ canEdit }: { canEdit: boolean }) {
     else if (c === "electronics") classCounts.electronics++;
     else if (c === "adhesive_sealant_filler") classCounts.adhesive_sealant_filler++;
   }
-  const hiddenByStarCount = (items ?? []).filter((i) => !i.starred).length;
+  // Show-all hint also scoped to the current product so the "(+N
+  // hidden)" tally reports unstarred rows for THIS product only.
+  const hiddenByStarCount = (items ?? []).filter((i) => {
+    if (i.starred) return false;
+    if (productFilter === "__all__") return true;
+    const ps = rowProducts(i);
+    if (productFilter === "__none__") return ps.length === 0;
+    return ps.includes(productFilter);
+  }).length;
   // Tree tab is only meaningful when the user has narrowed to one
   // specific product. Hide the pill otherwise; if the user had it
   // selected and switches the filter back to __all__, snap them to
