@@ -2198,44 +2198,23 @@ function DatabaseTreeView({
     );
   }
 
-  const productSpecific =
-    productView !== "__all__" && productView !== "__none__";
-
   return (
     <div
       style={{
         display: "flex",
-        flexDirection: "row",
-        gap: 14,
-        alignItems: "flex-start",
+        flexDirection: "column",
+        gap: 20,
       }}
     >
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: 20,
-        }}
-      >
-        {roots.map((p) => (
-          <DatabaseTreeRoot
-            key={p.id}
-            rootPart={p}
-            refreshKey={refreshKey}
-            openDrawer={openDrawer}
-            onAdd={(inventoryItemId) => setAddingUnderItemId(inventoryItemId)}
-          />
-        ))}
-      </div>
-      {productSpecific && (
-        <InventoryPalette
-          parts={parts}
+      {roots.map((p) => (
+        <DatabaseTreeRoot
+          key={p.id}
+          rootPart={p}
+          refreshKey={refreshKey}
           openDrawer={openDrawer}
-          productFilter={productView}
+          onAdd={(inventoryItemId) => setAddingUnderItemId(inventoryItemId)}
         />
-      )}
+      ))}
       {addingUnderItemId != null && (
         <AddNodeModal
           parentInventoryItemId={addingUnderItemId}
@@ -4712,14 +4691,9 @@ function ConfigurationsEditor({
 function InventoryPalette({
   parts,
   openDrawer,
-  productFilter,
 }: {
   parts: PartRow[];
   openDrawer: (inventoryItemId: number) => void;
-  // When set, the palette only surfaces parts tagged with this product.
-  // Case-insensitive match. Used by the Database Tree sub-tab so the
-  // sidebar mirrors the product the tree is rendering.
-  productFilter?: string;
 }) {
   const [q, setQ] = useState("");
   // Set of inventoryItemIds the user has checked. Multi-drag: when
@@ -4728,13 +4702,7 @@ function InventoryPalette({
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    const productNeedle = productFilter?.trim().toLowerCase() ?? null;
-    let list = parts.filter((p) => p.inventoryItemId != null);
-    if (productNeedle) {
-      list = list.filter((p) =>
-        p.products.some((pp) => pp.toLowerCase() === productNeedle),
-      );
-    }
+    const list = parts.filter((p) => p.inventoryItemId != null);
     if (!needle) return list;
     return list.filter(
       (p) =>
@@ -4743,7 +4711,7 @@ function InventoryPalette({
         p.uniqueId.toLowerCase().includes(needle) ||
         p.products.some((pp) => pp.toLowerCase().includes(needle)),
     );
-  }, [parts, q, productFilter]);
+  }, [parts, q]);
 
   function toggle(id: number) {
     setSelected((prev) => {
