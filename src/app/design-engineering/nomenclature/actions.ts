@@ -1107,7 +1107,10 @@ export async function listSupplierCatalogueProductsAction(): Promise<
   // Surface every non-archived supplier_products row — top-level
   // parts AND their nested configuration models. The picker is meant
   // to expose every catalogue entry so the user can link an inventory
-  // row to a specific variant when needed.
+  // row to a specific variant when needed. Configurations inherit
+  // their parent's thumbnail / product URL when their own is empty,
+  // mirroring the /suppliers → catalogue card UI (which always shows
+  // the parent product photo on every nested variant).
   const rows = await db
     .select({
       spId: supplierProducts.id,
@@ -1119,22 +1122,58 @@ export async function listSupplierCatalogueProductsAction(): Promise<
       thumbnailUrl: supplierProducts.thumbnailUrl,
       description: supplierProducts.description,
       linkedToInventoryItemId: supplierProducts.inventoryItemId,
+      parentProductId: supplierProducts.parentProductId,
     })
     .from(supplierProducts)
     .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
     .where(eq(supplierProducts.archived, false))
     .orderBy(asc(suppliers.name), asc(supplierProducts.name));
-  return rows.map((r) => ({
-    supplierProductId: r.spId,
-    supplierId: r.supplierId,
-    supplierName: r.supplierName,
-    productName: r.productName,
-    productCode: r.productCode ?? null,
-    productUrl: r.productUrl ?? null,
-    thumbnailUrl: r.thumbnailUrl ?? null,
-    description: r.description ?? null,
-    linkedToInventoryItemId: r.linkedToInventoryItemId ?? null,
-  }));
+
+  // Bulk-fetch the thumbnails / URLs of every parent referenced by a
+  // configuration so we can fall back to them without an N+1 round-trip.
+  const parentIds = Array.from(
+    new Set(rows.map((r) => r.parentProductId).filter((x): x is number => x != null)),
+  );
+  const parentMap = new Map<
+    number,
+    { thumbnailUrl: string | null; productUrl: string | null; name: string }
+  >();
+  if (parentIds.length > 0) {
+    const parents = await db
+      .select({
+        id: supplierProducts.id,
+        thumbnailUrl: supplierProducts.thumbnailUrl,
+        productUrl: supplierProducts.productUrl,
+        name: supplierProducts.name,
+      })
+      .from(supplierProducts)
+      .where(inArray(supplierProducts.id, parentIds));
+    for (const p of parents) {
+      parentMap.set(p.id, {
+        thumbnailUrl: p.thumbnailUrl ?? null,
+        productUrl: p.productUrl ?? null,
+        name: p.name,
+      });
+    }
+  }
+
+  return rows.map((r) => {
+    const parent = r.parentProductId != null ? parentMap.get(r.parentProductId) : null;
+    return {
+      supplierProductId: r.spId,
+      supplierId: r.supplierId,
+      supplierName: r.supplierName,
+      productName: r.productName,
+      productCode: r.productCode ?? null,
+      productUrl: r.productUrl ?? parent?.productUrl ?? null,
+      // V116 — configurations show the parent's photo whenever their
+      // own thumbnail is missing OR they have one. Matches the
+      // supplier catalogue card UI exactly.
+      thumbnailUrl: parent?.thumbnailUrl ?? r.thumbnailUrl ?? null,
+      description: r.description ?? null,
+      linkedToInventoryItemId: r.linkedToInventoryItemId ?? null,
+    };
+  });
 }
 
 // V105 — link an existing supplier_products row to this inventory
