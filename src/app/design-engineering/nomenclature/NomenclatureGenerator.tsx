@@ -2202,19 +2202,36 @@ function DatabaseTreeView({
     <div
       style={{
         display: "flex",
-        flexDirection: "column",
-        gap: 20,
+        flexDirection: "row",
+        gap: 14,
+        alignItems: "flex-start",
       }}
     >
-      {roots.map((p) => (
-        <DatabaseTreeRoot
-          key={p.id}
-          rootPart={p}
-          refreshKey={refreshKey}
-          openDrawer={openDrawer}
-          onAdd={(inventoryItemId) => setAddingUnderItemId(inventoryItemId)}
-        />
-      ))}
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 20,
+        }}
+      >
+        {roots.map((p) => (
+          <DatabaseTreeRoot
+            key={p.id}
+            rootPart={p}
+            refreshKey={refreshKey}
+            openDrawer={openDrawer}
+            onAdd={(inventoryItemId) => setAddingUnderItemId(inventoryItemId)}
+          />
+        ))}
+      </div>
+      {/* V122 — Right-hand catalogue scroll: every code in the
+          database. Multi-select via checkbox + drag onto any tree
+          card to link as a child. Always visible in the Tree
+          sub-tab so the user can stage drops regardless of the
+          product filter at the top. */}
+      <InventoryPalette parts={parts} openDrawer={openDrawer} />
       {addingUnderItemId != null && (
         <AddNodeModal
           parentInventoryItemId={addingUnderItemId}
