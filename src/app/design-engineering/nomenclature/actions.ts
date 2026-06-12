@@ -1916,9 +1916,15 @@ export async function getProductInventoryTreeAction(input: {
   }
   if (allowedIds.size === 0) return [];
 
-  // Edges restricted to nodes in our allowed set. Discard the rest so
-  // the tree only walks through starred-in-product nodes.
   const idsArr = Array.from(allowedIds);
+
+  // V115 — fetch EVERY assembly_bom edge (not just edges between
+  // target nodes) so we can connect targets across non-target
+  // intermediates. Example: a starred PROFILE sits under an
+  // un-starred outer assembly that's itself under a starred
+  // LN8035X assembly. Without this we'd render PROFILE and LN8035X
+  // as two disconnected roots; with it we walk through the
+  // un-starred intermediate and parent PROFILE under LN8035X.
   const allEdges = await db
     .select({
       parentAssemblyId: assemblyBom.parentAssemblyId,
@@ -1926,31 +1932,106 @@ export async function getProductInventoryTreeAction(input: {
       quantity: assemblyBom.quantity,
       position: assemblyBom.position,
     })
-    .from(assemblyBom)
-    .where(
-      and(
-        inArray(assemblyBom.parentAssemblyId, idsArr),
-        inArray(assemblyBom.childItemId, idsArr),
-      ),
-    );
+    .from(assemblyBom);
 
-  const childrenByParent = new Map<
+  const fullChildrenByParent = new Map<
     number,
     Array<{ child: number; quantity: number; position: number }>
   >();
-  const hasParent = new Set<number>();
+  const fullParentsByChild = new Map<number, number[]>();
   for (const e of allEdges) {
-    const arr = childrenByParent.get(e.parentAssemblyId) ?? [];
+    const arr = fullChildrenByParent.get(e.parentAssemblyId) ?? [];
     arr.push({
       child: e.childItemId,
       quantity: e.quantity,
       position: e.position,
     });
-    childrenByParent.set(e.parentAssemblyId, arr);
-    hasParent.add(e.childItemId);
+    fullChildrenByParent.set(e.parentAssemblyId, arr);
+    const ps = fullParentsByChild.get(e.childItemId) ?? [];
+    ps.push(e.parentAssemblyId);
+    fullParentsByChild.set(e.childItemId, ps);
   }
-  for (const arr of childrenByParent.values()) {
+  for (const arr of fullChildrenByParent.values()) {
     arr.sort((a, b) => a.position - b.position);
+  }
+
+  // For each target T, find the set of target descendants reachable
+  // through the full BOM, taking the FIRST target on each downward
+  // path. Edges that pass through non-target nodes still result in a
+  // connection, just with the qty of the last edge to the target
+  // (a fine pragmatic approximation — the alternative is multiplying
+  // quantities along the path, which gets fragile for shared subtrees).
+  function effectiveChildren(
+    id: number,
+    ancestors: Set<number>,
+  ): Array<{ child: number; quantity: number; position: number }> {
+    const out: Array<{ child: number; quantity: number; position: number }> = [];
+    const direct = fullChildrenByParent.get(id) ?? [];
+    for (const c of direct) {
+      if (ancestors.has(c.child)) continue;
+      if (allowedIds.has(c.child)) {
+        out.push(c);
+      } else {
+        // Walk through the non-target intermediate looking for the
+        // first target descendant on each branch.
+        const queue: Array<{
+          node: number;
+          quantity: number;
+          position: number;
+        }> = [{ node: c.child, quantity: c.quantity, position: c.position }];
+        const seen = new Set<number>([id, c.child, ...ancestors]);
+        while (queue.length) {
+          const cur = queue.shift()!;
+          const grand = fullChildrenByParent.get(cur.node) ?? [];
+          for (const g of grand) {
+            if (seen.has(g.child)) continue;
+            seen.add(g.child);
+            if (allowedIds.has(g.child)) {
+              // Use the quantity of the edge LEADING to the target
+              // (g.quantity) — best-effort representation when we
+              // skip a non-target node.
+              out.push({
+                child: g.child,
+                quantity: g.quantity,
+                position: out.length,
+              });
+            } else {
+              queue.push({
+                node: g.child,
+                quantity: g.quantity,
+                position: out.length,
+              });
+            }
+          }
+        }
+      }
+    }
+    // Stable order by code so the visual layout is deterministic.
+    out.sort((a, b) => {
+      const ca = meta.get(a.child)?.code ?? "";
+      const cb = meta.get(b.child)?.code ?? "";
+      return ca.localeCompare(cb);
+    });
+    return out;
+  }
+
+  // A target is a root if no ANCESTOR (through the full BOM, possibly
+  // crossing non-target intermediates) is itself a target. Walk up
+  // breadth-first.
+  function hasTargetAncestor(targetId: number): boolean {
+    const seen = new Set<number>([targetId]);
+    const queue = [targetId];
+    while (queue.length) {
+      const id = queue.shift()!;
+      const parents = fullParentsByChild.get(id) ?? [];
+      for (const p of parents) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        if (allowedIds.has(p)) return true;
+        queue.push(p);
+      }
+    }
+    return false;
   }
 
   function build(
@@ -1961,9 +2042,7 @@ export async function getProductInventoryTreeAction(input: {
     const m = meta.get(id)!;
     const next = new Set(ancestors);
     next.add(id);
-    const childEdges = (childrenByParent.get(id) ?? []).filter(
-      (c) => !next.has(c.child),
-    );
+    const eff = effectiveChildren(id, next);
     return {
       inventoryItemId: id,
       code: m.code,
@@ -1972,14 +2051,12 @@ export async function getProductInventoryTreeAction(input: {
       quantity: qty,
       starred: true,
       isConfiguration: m.isConfiguration,
-      children: childEdges.map((c) => build(c.child, c.quantity, next)),
+      children: eff.map((c) => build(c.child, c.quantity, next)),
     };
   }
 
-  // Forest roots = allowed nodes that aren't a child of any other
-  // allowed node. Sorted by code for stable rendering.
   const roots = idsArr
-    .filter((id) => !hasParent.has(id))
+    .filter((id) => !hasTargetAncestor(id))
     .sort((a, b) => meta.get(a)!.code.localeCompare(meta.get(b)!.code));
   return roots.map((id) => build(id, 1, new Set()));
 }
