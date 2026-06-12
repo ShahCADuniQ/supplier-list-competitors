@@ -1463,42 +1463,37 @@ function PartIdTab({
   return (
     <section style={PANEL}>
       <h2 style={SECTION_TITLE}>Generate a Part / Assembly ID</h2>
-      <p style={{ fontSize: 13, color: "var(--lb-text-3)", marginTop: 0 }}>
-        Allocates a fresh 6-character A-Z + 0-9 ID. Code shape depends on
-        the part geometry:
+      <p style={{ fontSize: 13, color: "var(--lb-text-3)", marginTop: 0, marginBottom: 6 }}>
+        Code:{" "}
+        <code>
+          {shape === "circ"
+            ? "CLS-XXXXXX-P|A-DXXXX-LXXXX-NAME"
+            : "CLS-XXXXXX-P|A-WXXXX-HXXXX-LXXXX-NAME"}
+        </code>
       </p>
-      <ul
+      <details
         style={{
-          fontSize: 12.5,
+          fontSize: 12,
           color: "var(--lb-text-3)",
-          margin: "4px 0 14px 18px",
-          padding: 0,
+          marginBottom: 14,
         }}
       >
-        <li>
-          Rectangular:{" "}
-          <code>CLS-XXXXXX-P|A-WXXXX-HXXXX-LXXXX-DISPLAY_NAME</code>
-        </li>
-        <li>
-          Circular: <code>CLS-XXXXXX-P|A-DXXXX-LXXXX-DISPLAY_NAME</code>
-        </li>
-        <li>
-          The <strong>P</strong> / <strong>A</strong> segment is driven
-          by the Kind selector — Part → P, Assembly → A.
-        </li>
-        <li>
-          Leave a dimension blank and it stays as literal{" "}
-          <code>WXXXX</code> / <code>HXXXX</code> / <code>LXXXX</code> /{" "}
-          <code>DXXXX</code> in the code. All segments are uppercased
-          automatically.
-        </li>
-        <li>
-          When class code is <strong>PHS</strong>, picking a supplier
-          also writes a row into the supplier catalogue. Skip the
-          supplier and you can link it later from{" "}
-          <code>/suppliers</code>.
-        </li>
-      </ul>
+        <summary style={{ cursor: "pointer", userSelect: "none" }}>
+          Format details
+        </summary>
+        <ul style={{ margin: "6px 0 0 18px", padding: 0, lineHeight: 1.6 }}>
+          <li>Kind: Part → P · Assembly → A</li>
+          <li>
+            Blank dimensions stay literal: <code>WXXXX</code> /{" "}
+            <code>HXXXX</code> / <code>LXXXX</code> / <code>DXXXX</code>.
+            All segments uppercased.
+          </li>
+          <li>
+            PHS + supplier picked → row added to supplier catalogue;
+            otherwise link later from <code>/suppliers</code>.
+          </li>
+        </ul>
+      </details>
 
       <div style={{ ...ROW, gridTemplateColumns: "1fr 1fr 1fr" }}>
         <label style={FIELD}>
