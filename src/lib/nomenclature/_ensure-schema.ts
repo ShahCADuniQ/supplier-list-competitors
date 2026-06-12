@@ -193,6 +193,22 @@ export function ensureNomenclatureSchema(): Promise<void> {
           END IF;
         END $$;
       `);
+      // V113 — Manually-curated global product catalogue. Backs the
+      // Database tab's "Manage products" editor so a user can add
+      // a product label before any part is assigned to it and remove
+      // labels that no longer apply. listProducts() reads from BOTH
+      // this table AND the products[] columns on parts/inventory so
+      // legacy data still surfaces.
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "product_options" (
+          "id" serial PRIMARY KEY,
+          "name" text NOT NULL,
+          "created_by_clerk_id" text,
+          "created_at" timestamp NOT NULL DEFAULT now(),
+          "updated_at" timestamp NOT NULL DEFAULT now()
+        )
+      `);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS "product_options_name_idx" ON "product_options" ("name")`);
       // V98 — Global configuration_options catalogue. Every config
       // name ever attached to a part / assembly / hardware gets
       // upserted here so the chip-editor can offer typeahead.

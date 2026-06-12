@@ -21,9 +21,11 @@ import {
 import InventoryDrawer from "./InventoryDrawer";
 import {
   addAssemblyChildAction,
+  addProductOptionAction,
   addUserStandard,
   backfillPartCodesAction,
   deletePart,
+  removeProductOptionAction,
   extractHardwareFromUrlAction,
   getAssemblyTree,
   linkInventoryToSupplierAction,
@@ -909,6 +911,254 @@ function IsConfigurationCheckbox({
   );
 }
 
+// V113 — modal that lists every known product label with a × button
+// to remove and a free-text input to add new ones. Mounted from the
+// Database tab's "⚙ Manage products" button. Backed by the V113
+// product_options table; the read side unions this table with any
+// labels embedded in parts.products[].
+function ProductManagerDialog({
+  knownProducts,
+  onClose,
+  onAdded,
+  onRemoved,
+}: {
+  knownProducts: string[];
+  onClose: () => void;
+  onAdded: (name: string) => void;
+  onRemoved: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [busyName, setBusyName] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [, start] = useTransition();
+
+  function add() {
+    const value = draft.trim();
+    if (!value) return;
+    if (knownProducts.some((p) => p.toLowerCase() === value.toLowerCase())) {
+      setDraft("");
+      return;
+    }
+    setErr(null);
+    setBusyName(value);
+    start(async () => {
+      try {
+        const res = await addProductOptionAction({ name: value });
+        onAdded(res.name);
+        setDraft("");
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Add failed");
+      } finally {
+        setBusyName(null);
+      }
+    });
+  }
+
+  function remove(name: string) {
+    if (
+      !confirm(
+        `Remove "${name}" everywhere it's used? Every part and inventory row that lists this product will have it stripped — this can't be undone.`,
+      )
+    ) {
+      return;
+    }
+    setErr(null);
+    setBusyName(name);
+    start(async () => {
+      try {
+        await removeProductOptionAction({ name });
+        onRemoved(name);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Remove failed");
+      } finally {
+        setBusyName(null);
+      }
+    });
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.35)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(520px, 100%)",
+          background: "var(--lb-bg)",
+          border: "1px solid var(--lb-border)",
+          borderRadius: 16,
+          padding: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          maxHeight: "86vh",
+          overflowY: "auto",
+        }}
+      >
+        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>
+            Manage products
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              background: "transparent",
+              border: "none",
+              fontSize: 22,
+              cursor: "pointer",
+              color: "var(--lb-text-3)",
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </header>
+        <p style={{ margin: 0, fontSize: 12.5, color: "var(--lb-text-3)" }}>
+          Add a product label so it&apos;s available in the dropdown
+          before assigning it to a part. Removing a label strips it
+          from every part and inventory row that lists it.
+        </p>
+        {err && (
+          <div
+            style={{
+              padding: 8,
+              borderRadius: 8,
+              background: "rgba(220,38,38,0.12)",
+              color: "#fca5a5",
+              fontSize: 12.5,
+            }}
+          >
+            {err}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                add();
+              }
+            }}
+            placeholder="New product label (e.g. LIGHTLINE-X)…"
+            disabled={busyName != null}
+            style={{
+              flex: 1,
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid var(--lb-border)",
+              background: "var(--lb-bg-elev)",
+              color: "var(--lb-text)",
+              fontSize: 13,
+            }}
+          />
+          <button
+            type="button"
+            onClick={add}
+            disabled={busyName != null || !draft.trim()}
+            style={{
+              padding: "8px 16px",
+              borderRadius: 999,
+              background: "var(--lb-accent)",
+              color: "var(--lb-accent-fg, white)",
+              border: 0,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor:
+                busyName != null || !draft.trim() ? "default" : "pointer",
+              opacity: busyName != null || !draft.trim() ? 0.6 : 1,
+            }}
+          >
+            + Add
+          </button>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            padding: 8,
+            borderRadius: 10,
+            border: "1px solid var(--lb-border)",
+            background: "var(--lb-bg-elev)",
+            maxHeight: 320,
+            overflowY: "auto",
+          }}
+        >
+          {knownProducts.length === 0 ? (
+            <div
+              style={{
+                padding: 18,
+                fontSize: 12.5,
+                color: "var(--lb-text-3)",
+                textAlign: "center",
+              }}
+            >
+              No product labels yet. Add the first one above.
+            </div>
+          ) : (
+            knownProducts.map((name) => (
+              <div
+                key={name}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  background: "var(--lb-bg)",
+                  border: "1px solid var(--lb-border)",
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  letterSpacing: 0.3,
+                  textTransform: "uppercase",
+                  color: "var(--lb-accent)",
+                  opacity: busyName === name ? 0.5 : 1,
+                }}
+              >
+                <span>{name}</span>
+                <button
+                  type="button"
+                  onClick={() => remove(name)}
+                  disabled={busyName != null}
+                  style={{
+                    appearance: "none",
+                    border: "1px solid rgba(220,38,38,0.3)",
+                    background: "transparent",
+                    color: "#dc2626",
+                    borderRadius: 999,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "2px 10px",
+                    cursor: busyName != null ? "default" : "pointer",
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NewFamilyButton({
   onAdd,
 }: {
@@ -1480,11 +1730,23 @@ function DatabaseTab({
   // Items that appear as a child somewhere in assembly_bom. When a
   // product-specific filter is active we hide these so only top-level
   // master parents render — each master then shows its full tree
-  // expanded inside the card.
-  const childIdSet = useMemo(() => new Set(childItemIds), [childItemIds]);
+  // expanded inside the card. Tracked in local state so that an
+  // optimistic update after a drop removes the dropped card from the
+  // top-level list without needing a full reload.
+  const [localChildIds, setLocalChildIds] = useState<Set<number>>(
+    () => new Set(childItemIds),
+  );
+  useEffect(() => {
+    setLocalChildIds(new Set(childItemIds));
+  }, [childItemIds]);
+  const childIdSet = localChildIds;
   const [filter, setFilter] = useState("");
   const [productView, setProductView] = useState<string>("__all__");
   const [dropError, setDropError] = useState<string | null>(null);
+  const [productManagerOpen, setProductManagerOpen] = useState(false);
+  // Locally-added product labels from the Manage Products dialog so
+  // the dropdown shows them before the parts list reloads.
+  const [localAddedProducts, setLocalAddedProducts] = useState<string[]>([]);
   const [backfillResult, setBackfillResult] = useState<
     Awaited<ReturnType<typeof backfillPartCodesAction>> | null
   >(null);
@@ -1499,6 +1761,9 @@ function DatabaseTab({
     // Seed with server-known products so the dropdown remembers labels
     // even when no rows currently match (e.g. they're filtered out).
     for (const p of productOptions) if (p) set.add(p);
+    // Plus anything the user just added through Manage Products
+    // (optimistic, before the parts list reloads).
+    for (const p of localAddedProducts) if (p) set.add(p);
     let hasNone = false;
     for (const p of parts) {
       if (p.products.length === 0) {
@@ -1511,7 +1776,7 @@ function DatabaseTab({
       products: Array.from(set).sort((a, b) => a.localeCompare(b)),
       hasNone,
     };
-  }, [parts, productOptions]);
+  }, [parts, productOptions, localAddedProducts]);
 
   // True when the user picked a specific product (not "All" / "No
   // product"). In that mode we render only master parents and each
@@ -1552,12 +1817,23 @@ function DatabaseTab({
   }) {
     setDropError(null);
     try {
+      const accepted: number[] = [];
       for (const id of args.draggedItemIds) {
         if (id === args.targetItemId) continue;
         await addAssemblyChildAction({
           parentInventoryItemId: args.targetItemId,
           childInventoryItemId: id,
           quantity: 1,
+        });
+        accepted.push(id);
+      }
+      // Optimistically mark the dropped ids as children so they
+      // disappear from the top-level master list immediately.
+      if (accepted.length > 0) {
+        setLocalChildIds((prev) => {
+          const next = new Set(prev);
+          for (const id of accepted) next.add(id);
+          return next;
         });
       }
       setRefreshKey((k) => k + 1);
@@ -1602,6 +1878,24 @@ function DatabaseTab({
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => setProductManagerOpen(true)}
+            style={{
+              padding: "7px 12px",
+              borderRadius: 999,
+              border: "1px solid var(--lb-border)",
+              background: "var(--lb-bg-elev)",
+              color: "var(--lb-text)",
+              fontSize: 12.5,
+              fontWeight: 700,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+            title="Add a new product label or remove an unused one"
+          >
+            ⚙ Manage products
+          </button>
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -1610,6 +1904,32 @@ function DatabaseTab({
           />
         </div>
       </div>
+      {productManagerOpen && (
+        <ProductManagerDialog
+          knownProducts={productList.products}
+          onClose={() => setProductManagerOpen(false)}
+          onAdded={(name) => {
+            // Optimistically pop the new label onto the dropdown.
+            setLocalAddedProducts((prev) =>
+              prev.includes(name) ? prev : [...prev, name],
+            );
+          }}
+          onRemoved={(name) => {
+            // Optimistically strip from any local parts that had it
+            // so the dropdown count is correct before the next refresh.
+            setLocalAddedProducts((prev) => prev.filter((p) => p !== name));
+            for (const p of parts) {
+              if (p.products.includes(name)) {
+                onUpdate({
+                  id: p.id,
+                  products: p.products.filter((q) => q !== name),
+                });
+              }
+            }
+            if (productView === name) setProductView("__all__");
+          }}
+        />
+      )}
       <div
         style={{
           display: "flex",

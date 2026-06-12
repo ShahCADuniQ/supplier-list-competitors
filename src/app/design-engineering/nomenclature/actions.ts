@@ -27,6 +27,7 @@ import { db } from "@/db";
 import {
   assemblyBom,
   configurationOptions,
+  productOptions,
   inventoryAttachments,
   inventoryItems,
   nomenclatureParts,
@@ -895,8 +896,11 @@ export async function listChildInventoryItemIds(): Promise<number[]> {
   return Array.from(new Set(rows.map((r) => r.id)));
 }
 
-// Distinct product names from nomenclature_parts. Used by the
-// Database tab's product-view dropdown.
+// Distinct product names from nomenclature_parts UNION'd with the
+// V113 manually-curated product_options table. The latter lets a
+// user pre-create a product label before any part references it,
+// so the Database tab dropdown can offer it as a filter / assign
+// target immediately.
 export async function listProducts(): Promise<string[]> {
   await ensureNomenclatureSchema();
   const rows = await db
@@ -911,7 +915,118 @@ export async function listProducts(): Promise<string[]> {
       set.add(p);
     }
   }
+  // Union with the manually-curated catalogue.
+  try {
+    const opts = await db
+      .select({ name: productOptions.name })
+      .from(productOptions);
+    for (const o of opts) {
+      const trimmed = (o.name ?? "").trim();
+      if (trimmed) set.add(trimmed);
+    }
+  } catch {
+    // Table missing or other error — fall through with what we have.
+  }
   return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+// V113 — add a product label to the manually-curated catalogue so
+// the Database tab dropdown can offer it before any part uses it.
+// Idempotent on case-insensitive name match.
+export async function addProductOptionAction(input: {
+  name: string;
+}): Promise<{ ok: true; name: string }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureNomenclatureSchema();
+  const trimmed = input.name.trim();
+  if (!trimmed) throw new Error("Product name is required");
+  const existing = await db
+    .select({ id: productOptions.id, name: productOptions.name })
+    .from(productOptions)
+    .where(eq(productOptions.name, trimmed))
+    .limit(1);
+  if (existing.length) return { ok: true, name: existing[0].name };
+  try {
+    await db.insert(productOptions).values({
+      name: trimmed,
+      createdByClerkId: profile.clerkUserId,
+    });
+  } catch {
+    // Concurrent insert lost the unique race — fine.
+  }
+  return { ok: true, name: trimmed };
+}
+
+// V113 — remove a product label everywhere it lives:
+//   1. delete the row from product_options (if present)
+//   2. strip it from every nomenclature_parts.products[] / product
+//   3. strip it from every inventory_items.products[] / product
+// Case-insensitive match so a stray casing variant still gets
+// cleaned up.
+export async function removeProductOptionAction(input: {
+  name: string;
+}): Promise<{ ok: true }> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureNomenclatureSchema();
+  await ensureOrdersSchema();
+  const trimmed = input.name.trim();
+  if (!trimmed) throw new Error("Product name is required");
+  const lower = trimmed.toLowerCase();
+
+  // 1. Drop from product_options.
+  await db
+    .delete(productOptions)
+    .where(eq(productOptions.name, trimmed));
+
+  // 2. Strip from every nomenclature_parts row. Scan + rewrite —
+  //    jsonb subscripting + lower() is verbose enough that a fetch +
+  //    update pass per row is the readable choice (catalogue counts
+  //    are small).
+  const partRows = await db
+    .select({
+      id: nomenclatureParts.id,
+      product: nomenclatureParts.product,
+      products: nomenclatureParts.products,
+    })
+    .from(nomenclatureParts);
+  for (const r of partRows) {
+    const list = readProducts(r.product, r.products);
+    const filtered = list.filter((p) => p.toLowerCase() !== lower);
+    if (filtered.length === list.length) continue;
+    await db
+      .update(nomenclatureParts)
+      .set({
+        product: filtered[0] ?? null,
+        products: filtered,
+        updatedAt: new Date(),
+      })
+      .where(eq(nomenclatureParts.id, r.id));
+  }
+
+  // 3. Same for inventory_items.
+  const invRows = await db
+    .select({
+      id: inventoryItems.id,
+      product: inventoryItems.product,
+      products: inventoryItems.products,
+    })
+    .from(inventoryItems);
+  for (const r of invRows) {
+    const list = readProducts(r.product, r.products);
+    const filtered = list.filter((p) => p.toLowerCase() !== lower);
+    if (filtered.length === list.length) continue;
+    await db
+      .update(inventoryItems)
+      .set({
+        product: filtered[0] ?? null,
+        products: filtered,
+        updatedAt: new Date(),
+      })
+      .where(eq(inventoryItems.id, r.id));
+  }
+  return { ok: true };
 }
 
 // Link an existing inventory row to a supplier — creates a row in

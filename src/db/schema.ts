@@ -3012,3 +3012,24 @@ export const configurationOptions = pgTable(
 );
 export type ConfigurationOptionRow =
   typeof configurationOptions.$inferSelect;
+
+// V113 — global product/line catalogue used by the Database tab's
+// product dropdown and the InventoryDrawer's Products section.
+// Acts as a manually-curated allow-list so the user can add a product
+// label before assigning it to any part, and remove labels that no
+// longer apply. The read path unions this table with any product
+// strings that appear in nomenclature_parts.products[].
+export const productOptions = pgTable(
+  "product_options",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    createdByClerkId: text("created_by_clerk_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    nameIdx: uniqueIndex("product_options_name_idx").on(t.name),
+  }),
+);
+export type ProductOptionRow = typeof productOptions.$inferSelect;
