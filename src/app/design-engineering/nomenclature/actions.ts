@@ -589,6 +589,14 @@ export async function savePartCode(input: {
     product: productsArr[0] ?? null,
     products: productsArr,
     isConfiguration: input.isConfiguration ?? false,
+    // V123 — pin itemClass to the nomenclature's P/A designation so
+    // the Inventory tab pills + Tree labels keep showing "Part" for a
+    // -P- code even after another card has been dropped on top of it
+    // (which auto-flips inventory_items.kind to 'assembly' for BOM
+    // bookkeeping). Without this the read path falls back to `kind`
+    // and a Part starts displaying as Assembly the moment it has a
+    // child.
+    itemClass: partOrAssembly === "A" ? "assembly" : "part",
     createdByClerkId: profile.clerkUserId,
   });
 

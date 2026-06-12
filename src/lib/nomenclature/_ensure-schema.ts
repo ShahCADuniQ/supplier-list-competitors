@@ -193,6 +193,37 @@ export function ensureNomenclatureSchema(): Promise<void> {
           END IF;
         END $$;
       `);
+      // V123 — non-hardware backfill: pin itemClass to the
+      // nomenclature's P/A designation so a Part stays a Part even
+      // after its kind got auto-flipped to 'assembly' by a drag-drop
+      // child link. Overwrites NULL and 'part'/'assembly' that came
+      // from the kind-fallback rule (but leaves 'hardware',
+      // 'electronics', 'adhesive_sealant_filler' alone since those
+      // are explicit catalogue classifications the user set).
+      await db.execute(sql`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM "lb_one_shot_flags" WHERE "flag" = 'v123_backfill_part_assembly_class'
+          ) THEN
+            UPDATE "inventory_items" AS i
+              SET "item_class" = CASE np."part_or_assembly"
+                WHEN 'A' THEN 'assembly'
+                WHEN 'P' THEN 'part'
+              END
+              FROM "nomenclature_parts" AS np
+              WHERE np."inventory_item_id" = i."id"
+                AND np."kind" = 'part'
+                AND np."part_or_assembly" IN ('P', 'A')
+                AND (
+                  i."item_class" IS NULL
+                  OR i."item_class" = 'part'
+                  OR i."item_class" = 'assembly'
+                );
+            INSERT INTO "lb_one_shot_flags" ("flag") VALUES ('v123_backfill_part_assembly_class');
+          END IF;
+        END $$;
+      `);
       // V113 — Manually-curated global product catalogue. Backs the
       // Database tab's "Manage products" editor so a user can add
       // a product label before any part is assigned to it and remove
