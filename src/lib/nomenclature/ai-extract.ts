@@ -14,33 +14,84 @@ import { claudeClient, CLAUDE_MODEL } from "@/lib/ai/claude";
 const URL_FETCH_TIMEOUT_MS = 15_000;
 const MAX_BODY_CHARS = 60_000;
 
+// V125 — a few sensible browser-like UAs we rotate through. Major
+// vendors (McMaster, Fastenal, Amazon, eBay, DigiKey, …) block the
+// previous "NomenclatureBot" UA outright, returning 403 / a captcha
+// page. We don't aim for full anti-bot resistance — just enough that
+// a typical product page loads.
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
 async function fetchPlainText(url: string): Promise<string> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), URL_FETCH_TIMEOUT_MS);
+  let originHeader: string | null = null;
+  try {
+    const u = new URL(url);
+    originHeader = `${u.protocol}//${u.host}`;
+  } catch {
+    // Bad URL — re-throw with a clearer message instead of fetching.
+    throw new Error("That doesn't look like a valid URL.");
+  }
   try {
     const res = await fetch(url, {
       signal: ctl.signal,
+      redirect: "follow",
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Lightbase NomenclatureBot) AppleWebKit/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": BROWSER_UA,
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        ...(originHeader ? { Referer: originHeader } : {}),
       },
     });
     if (!res.ok) {
-      throw new Error(`Vendor page returned ${res.status} ${res.statusText}`);
+      // Some vendors return the actual page content alongside a 403
+      // / 503 — try to use it anyway so the AI has something to
+      // chew on. Empty body? Re-throw with the status.
+      const fallbackText = await res.text().catch(() => "");
+      if (fallbackText.trim().length > 200) {
+        return stripHtml(fallbackText);
+      }
+      throw new Error(
+        `Vendor page returned ${res.status} ${res.statusText}. ` +
+          `Most likely the site is blocking server-side fetches; ` +
+          `try a different URL (e.g. the printable spec PDF page) ` +
+          `or fill the nomenclature in manually.`,
+      );
     }
     const html = await res.text();
-    // Strip <script>, <style>, and HTML tags; collapse whitespace; cap.
-    const stripped = html
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    return stripped.slice(0, MAX_BODY_CHARS);
+    return stripHtml(html);
   } finally {
     clearTimeout(timer);
   }
+}
+
+function stripHtml(html: string): string {
+  // Strip <script>, <style>, and HTML tags; collapse whitespace; cap.
+  const stripped = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped.slice(0, MAX_BODY_CHARS);
 }
 
 export type AiExtractResult = {

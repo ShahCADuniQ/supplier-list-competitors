@@ -422,6 +422,11 @@ export async function saveHardwarePart(input: {
   uniqueId: string;
   fullCode: string;
   inventoryItemId: number;
+  // V125 — the standard's spec_text after the example was appended,
+  // or null when the spec was already up to date / the append failed
+  // non-fatally. The form uses it to refresh its standards state so
+  // the user sees the new EXEMPLES entry without a page reload.
+  updatedSpecText: string | null;
 }> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");
@@ -486,7 +491,73 @@ export async function saveHardwarePart(input: {
     profile.clerkUserId,
   );
 
-  return { id: inserted.id, uniqueId, fullCode, inventoryItemId: inventoryId };
+  // V125 — every fresh hardware code becomes a worked example on the
+  // standard so the next user (or the AI extractor) has a richer
+  // reference. The nomenclature (without class/uniqueId) is appended
+  // under the EXEMPLES section; the section is created if missing.
+  let updatedSpecText: string | null = null;
+  try {
+    const next = appendExampleToSpec(std.specText, trimmedNom);
+    if (next !== std.specText) {
+      await db
+        .update(nomenclatureStandards)
+        .set({ specText: next, updatedAt: new Date() })
+        .where(eq(nomenclatureStandards.id, std.id));
+      updatedSpecText = next;
+    }
+  } catch (e) {
+    // Non-fatal — the part save itself succeeded. Log + move on.
+    console.warn("[nomenclature] could not append example to spec:", e);
+  }
+
+  return {
+    id: inserted.id,
+    uniqueId,
+    fullCode,
+    inventoryItemId: inventoryId,
+    updatedSpecText,
+  };
+}
+
+// V125 — append a new nomenclature example to a standard's spec_text.
+// Looks for the EXEMPLES / EXAMPLES section and adds a new line at the
+// end of it; if no such section exists, one is created at the bottom.
+// Returns the spec unchanged when the example is already present
+// (case-insensitive substring match) so re-saves don't duplicate.
+function appendExampleToSpec(spec: string, exampleNomenclature: string): string {
+  const ex = exampleNomenclature.trim().toUpperCase();
+  if (!ex) return spec;
+  // Already in the spec somewhere? Don't duplicate.
+  if (spec.toUpperCase().includes(ex)) return spec;
+  const lines = spec.split(/\r?\n/);
+  // Find the EXEMPLES / EXAMPLES section header line. Tolerate the
+  // colon being missing and either spelling.
+  const headerIdx = lines.findIndex((l) =>
+    /^\s*(exemples?|examples?)\s*:?\s*$/i.test(l),
+  );
+  if (headerIdx === -1) {
+    // No section yet — append one at the bottom.
+    const trimmedEnd = spec.replace(/\s+$/, "");
+    return `${trimmedEnd}\n\nEXEMPLES:\n${ex}\n`;
+  }
+  // Insert at the end of the EXEMPLES section (= just before the
+  // next blank-line boundary OR end of file). Skip any blank lines
+  // directly after the header so the first concrete example sits
+  // right under it.
+  let insertAt = lines.length;
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    if (lines[i].trim() === "" && i > headerIdx + 1) {
+      // Found the section's trailing blank — but only if we already
+      // saw at least one non-blank example line, otherwise the
+      // header had a blank under it and we want to insert AFTER that
+      // blank, not before.
+      insertAt = i;
+      break;
+    }
+  }
+  const head = lines.slice(0, insertAt);
+  const tail = lines.slice(insertAt);
+  return [...head, ex, ...tail].join("\n");
 }
 
 // ── Part / Assembly ID save ─────────────────────────────────────────────

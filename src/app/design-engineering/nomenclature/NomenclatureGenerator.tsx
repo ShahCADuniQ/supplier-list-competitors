@@ -212,6 +212,11 @@ export default function NomenclatureGenerator({
           productOptions={productOptions}
           configurationOptions={configurationOptions}
           onAddStandard={(s) => setStandards((prev) => [...prev, s])}
+          onStandardUpdated={(id, specText) =>
+            setStandards((prev) =>
+              prev.map((s) => (s.id === id ? { ...s, specText } : s)),
+            )
+          }
           onSaved={(p) => setParts((prev) => [p, ...prev])}
         />
       )}
@@ -490,12 +495,16 @@ function HardwareTab({
   productOptions,
   configurationOptions,
   onAddStandard,
+  onStandardUpdated,
   onSaved,
 }: {
   standards: StandardRow[];
   productOptions: string[];
   configurationOptions: ConfigurationOption[];
   onAddStandard: (s: StandardRow) => void;
+  // Optional — V125 wiring so the HardwareForm can push a freshly
+  // appended EXEMPLES line back up to the top-level standards state.
+  onStandardUpdated?: (standardId: number, newSpecText: string) => void;
   onSaved: (p: PartRow) => void;
 }) {
   const [selectedSlug, setSelectedSlug] = useState<string>(
@@ -583,6 +592,7 @@ function HardwareTab({
             standard={selected}
             productOptions={productOptions}
             configurationOptions={configurationOptions}
+            onStandardUpdated={onStandardUpdated}
             onSaved={onSaved}
           />
         )}
@@ -595,11 +605,13 @@ function HardwareForm({
   standard,
   productOptions,
   configurationOptions,
+  onStandardUpdated,
   onSaved,
 }: {
   standard: StandardRow;
   productOptions: string[];
   configurationOptions: ConfigurationOption[];
+  onStandardUpdated?: (standardId: number, newSpecText: string) => void;
   onSaved: (p: PartRow) => void;
 }) {
   const [classification, setClassification] = useState<
@@ -653,6 +665,12 @@ function HardwareForm({
           isConfiguration,
         });
         setGeneratedCode(r.fullCode);
+        // V125 — when the server appended a new EXEMPLES line, push
+        // the fresh spec back up so the "Show the … standard"
+        // panel reflects it immediately.
+        if (r.updatedSpecText && onStandardUpdated) {
+          onStandardUpdated(standard.id, r.updatedSpecText);
+        }
         onSaved({
           id: r.id,
           uniqueId: r.uniqueId,
