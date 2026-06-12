@@ -1783,27 +1783,16 @@ function DatabaseTab({
     };
   }, [parts, productOptions, localAddedProducts]);
 
-  // True when the user picked a specific product (not "All" / "No
-  // product"). In that mode we render only master parents and each
-  // card auto-expands its Assembly Contents tree.
-  const productSpecific =
-    productView !== "__all__" && productView !== "__none__";
-
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return parts.filter((p) => {
       if (productView === "__none__") {
         if (p.products.length > 0) return false;
       } else if (productView !== "__all__") {
+        // List view shows EVERY card tagged with the picked product,
+        // including ones that already live inside another assembly.
+        // The dedicated Tree sub-tab handles the BOM hierarchy.
         if (!p.products.includes(productView)) return false;
-        // Product-specific view: only master parents (items that
-        // aren't children of any other item).
-        if (
-          p.inventoryItemId != null &&
-          childIdSet.has(p.inventoryItemId)
-        ) {
-          return false;
-        }
       }
       if (!q) return true;
       return (
@@ -1814,7 +1803,7 @@ function DatabaseTab({
         p.products.some((pp) => pp.toLowerCase().includes(q))
       );
     });
-  }, [parts, filter, productView, childIdSet]);
+  }, [parts, filter, productView]);
 
   async function handleDrop(args: {
     draggedItemIds: number[];
@@ -2106,7 +2095,6 @@ function DatabaseTab({
                     productOptions={productList.products}
                     configurationOptions={configurationOptions}
                     refreshKey={refreshKey}
-                    expandTreeByDefault={productSpecific}
                     onDrop={handleDrop}
                     onUpdate={onUpdate}
                     onDelete={onDelete}
@@ -2116,7 +2104,6 @@ function DatabaseTab({
               </ul>
             )}
           </div>
-          {productSpecific && <InventoryPalette parts={parts} openDrawer={openDrawer} />}
         </div>
       )}
       {subTab === "tree" && (
@@ -2627,7 +2614,6 @@ function PartRowItem({
   productOptions,
   configurationOptions,
   refreshKey,
-  expandTreeByDefault,
   onDrop,
   onUpdate,
   onDelete,
@@ -2638,7 +2624,6 @@ function PartRowItem({
   productOptions: string[];
   configurationOptions: ConfigurationOption[];
   refreshKey: number;
-  expandTreeByDefault: boolean;
   onDrop: (args: {
     draggedItemIds: number[];
     targetItemId: number;
@@ -3044,14 +3029,10 @@ function PartRowItem({
         </div>
       )}
 
-      {part.partOrAssembly === "A" && part.inventoryItemId != null && (
-        <AssemblyContentsSection
-          inventoryItemId={part.inventoryItemId}
-          refreshKey={refreshKey}
-          openDrawer={openDrawer}
-          defaultOpen={expandTreeByDefault}
-        />
-      )}
+      {/* V119 — The inline assembly tree was removed from the List
+          sub-tab; the dedicated Database Tree sub-tab now owns the
+          BOM visualisation, so the List stays a pure list of cards
+          regardless of the product filter. */}
 
       {editing && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
