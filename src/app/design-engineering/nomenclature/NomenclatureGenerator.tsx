@@ -3882,38 +3882,14 @@ function TreeNodeCard({
             Drop here
           </span>
         )}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 4,
-            marginTop: 2,
-          }}
-        >
-          {onAddChild && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onAddChild(node.itemId);
-              }}
-              draggable={false}
-              title="Generate and link a new child code"
-              style={{
-                fontSize: 10,
-                color: "var(--lb-accent)",
-                background: "transparent",
-                border: "1px solid var(--lb-accent)",
-                borderRadius: 999,
-                padding: "1px 8px",
-                cursor: "pointer",
-                fontWeight: 700,
-              }}
-            >
-              + Child
-            </button>
-          )}
-          {!root && parentInventoryItemId != null && (
+        {!root && parentInventoryItemId != null && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              marginTop: 2,
+            }}
+          >
             <button
               type="button"
               onClick={(e) => {
@@ -3934,8 +3910,53 @@ function TreeNodeCard({
             >
               Remove
             </button>
-          )}
-        </div>
+          </div>
+        )}
+        {onAddChild && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddChild(node.itemId);
+            }}
+            draggable={false}
+            title="Generate and link a new child code"
+            aria-label={`Add a child under ${node.code}`}
+            style={{
+              position: "absolute",
+              bottom: -14,
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: "var(--lb-bg)",
+              border: `2px solid ${accent}`,
+              color: accent,
+              fontSize: 18,
+              fontWeight: 800,
+              lineHeight: 1,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: `0 4px 10px -4px ${accent}66`,
+              padding: 0,
+              zIndex: 2,
+              transition: "transform 140ms ease, box-shadow 140ms ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = "translateX(-50%) scale(1.12)";
+              e.currentTarget.style.boxShadow = `0 6px 14px -4px ${accent}99`;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = "translateX(-50%) scale(1)";
+              e.currentTarget.style.boxShadow = `0 4px 10px -4px ${accent}66`;
+            }}
+          >
+            +
+          </button>
+        )}
       </div>
 
       {node.children.length > 0 && (
