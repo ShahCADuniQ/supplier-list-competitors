@@ -1104,12 +1104,10 @@ export async function listSupplierCatalogueProductsAction(): Promise<
   const profile = await getOrCreateProfile();
   if (!profile) return [];
   await ensureOrdersSchema();
-  // Mirror exactly what /suppliers → catalogue shows as a "part card":
-  //   • parent_product_id IS NULL  → top-level rows only, never the
-  //     nested configuration models that hang off them
-  //   • archived = false           → no soft-deleted rows
-  // The picker is meant to be the SAME catalogue, not a raw dump of
-  // every supplier_products entry.
+  // Surface every non-archived supplier_products row — top-level
+  // parts AND their nested configuration models. The picker is meant
+  // to expose every catalogue entry so the user can link an inventory
+  // row to a specific variant when needed.
   const rows = await db
     .select({
       spId: supplierProducts.id,
@@ -1124,12 +1122,7 @@ export async function listSupplierCatalogueProductsAction(): Promise<
     })
     .from(supplierProducts)
     .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
-    .where(
-      and(
-        eq(supplierProducts.archived, false),
-        isNull(supplierProducts.parentProductId),
-      ),
-    )
+    .where(eq(supplierProducts.archived, false))
     .orderBy(asc(suppliers.name), asc(supplierProducts.name));
   return rows.map((r) => ({
     supplierProductId: r.spId,

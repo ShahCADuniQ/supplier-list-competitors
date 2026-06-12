@@ -15,7 +15,6 @@ import { upload } from "@vercel/blob/client";
 import {
   addAssemblyChildAction,
   addInventoryAttachmentAction,
-  getAssemblyTree,
   getInventoryDetails,
   linkInventoryToSupplierAction,
   linkSupplierProductToInventoryAction,
@@ -29,7 +28,6 @@ import {
   setInventoryProductsAction,
   setInventoryStarredAction,
   unlinkSupplierProductFromInventoryAction,
-  type AssemblyTreeNode,
   type InventoryItemClass,
   type Configuration,
   type ConfigurationOption,
@@ -118,11 +116,6 @@ export default function InventoryDrawer({
   // notes, category, unit, thumbnail). Loaded in parallel and treated
   // as optional — non-supplier viewers just see the nomenclature view.
   const [history, setHistory] = useState<InventoryItemHistory | null>(null);
-  // Full assembly tree, fetched on demand when the user opens the
-  // Tree tab. Cached per currentId so re-clicking the tab is cheap.
-  const [tree, setTree] = useState<AssemblyTreeNode | null>(null);
-  const [treeLoading, setTreeLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"details" | "tree">("details");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Global configuration catalogue — fetched once per drawer mount
@@ -166,34 +159,6 @@ export default function InventoryDrawer({
     setLoading(false);
   }
 
-  // Lazy-load the assembly tree the first time the user opens the
-  // Tree tab. Re-loaded when the drawer navigates to a different
-  // item (currentId changes).
-  useEffect(() => {
-    if (activeTab !== "tree") return;
-    let cancelled = false;
-    setTreeLoading(true);
-    getAssemblyTree({ inventoryItemId: currentId })
-      .then((t) => {
-        if (!cancelled) setTree(t);
-      })
-      .catch(() => {
-        if (!cancelled) setTree(null);
-      })
-      .finally(() => {
-        if (!cancelled) setTreeLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, currentId]);
-
-  // Reset the tab to Details whenever the drawer navigates to a
-  // different item (so drilling into a child opens fresh on Details).
-  useEffect(() => {
-    setActiveTab("details");
-    setTree(null);
-  }, [currentId]);
 
   useEffect(() => {
     load();
@@ -439,40 +404,6 @@ export default function InventoryDrawer({
           </button>
         </header>
 
-        {/* Tabs */}
-        {details && (
-          <div
-            style={{
-              display: "flex",
-              gap: 0,
-              padding: "0 20px",
-              borderBottom: "1px solid var(--lb-border)",
-              background: "var(--lb-bg)",
-            }}
-          >
-            <TabButton
-              active={activeTab === "details"}
-              onClick={() => setActiveTab("details")}
-              label="Details"
-              hint={
-                history
-                  ? "Overview · physical · history · attachments"
-                  : "Overview · configurations · attachments"
-              }
-            />
-            <TabButton
-              active={activeTab === "tree"}
-              onClick={() => setActiveTab("tree")}
-              label="Tree"
-              hint={
-                details.kind === "assembly"
-                  ? "Full BOM structure of this assembly"
-                  : "Parents — which assemblies use this part"
-              }
-            />
-          </div>
-        )}
-
         {/* Body */}
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
           {loading && (
@@ -493,7 +424,7 @@ export default function InventoryDrawer({
               {err}
             </div>
           )}
-          {details && activeTab === "details" && (
+          {details && (
             <Body
               details={details}
               history={history}
@@ -507,312 +438,12 @@ export default function InventoryDrawer({
               onDropAsParent={addAsParent}
             />
           )}
-          {details && activeTab === "tree" && (
-            <TreeTab
-              rootId={currentId}
-              rootKind={details.kind}
-              tree={tree}
-              loading={treeLoading}
-              parents={details.parents}
-              onNavigateTo={navigateTo}
-            />
-          )}
         </div>
       </aside>
     </>
   );
 }
 
-// Single tab button inside the Details/Tree tab bar. Underline-active
-// style so the panel feels native to the rest of the right-rail
-// drawers in this app.
-function TabButton({
-  active,
-  onClick,
-  label,
-  hint,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={hint}
-      style={{
-        appearance: "none",
-        background: "transparent",
-        border: "none",
-        borderBottom: active
-          ? "2px solid var(--lb-accent)"
-          : "2px solid transparent",
-        padding: "10px 14px",
-        marginBottom: -1,
-        fontSize: 13,
-        fontWeight: active ? 800 : 600,
-        color: active ? "var(--lb-text)" : "var(--lb-text-3)",
-        cursor: "pointer",
-        letterSpacing: 0.2,
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-// Render the full assembly BOM tree for an assembly, or the "used in"
-// parent list for a part. Viewer-only — clicking any node navigates
-// the drawer to that item so the user can drill anywhere from here.
-function TreeTab({
-  rootId,
-  rootKind,
-  tree,
-  loading,
-  parents,
-  onNavigateTo,
-}: {
-  rootId: number;
-  rootKind: "part" | "assembly";
-  tree: AssemblyTreeNode | null;
-  loading: boolean;
-  parents: DrawerParent[];
-  onNavigateTo: (id: number) => void;
-}) {
-  if (loading) {
-    return (
-      <div style={{ fontSize: 13, color: "var(--lb-text-3)" }}>
-        Loading tree…
-      </div>
-    );
-  }
-  // Parts don't have a downward tree — show the upward "used in" view
-  // instead so the Tree tab is still useful for a part row.
-  if (rootKind === "part") {
-    if (parents.length === 0) {
-      return (
-        <div
-          style={{
-            padding: 16,
-            borderRadius: 10,
-            border: "1px dashed var(--lb-border)",
-            color: "var(--lb-text-3)",
-            fontSize: 13,
-            textAlign: "center",
-          }}
-        >
-          This part isn&apos;t used in any assembly yet.
-        </div>
-      );
-    }
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div
-          style={{
-            fontSize: 11,
-            fontWeight: 800,
-            letterSpacing: 0.6,
-            textTransform: "uppercase",
-            color: "var(--lb-text-3)",
-          }}
-        >
-          Used in {parents.length} assembly{parents.length === 1 ? "" : "s"}
-        </div>
-        {parents.map((p) => (
-          <button
-            key={p.inventoryItemId}
-            type="button"
-            onClick={() => onNavigateTo(p.inventoryItemId)}
-            style={{
-              textAlign: "left",
-              padding: 12,
-              borderRadius: 10,
-              border: "1px solid var(--lb-border)",
-              background: "var(--lb-bg-elev)",
-              color: "var(--lb-text)",
-              cursor: "pointer",
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-            }}
-          >
-            <code style={{ fontSize: 12, fontWeight: 800 }}>{p.code}</code>
-            {p.name && (
-              <span style={{ fontSize: 12, color: "var(--lb-text-2)" }}>
-                {p.name}
-              </span>
-            )}
-            <span style={{ fontSize: 11, color: "var(--lb-text-3)" }}>
-              × {p.quantity} per parent
-            </span>
-          </button>
-        ))}
-      </div>
-    );
-  }
-  if (!tree) {
-    return (
-      <div
-        style={{
-          padding: 16,
-          borderRadius: 10,
-          border: "1px dashed var(--lb-border)",
-          color: "var(--lb-text-3)",
-          fontSize: 13,
-          textAlign: "center",
-        }}
-      >
-        Tree unavailable for this assembly.
-      </div>
-    );
-  }
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 800,
-          letterSpacing: 0.6,
-          textTransform: "uppercase",
-          color: "var(--lb-text-3)",
-        }}
-      >
-        BOM tree for {tree.code}
-      </div>
-      <TreeRow node={tree} depth={0} rootId={rootId} onNavigateTo={onNavigateTo} />
-    </div>
-  );
-}
-
-// Recursive row in the Tree tab. Depth controls indent + a left-rail
-// guide so deep BOMs stay readable. No drag/drop — this is a viewer.
-function TreeRow({
-  node,
-  depth,
-  rootId,
-  onNavigateTo,
-}: {
-  node: AssemblyTreeNode;
-  depth: number;
-  rootId: number;
-  onNavigateTo: (id: number) => void;
-}) {
-  const isRoot = node.itemId === rootId;
-  return (
-    <div
-      style={{
-        marginLeft: depth === 0 ? 0 : 18,
-        borderLeft:
-          depth === 0 ? "none" : "1px solid var(--lb-border)",
-        paddingLeft: depth === 0 ? 0 : 12,
-        display: "flex",
-        flexDirection: "column",
-        gap: 6,
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => !isRoot && onNavigateTo(node.itemId)}
-        disabled={isRoot}
-        style={{
-          textAlign: "left",
-          padding: "8px 10px",
-          borderRadius: 8,
-          border: isRoot
-            ? "1px solid var(--lb-accent)"
-            : "1px solid var(--lb-border)",
-          background: isRoot
-            ? "color-mix(in srgb, var(--lb-accent) 8%, var(--lb-bg))"
-            : "var(--lb-bg-elev)",
-          color: "var(--lb-text)",
-          cursor: isRoot ? "default" : "pointer",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          width: "100%",
-        }}
-      >
-        <span style={{ fontSize: 14 }}>
-          {node.kind === "assembly" ? "🧩" : "🔧"}
-        </span>
-        <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-          <code
-            style={{
-              fontSize: 11.5,
-              fontWeight: 800,
-              wordBreak: "break-all",
-            }}
-          >
-            {node.code}
-          </code>
-          {node.name && (
-            <span style={{ fontSize: 11, color: "var(--lb-text-2)" }}>
-              {node.name}
-            </span>
-          )}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-          {node.isConfiguration && (
-            <span
-              style={{
-                fontSize: 9,
-                fontWeight: 800,
-                letterSpacing: 0.5,
-                textTransform: "uppercase",
-                padding: "1px 6px",
-                borderRadius: 999,
-                background: "color-mix(in srgb, var(--lb-accent) 16%, transparent)",
-                color: "var(--lb-accent)",
-              }}
-            >
-              CFG
-            </span>
-          )}
-          {!isRoot && (
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                padding: "1px 7px",
-                borderRadius: 999,
-                background: "var(--lb-bg)",
-                border: "1px solid var(--lb-border)",
-                color: "var(--lb-text-2)",
-                whiteSpace: "nowrap",
-              }}
-            >
-              × {node.quantity}
-            </span>
-          )}
-          <span
-            style={{
-              fontSize: 10,
-              color: "var(--lb-text-3)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            stock {node.stock}
-          </span>
-        </div>
-      </button>
-      {node.children.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {node.children.map((c) => (
-            <TreeRow
-              key={c.itemId}
-              node={c}
-              depth={depth + 1}
-              rootId={rootId}
-              onNavigateTo={onNavigateTo}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // Star control rendered inline in the drawer header. Same semantics
 // as the Database tab card button — flips inventory_items.starred so
