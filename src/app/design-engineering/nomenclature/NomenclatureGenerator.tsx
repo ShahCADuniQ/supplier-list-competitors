@@ -233,11 +233,14 @@ export default function NomenclatureGenerator({
       {tab === "database" && (
         <DatabaseTab
           parts={parts}
+          standards={standards}
           supplierOptions={supplierOptions}
           productOptions={productOptions}
           configurationOptions={configurationOptions}
           childItemIds={childItemIds}
           openDrawer={(id) => setDrawerItemId(id)}
+          onAddStandard={(s) => setStandards((prev) => [...prev, s])}
+          onPartCreated={(p) => setParts((prev) => [p, ...prev])}
           onUpdate={(updated) =>
             setParts((prev) =>
               prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)),
@@ -1705,23 +1708,30 @@ function PartIdTab({
 
 function DatabaseTab({
   parts,
+  standards,
   supplierOptions,
   productOptions,
   configurationOptions,
   childItemIds,
   openDrawer,
+  onAddStandard,
+  onPartCreated,
   onUpdate,
   onDelete,
 }: {
   parts: PartRow[];
+  standards: StandardRow[];
   supplierOptions: SupplierOption[];
   productOptions: string[];
   configurationOptions: ConfigurationOption[];
   childItemIds: number[];
   openDrawer: (inventoryItemId: number) => void;
+  onAddStandard: (s: StandardRow) => void;
+  onPartCreated: (p: PartRow) => void;
   onUpdate: (updated: Partial<PartRow> & { id: number }) => void;
   onDelete: (id: number) => void;
 }) {
+  const [subTab, setSubTab] = useState<"list" | "tree">("list");
   // Items that appear as a child somewhere in assembly_bom. When a
   // product-specific filter is active we hide these so only top-level
   // master parents render — each master then shows its full tree
@@ -1839,6 +1849,42 @@ function DatabaseTab({
 
   return (
     <section style={PANEL}>
+      {/* V118 — Database sub-tabs. List = current rich card view;
+          Tree = a dedicated graph view that lets the user add new
+          codes inline through a generator modal. */}
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          padding: 4,
+          borderRadius: 999,
+          background: "var(--lb-bg-elev)",
+          border: "1px solid var(--lb-border)",
+          width: "fit-content",
+          marginBottom: 14,
+        }}
+      >
+        {(["list", "tree"] as const).map((key) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setSubTab(key)}
+            style={{
+              padding: "6px 16px",
+              borderRadius: 999,
+              background: subTab === key ? "var(--lb-accent)" : "transparent",
+              color:
+                subTab === key ? "var(--lb-accent-fg)" : "var(--lb-text-2)",
+              border: 0,
+              fontSize: 12.5,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {key === "list" ? "📋 Database List" : "🌳 Database Tree"}
+          </button>
+        ))}
+      </div>
       <div
         style={{
           display: "flex",
@@ -2027,51 +2073,551 @@ function DatabaseTab({
           <ErrorBox message={dropError} />
         </div>
       )}
+      {subTab === "list" && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            gap: 14,
+            alignItems: "flex-start",
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {filtered.length === 0 ? (
+              <div
+                style={{
+                  padding: "24px 18px",
+                  borderRadius: 10,
+                  border: "1px dashed var(--lb-border)",
+                  textAlign: "center",
+                  color: "var(--lb-text-3)",
+                  fontSize: 13,
+                }}
+              >
+                Nothing matches.
+              </div>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+                {filtered.map((p) => (
+                  <PartRowItem
+                    key={p.id}
+                    part={p}
+                    supplierOptions={supplierOptions}
+                    productOptions={productList.products}
+                    configurationOptions={configurationOptions}
+                    refreshKey={refreshKey}
+                    expandTreeByDefault={productSpecific}
+                    onDrop={handleDrop}
+                    onUpdate={onUpdate}
+                    onDelete={onDelete}
+                    openDrawer={openDrawer}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+          {productSpecific && <InventoryPalette parts={parts} openDrawer={openDrawer} />}
+        </div>
+      )}
+      {subTab === "tree" && (
+        <DatabaseTreeView
+          parts={parts}
+          productView={productView}
+          childIdSet={childIdSet}
+          refreshKey={refreshKey}
+          openDrawer={openDrawer}
+          standards={standards}
+          supplierOptions={supplierOptions}
+          productOptions={productList.products}
+          configurationOptions={configurationOptions}
+          onAddStandard={onAddStandard}
+          onPartCreated={onPartCreated}
+          onChildLinked={() => {
+            setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+// V118 — dedicated Tree view inside the Database tab. Shows every
+// master-parent assembly (or the chosen product's masters) as a
+// rooted card with its full BOM tree expanded inline. Each card has
+// a + button that opens AddNodeModal, where the user can spin up a
+// brand-new Hardware or Part/Assembly code and have it auto-linked
+// as a child of the parent. All form interaction happens inside the
+// modal — the user never leaves the Tree tab.
+function DatabaseTreeView({
+  parts,
+  productView,
+  childIdSet,
+  refreshKey,
+  openDrawer,
+  standards,
+  supplierOptions,
+  productOptions,
+  configurationOptions,
+  onAddStandard,
+  onPartCreated,
+  onChildLinked,
+}: {
+  parts: PartRow[];
+  productView: string;
+  childIdSet: Set<number>;
+  refreshKey: number;
+  openDrawer: (id: number) => void;
+  standards: StandardRow[];
+  supplierOptions: SupplierOption[];
+  productOptions: string[];
+  configurationOptions: ConfigurationOption[];
+  onAddStandard: (s: StandardRow) => void;
+  onPartCreated: (p: PartRow) => void;
+  onChildLinked: () => void;
+}) {
+  // The Tree view shows roots — items that aren't a child of any
+  // other item in assembly_bom. When the user has narrowed to a
+  // specific product we also restrict the master set to that product.
+  const roots = useMemo(() => {
+    return parts.filter((p) => {
+      if (p.inventoryItemId == null) return false;
+      if (childIdSet.has(p.inventoryItemId)) return false;
+      if (productView === "__all__") return true;
+      if (productView === "__none__") return p.products.length === 0;
+      return p.products.includes(productView);
+    });
+  }, [parts, productView, childIdSet]);
+
+  const [addingUnderItemId, setAddingUnderItemId] = useState<number | null>(
+    null,
+  );
+
+  if (roots.length === 0) {
+    return (
+      <div
+        style={{
+          padding: "32px 18px",
+          borderRadius: 12,
+          border: "1px dashed var(--lb-border)",
+          textAlign: "center",
+          color: "var(--lb-text-3)",
+          fontSize: 13,
+        }}
+      >
+        No master codes match the current product filter. Create one
+        on the Hardware or Part/Assembly generator tab — or pick
+        another product above.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 20,
+      }}
+    >
+      {roots.map((p) => (
+        <DatabaseTreeRoot
+          key={p.id}
+          rootPart={p}
+          refreshKey={refreshKey}
+          openDrawer={openDrawer}
+          onAdd={(inventoryItemId) => setAddingUnderItemId(inventoryItemId)}
+        />
+      ))}
+      {addingUnderItemId != null && (
+        <AddNodeModal
+          parentInventoryItemId={addingUnderItemId}
+          standards={standards}
+          supplierOptions={supplierOptions}
+          productOptions={productOptions}
+          configurationOptions={configurationOptions}
+          onAddStandard={onAddStandard}
+          onPartCreated={onPartCreated}
+          onLinked={() => {
+            setAddingUnderItemId(null);
+            onChildLinked();
+          }}
+          onClose={() => setAddingUnderItemId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Single root inside the Tree view. Pulls its own AssemblyTree on
+// mount and re-renders when the parent bumps refreshKey (e.g. after
+// a successful add).
+function DatabaseTreeRoot({
+  rootPart,
+  refreshKey,
+  openDrawer,
+  onAdd,
+}: {
+  rootPart: PartRow;
+  refreshKey: number;
+  openDrawer: (id: number) => void;
+  onAdd: (parentInventoryItemId: number) => void;
+}) {
+  const [tree, setTree] = useState<AssemblyTreeNode | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (rootPart.inventoryItemId == null) return;
+    let cancelled = false;
+    getAssemblyTree({ inventoryItemId: rootPart.inventoryItemId })
+      .then((t) => {
+        if (!cancelled) setTree(t);
+      })
+      .catch((e) => {
+        if (!cancelled)
+          setErr(e instanceof Error ? e.message : "Tree load failed");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPart.inventoryItemId, refreshKey]);
+
+  return (
+    <div
+      style={{
+        padding: 16,
+        borderRadius: 12,
+        background: "var(--lb-bg)",
+        border: "1px solid var(--lb-border)",
+      }}
+    >
       <div
         style={{
           display: "flex",
-          flexDirection: "row",
-          gap: 14,
-          alignItems: "flex-start",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          marginBottom: 10,
         }}
       >
-        <div style={{ flex: 1, minWidth: 0 }}>
-      {filtered.length === 0 ? (
-        <div
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <code
+            style={{
+              fontSize: 12.5,
+              fontWeight: 800,
+              wordBreak: "break-all",
+              color: "var(--lb-text)",
+            }}
+          >
+            {rootPart.fullCode}
+          </code>
+          {rootPart.products.map((label) => (
+            <span
+              key={label}
+              style={{
+                padding: "1px 8px",
+                borderRadius: 999,
+                background:
+                  "color-mix(in srgb, var(--lb-accent) 14%, transparent)",
+                color: "var(--lb-accent)",
+                fontSize: 10.5,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                textTransform: "uppercase",
+              }}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+        {rootPart.inventoryItemId != null && (
+          <button
+            type="button"
+            onClick={() => onAdd(rootPart.inventoryItemId!)}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 999,
+              border: "1px solid var(--lb-accent)",
+              background: "transparent",
+              color: "var(--lb-accent)",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+            title="Generate a new Hardware or Part/Assembly code and link it as a child of this card"
+          >
+            + Add child
+          </button>
+        )}
+      </div>
+      {err && <ErrorBox message={err} />}
+      {tree && rootPart.inventoryItemId != null && (
+        <AssemblyTree
+          rootTree={tree}
+          rootInventoryItemId={rootPart.inventoryItemId}
+          openDrawer={openDrawer}
+          onMutated={() => {
+            if (rootPart.inventoryItemId == null) return;
+            getAssemblyTree({
+              inventoryItemId: rootPart.inventoryItemId,
+            }).then((t) => setTree(t));
+          }}
+          onAddChild={onAdd}
+        />
+      )}
+      {!tree && !err && (
+        <div style={{ fontSize: 12, color: "var(--lb-text-3)" }}>
+          Loading tree…
+        </div>
+      )}
+    </div>
+  );
+}
+
+// V118 — modal that lets the user create a brand-new code (Hardware
+// or Part/Assembly) and auto-link it as a child of an existing
+// assembly. Step 1 is a Hardware/Part choice; step 2 renders the
+// matching generator INSIDE the modal so the user never leaves the
+// Tree tab. The generator's onSaved is wrapped to call
+// addAssemblyChildAction with the new inventoryItemId before closing.
+function AddNodeModal({
+  parentInventoryItemId,
+  standards,
+  supplierOptions,
+  productOptions,
+  configurationOptions,
+  onAddStandard,
+  onPartCreated,
+  onLinked,
+  onClose,
+}: {
+  parentInventoryItemId: number;
+  standards: StandardRow[];
+  supplierOptions: SupplierOption[];
+  productOptions: string[];
+  configurationOptions: ConfigurationOption[];
+  onAddStandard: (s: StandardRow) => void;
+  onPartCreated: (p: PartRow) => void;
+  onLinked: () => void;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<"choose" | "hardware" | "part">("choose");
+  const [linking, setLinking] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function handleSaved(p: PartRow) {
+    onPartCreated(p);
+    if (p.inventoryItemId == null) {
+      onClose();
+      return;
+    }
+    setLinking(true);
+    setErr(null);
+    try {
+      await addAssemblyChildAction({
+        parentInventoryItemId,
+        childInventoryItemId: p.inventoryItemId,
+        quantity: 1,
+      });
+      onLinked();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Link to parent failed");
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.4)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(900px, 100%)",
+          maxHeight: "92vh",
+          overflowY: "auto",
+          background: "var(--lb-bg)",
+          border: "1px solid var(--lb-border)",
+          borderRadius: 16,
+          padding: 22,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        <header
           style={{
-            padding: "24px 18px",
-            borderRadius: 10,
-            border: "1px dashed var(--lb-border)",
-            textAlign: "center",
-            color: "var(--lb-text-3)",
-            fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
           }}
         >
-          Nothing matches.
-        </div>
-      ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-          {filtered.map((p) => (
-            <PartRowItem
-              key={p.id}
-              part={p}
-              supplierOptions={supplierOptions}
-              productOptions={productList.products}
-              configurationOptions={configurationOptions}
-              refreshKey={refreshKey}
-              expandTreeByDefault={productSpecific}
-              onDrop={handleDrop}
-              onUpdate={onUpdate}
-              onDelete={onDelete}
-              openDrawer={openDrawer}
-            />
-          ))}
-        </ul>
-      )}
-        </div>
-        {productSpecific && <InventoryPalette parts={parts} openDrawer={openDrawer} />}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>
+              {mode === "choose"
+                ? "Add a child code"
+                : mode === "hardware"
+                  ? "Add Hardware"
+                  : "Add Part / Assembly"}
+            </h2>
+            <p style={{ margin: 0, fontSize: 11.5, color: "var(--lb-text-3)" }}>
+              The new code will be auto-linked as a child of this
+              assembly.
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {mode !== "choose" && (
+              <button
+                type="button"
+                onClick={() => setMode("choose")}
+                style={{
+                  padding: "5px 10px",
+                  borderRadius: 999,
+                  border: "1px solid var(--lb-border)",
+                  background: "transparent",
+                  color: "var(--lb-text-2)",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                ← Back
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              style={{
+                background: "transparent",
+                border: "none",
+                fontSize: 22,
+                color: "var(--lb-text-3)",
+                cursor: "pointer",
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
+          </div>
+        </header>
+        {err && (
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              background: "rgba(220,38,38,0.12)",
+              color: "#fca5a5",
+              fontSize: 12.5,
+            }}
+          >
+            {err}
+          </div>
+        )}
+        {linking && (
+          <div
+            style={{
+              padding: 8,
+              borderRadius: 8,
+              background: "color-mix(in srgb, var(--lb-accent) 12%, transparent)",
+              color: "var(--lb-accent)",
+              fontSize: 12.5,
+            }}
+          >
+            Linking as a child of the parent assembly…
+          </div>
+        )}
+        {mode === "choose" && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setMode("hardware")}
+              style={{
+                padding: 20,
+                borderRadius: 14,
+                border: "2px solid var(--lb-border)",
+                background: "var(--lb-bg-elev)",
+                color: "var(--lb-text)",
+                textAlign: "left",
+                cursor: "pointer",
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              }}
+            >
+              <span style={{ fontSize: 24 }}>🛠</span>
+              <span style={{ fontSize: 14, fontWeight: 800 }}>
+                Hardware Generator
+              </span>
+              <span style={{ fontSize: 12, color: "var(--lb-text-3)", lineHeight: 1.5 }}>
+                Standard hardware (screws, washers, cable glands…) —
+                follows a OneDrive standard template.
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("part")}
+              style={{
+                padding: 20,
+                borderRadius: 14,
+                border: "2px solid var(--lb-border)",
+                background: "var(--lb-bg-elev)",
+                color: "var(--lb-text)",
+                textAlign: "left",
+                cursor: "pointer",
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              }}
+            >
+              <span style={{ fontSize: 24 }}>🧩</span>
+              <span style={{ fontSize: 14, fontWeight: 800 }}>
+                Part / Assembly Generator
+              </span>
+              <span style={{ fontSize: 12, color: "var(--lb-text-3)", lineHeight: 1.5 }}>
+                Allocates a fresh unique ID for a fabricated part,
+                configuration, or sub-assembly.
+              </span>
+            </button>
+          </div>
+        )}
+        {mode === "hardware" && (
+          <HardwareTab
+            standards={standards}
+            productOptions={productOptions}
+            configurationOptions={configurationOptions}
+            onAddStandard={onAddStandard}
+            onSaved={handleSaved}
+          />
+        )}
+        {mode === "part" && (
+          <PartIdTab
+            supplierOptions={supplierOptions}
+            productOptions={productOptions}
+            configurationOptions={configurationOptions}
+            onSaved={handleSaved}
+          />
+        )}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -2903,11 +3449,16 @@ function AssemblyTree({
   rootInventoryItemId,
   openDrawer,
   onMutated,
+  onAddChild,
 }: {
   rootTree: AssemblyTreeNode;
   rootInventoryItemId: number;
   openDrawer: (id: number) => void;
   onMutated: () => void;
+  // Optional — when present each tree card surfaces a "+" button
+  // that calls back with its inventoryItemId so the parent can open
+  // an "Add child" generator modal.
+  onAddChild?: (parentInventoryItemId: number) => void;
 }) {
   async function dropOn(targetItemId: number, droppedItemIds: number[]) {
     try {
@@ -3011,6 +3562,7 @@ function AssemblyTree({
             openDrawer={openDrawer}
             onDropOn={dropOn}
             onRemove={removeEdge}
+            onAddChild={onAddChild}
           />
         </div>
       </div>
@@ -3031,6 +3583,7 @@ function TreeNodeCard({
   openDrawer,
   onDropOn,
   onRemove,
+  onAddChild,
 }: {
   node: AssemblyTreeNode;
   parentInventoryItemId: number | null;
@@ -3038,6 +3591,7 @@ function TreeNodeCard({
   openDrawer: (id: number) => void;
   onDropOn: (targetItemId: number, droppedItemIds: number[]) => void;
   onRemove: (parentItemId: number, childItemId: number) => void;
+  onAddChild?: (parentInventoryItemId: number) => void;
 }) {
   const isAssembly = node.kind === "assembly";
   const [dragOver, setDragOver] = useState(false);
@@ -3347,29 +3901,60 @@ function TreeNodeCard({
             Drop here
           </span>
         )}
-        {!root && parentInventoryItemId != null && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (!confirm(`Remove ${node.code} from this assembly?`)) return;
-              onRemove(parentInventoryItemId, node.itemId);
-            }}
-            draggable={false}
-            style={{
-              alignSelf: "flex-end",
-              fontSize: 10,
-              color: "#dc2626",
-              background: "transparent",
-              border: "1px solid rgba(239,68,68,0.3)",
-              borderRadius: 999,
-              padding: "1px 8px",
-              cursor: "pointer",
-            }}
-          >
-            Remove
-          </button>
-        )}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 4,
+            marginTop: 2,
+          }}
+        >
+          {onAddChild && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddChild(node.itemId);
+              }}
+              draggable={false}
+              title="Generate and link a new child code"
+              style={{
+                fontSize: 10,
+                color: "var(--lb-accent)",
+                background: "transparent",
+                border: "1px solid var(--lb-accent)",
+                borderRadius: 999,
+                padding: "1px 8px",
+                cursor: "pointer",
+                fontWeight: 700,
+              }}
+            >
+              + Child
+            </button>
+          )}
+          {!root && parentInventoryItemId != null && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!confirm(`Remove ${node.code} from this assembly?`)) return;
+                onRemove(parentInventoryItemId, node.itemId);
+              }}
+              draggable={false}
+              style={{
+                fontSize: 10,
+                color: "#dc2626",
+                background: "transparent",
+                border: "1px solid rgba(239,68,68,0.3)",
+                borderRadius: 999,
+                padding: "1px 8px",
+                cursor: "pointer",
+              }}
+            >
+              Remove
+            </button>
+          )}
+        </div>
       </div>
 
       {node.children.length > 0 && (
@@ -3384,6 +3969,7 @@ function TreeNodeCard({
                 openDrawer={openDrawer}
                 onDropOn={onDropOn}
                 onRemove={onRemove}
+                onAddChild={onAddChild}
               />
             </div>
           ))}
