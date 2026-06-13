@@ -708,7 +708,7 @@ function ProductTreeView({
             they&apos;ll show up here.
           </Empty>
         ) : (
-          <PanZoomViewport label={`${product} tree`}>
+          <PanZoomViewport>
             <div
               style={{
                 padding: "12px 16px 16px",

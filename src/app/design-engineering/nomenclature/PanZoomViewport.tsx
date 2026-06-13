@@ -47,6 +47,15 @@ export default function PanZoomViewport({
   const [tx, setTx] = useState(0);
   const [ty, setTy] = useState(0);
   const [panning, setPanning] = useState(false);
+  // V129 — mirror state into a ref so synchronous handlers (wheel,
+  // mousemove) read the freshest values without React's batched
+  // setState window getting in the way. Without this the zoom-to-
+  // cursor math drifted diagonally because the wheel handler read
+  // stale tx/ty during back-to-back wheel events.
+  const stateRef = useRef({ scale, tx, ty });
+  useEffect(() => {
+    stateRef.current = { scale, tx, ty };
+  }, [scale, tx, ty]);
   // Track pan start in refs (not state) so the move handler reads
   // synchronously without stale closures.
   const panStartRef = useRef<{
@@ -65,18 +74,24 @@ export default function PanZoomViewport({
     if (!inner) return;
     const prevTransform = ct.style.transform;
     ct.style.transform = "";
-    const innerRect = inner.getBoundingClientRect();
+    // V129 — `scrollWidth` / `scrollHeight` include children that
+    // overflow `overflow-x: auto` wrappers, so a wide BOM that would
+    // be cut off in a getBoundingClientRect measurement is correctly
+    // accounted for here.
+    const w = Math.max(inner.scrollWidth, inner.offsetWidth);
+    const h = Math.max(inner.scrollHeight, inner.offsetHeight);
     ct.style.transform = prevTransform;
     const vpRect = vp.getBoundingClientRect();
-    if (innerRect.width === 0 || innerRect.height === 0) return;
-    const margin = 48;
-    const sx = (vpRect.width - margin) / innerRect.width;
-    const sy = (vpRect.height - margin) / innerRect.height;
+    if (w === 0 || h === 0) return;
+    const margin = 32;
+    const sx = (vpRect.width - margin) / w;
+    const sy = (vpRect.height - margin) / h;
     const next = Math.min(initialMaxScale, Math.min(sx, sy));
     const clamped = Math.max(minScale, Math.min(maxScale, next));
+    const cx = (vpRect.width - w * clamped) / 2;
+    const cy = (vpRect.height - h * clamped) / 2;
+    stateRef.current = { scale: clamped, tx: cx, ty: cy };
     setScale(clamped);
-    const cx = (vpRect.width - innerRect.width * clamped) / 2;
-    const cy = (vpRect.height - innerRect.height * clamped) / 2;
     setTx(cx);
     setTy(cy);
   }, [initialMaxScale, minScale, maxScale]);
@@ -122,17 +137,21 @@ export default function PanZoomViewport({
       // Trackpad pinch: deltaY is small (~5). Mouse wheel: ~100.
       // Same exponential mapping keeps both feeling natural.
       const factor = Math.exp(-e.deltaY * 0.0025);
-      setScale((prevScale) => {
-        const nextScale = Math.max(
-          minScale,
-          Math.min(maxScale, prevScale * factor),
-        );
-        const actual = nextScale / prevScale;
-        if (actual === 1) return prevScale;
-        setTx((prevTx) => mx - (mx - prevTx) * actual);
-        setTy((prevTy) => my - (my - prevTy) * actual);
-        return nextScale;
-      });
+      // V129 — read current transform from the ref so we get the
+      // freshest values regardless of where we are in React's batch.
+      const { scale: ps, tx: ptx, ty: pty } = stateRef.current;
+      const nextScale = Math.max(
+        minScale,
+        Math.min(maxScale, ps * factor),
+      );
+      const actual = nextScale / ps;
+      if (actual === 1) return;
+      const ntx = mx - (mx - ptx) * actual;
+      const nty = my - (my - pty) * actual;
+      stateRef.current = { scale: nextScale, tx: ntx, ty: nty };
+      setScale(nextScale);
+      setTx(ntx);
+      setTy(nty);
     }
     vp.addEventListener("wheel", handle, { passive: false });
     return () => vp.removeEventListener("wheel", handle);
@@ -186,15 +205,19 @@ export default function PanZoomViewport({
     const rect = vp.getBoundingClientRect();
     const mx = rect.width / 2;
     const my = rect.height / 2;
+    const { scale: ps, tx: ptx, ty: pty } = stateRef.current;
     const nextScale = Math.max(
       minScale,
-      Math.min(maxScale, scale * factor),
+      Math.min(maxScale, ps * factor),
     );
-    const actual = nextScale / scale;
+    const actual = nextScale / ps;
     if (actual === 1) return;
+    const ntx = mx - (mx - ptx) * actual;
+    const nty = my - (my - pty) * actual;
+    stateRef.current = { scale: nextScale, tx: ntx, ty: nty };
     setScale(nextScale);
-    setTx(mx - (mx - tx) * actual);
-    setTy(my - (my - ty) * actual);
+    setTx(ntx);
+    setTy(nty);
   }
 
   return (
@@ -228,10 +251,9 @@ export default function PanZoomViewport({
             left: 0,
             transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
             transformOrigin: "0 0",
-            // No transition while actively panning so the cursor stays
-            // pinned to the content; a soft transition when buttons
-            // drive the change so toolbar clicks feel polished.
-            transition: panning ? "none" : "transform 120ms ease",
+            // V129 — no transform transition. The transition was making
+            // wheel zoom feel laggy and was creating diagonal-looking
+            // motion when zooming + translating at the same time.
             willChange: "transform",
           }}
         >

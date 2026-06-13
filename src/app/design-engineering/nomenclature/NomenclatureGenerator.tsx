@@ -2444,7 +2444,7 @@ function DatabaseTreeRoot({
       </div>
       {err && <ErrorBox message={err} />}
       {tree && rootPart.inventoryItemId != null && (
-        <PanZoomViewport label={rootPart.fullCode}>
+        <PanZoomViewport>
           <AssemblyTree
             rootTree={tree}
             rootInventoryItemId={rootPart.inventoryItemId}
@@ -2456,6 +2456,7 @@ function DatabaseTreeRoot({
               }).then((t) => setTree(t));
             }}
             onAddChild={onAdd}
+            embedded
           />
         </PanZoomViewport>
       )}
@@ -3538,6 +3539,7 @@ function AssemblyTree({
   openDrawer,
   onMutated,
   onAddChild,
+  embedded = false,
 }: {
   rootTree: AssemblyTreeNode;
   rootInventoryItemId: number;
@@ -3547,6 +3549,11 @@ function AssemblyTree({
   // that calls back with its inventoryItemId so the parent can open
   // an "Add child" generator modal.
   onAddChild?: (parentInventoryItemId: number) => void;
+  // V129 — when rendered inside the PanZoomViewport for the Database
+  // Tree sub-tab we drop the overflow-x scroll wrapper (the viewport
+  // handles panning) and hide the AddChildRow footer (a + button on
+  // each card already covers adding children).
+  embedded?: boolean;
 }) {
   async function dropOn(targetItemId: number, droppedItemIds: number[]) {
     try {
@@ -3634,15 +3641,14 @@ function AssemblyTree({
         }
       `}</style>
 
-      {/* Horizontal scroll wrapper so a wide tree doesn't blow out
-          the column width. */}
-      <div
-        style={{
-          overflowX: "auto",
-          padding: "8px 4px 12px",
-        }}
-      >
-        <div className="lb-tree" style={{ minWidth: "fit-content" }}>
+      {embedded ? (
+        <div
+          className="lb-tree"
+          style={{
+            minWidth: "fit-content",
+            padding: "8px 16px 16px",
+          }}
+        >
           <TreeNodeCard
             node={rootTree}
             parentInventoryItemId={null}
@@ -3653,13 +3659,36 @@ function AssemblyTree({
             onAddChild={onAddChild}
           />
         </div>
-      </div>
+      ) : (
+        <>
+          {/* Horizontal scroll wrapper so a wide tree doesn't blow
+              out the column width. */}
+          <div
+            style={{
+              overflowX: "auto",
+              padding: "8px 4px 12px",
+            }}
+          >
+            <div className="lb-tree" style={{ minWidth: "fit-content" }}>
+              <TreeNodeCard
+                node={rootTree}
+                parentInventoryItemId={null}
+                root
+                openDrawer={openDrawer}
+                onDropOn={dropOn}
+                onRemove={removeEdge}
+                onAddChild={onAddChild}
+              />
+            </div>
+          </div>
 
-      <AddChildRow
-        parentInventoryItemId={rootInventoryItemId}
-        directChildren={rootTree.children}
-        onAdded={onMutated}
-      />
+          <AddChildRow
+            parentInventoryItemId={rootInventoryItemId}
+            directChildren={rootTree.children}
+            onAdded={onMutated}
+          />
+        </>
+      )}
     </div>
   );
 }
