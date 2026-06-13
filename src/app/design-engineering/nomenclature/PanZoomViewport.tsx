@@ -91,6 +91,7 @@ export default function PanZoomViewport({
     const cx = (vpRect.width - w * clamped) / 2;
     const cy = (vpRect.height - h * clamped) / 2;
     stateRef.current = { scale: clamped, tx: cx, ty: cy };
+    ct.style.transform = `translate3d(${cx}px, ${cy}px, 0) scale(${clamped})`;
     setScale(clamped);
     setTx(cx);
     setTy(cy);
@@ -120,41 +121,77 @@ export default function PanZoomViewport({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // V128 — native wheel listener so we can call preventDefault().
-  // React's onWheel adds the listener as passive, which means
-  // preventDefault is a no-op and the page would scroll out from
-  // under the user while they try to zoom the tree.
+  // V130 — apply the transform to the content DOM directly inside
+  // the wheel handler, then queue a React state update via rAF for
+  // the toolbar percentage. Going through React state alone created
+  // a tiny lag where the cursor's content-anchor could drift on
+  // rapid wheel events; writing `style.transform` synchronously
+  // pins the cursor to its content point on every wheel tick.
+  const rafRef = useRef<number | null>(null);
+  function commitToReact() {
+    if (rafRef.current != null) return;
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      setScale(stateRef.current.scale);
+      setTx(stateRef.current.tx);
+      setTy(stateRef.current.ty);
+    });
+  }
+
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) return;
     function handle(e: WheelEvent) {
+      // Native listener so preventDefault actually works — React's
+      // synthetic onWheel is passive by default.
       e.preventDefault();
       const v = viewportRef.current;
-      if (!v) return;
+      const ct = contentRef.current;
+      if (!v || !ct) return;
+
+      // 1. Cursor position in viewport-space (NOT page-space).
       const rect = v.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
-      // Trackpad pinch: deltaY is small (~5). Mouse wheel: ~100.
-      // Same exponential mapping keeps both feeling natural.
-      const factor = Math.exp(-e.deltaY * 0.0025);
-      // V129 — read current transform from the ref so we get the
-      // freshest values regardless of where we are in React's batch.
+
+      // 2. Wheel → multiplicative zoom factor. Same curve for
+      //    mouse wheel (large deltaY) and trackpad pinch
+      //    (ctrlKey + small deltaY).
+      // Convert line / page deltas to pixel-equivalents.
+      const deltaY =
+        e.deltaMode === 1 ? e.deltaY * 16
+        : e.deltaMode === 2 ? e.deltaY * 100
+        : e.deltaY;
+      const factor = Math.exp(-deltaY * 0.0025);
+
+      // 3. Compute next scale, clamped.
       const { scale: ps, tx: ptx, ty: pty } = stateRef.current;
       const nextScale = Math.max(
         minScale,
         Math.min(maxScale, ps * factor),
       );
-      const actual = nextScale / ps;
-      if (actual === 1) return;
-      const ntx = mx - (mx - ptx) * actual;
-      const nty = my - (my - pty) * actual;
+      if (nextScale === ps) return;
+
+      // 4. Cursor's content-space point (the literal pixel of the
+      //    rendered tree the cursor is over right now).
+      const contentX = (mx - ptx) / ps;
+      const contentY = (my - pty) / ps;
+
+      // 5. New translation so that the same content point lands at
+      //    the same viewport coords after the scale change.
+      const ntx = mx - contentX * nextScale;
+      const nty = my - contentY * nextScale;
+
+      // 6. Commit to ref + DOM SYNCHRONOUSLY for sub-frame accuracy,
+      //    then schedule a React state update so the toolbar % stays
+      //    in sync.
       stateRef.current = { scale: nextScale, tx: ntx, ty: nty };
-      setScale(nextScale);
-      setTx(ntx);
-      setTy(nty);
+      ct.style.transform = `translate3d(${ntx}px, ${nty}px, 0) scale(${nextScale})`;
+      commitToReact();
     }
     vp.addEventListener("wheel", handle, { passive: false });
     return () => vp.removeEventListener("wheel", handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minScale, maxScale]);
 
   function isInteractiveTarget(el: EventTarget | null): boolean {
@@ -176,7 +213,8 @@ export default function PanZoomViewport({
   );
 
   // Mouse move + up live on window so the user can drag past the
-  // viewport bounds without losing focus.
+  // viewport bounds without losing focus. Same direct-DOM pattern as
+  // wheel zoom so panning feels instant even on slow frames.
   useEffect(() => {
     if (!panning) return;
     function onMove(e: MouseEvent) {
@@ -184,8 +222,14 @@ export default function PanZoomViewport({
       if (!start) return;
       const dx = e.clientX - start.sx;
       const dy = e.clientY - start.sy;
-      setTx(start.tx0 + dx);
-      setTy(start.ty0 + dy);
+      const ntx = start.tx0 + dx;
+      const nty = start.ty0 + dy;
+      stateRef.current = { ...stateRef.current, tx: ntx, ty: nty };
+      const ct = contentRef.current;
+      if (ct) {
+        ct.style.transform = `translate3d(${ntx}px, ${nty}px, 0) scale(${stateRef.current.scale})`;
+      }
+      commitToReact();
     }
     function onUp() {
       setPanning(false);
@@ -197,11 +241,13 @@ export default function PanZoomViewport({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panning]);
 
   function zoomBy(factor: number) {
     const vp = viewportRef.current;
-    if (!vp) return;
+    const ct = contentRef.current;
+    if (!vp || !ct) return;
     const rect = vp.getBoundingClientRect();
     const mx = rect.width / 2;
     const my = rect.height / 2;
@@ -210,11 +256,13 @@ export default function PanZoomViewport({
       minScale,
       Math.min(maxScale, ps * factor),
     );
-    const actual = nextScale / ps;
-    if (actual === 1) return;
-    const ntx = mx - (mx - ptx) * actual;
-    const nty = my - (my - pty) * actual;
+    if (nextScale === ps) return;
+    const contentX = (mx - ptx) / ps;
+    const contentY = (my - pty) / ps;
+    const ntx = mx - contentX * nextScale;
+    const nty = my - contentY * nextScale;
     stateRef.current = { scale: nextScale, tx: ntx, ty: nty };
+    ct.style.transform = `translate3d(${ntx}px, ${nty}px, 0) scale(${nextScale})`;
     setScale(nextScale);
     setTx(ntx);
     setTy(nty);
@@ -249,7 +297,7 @@ export default function PanZoomViewport({
             position: "absolute",
             top: 0,
             left: 0,
-            transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
+            transform: `translate3d(${tx}px, ${ty}px, 0) scale(${scale})`,
             transformOrigin: "0 0",
             // V129 — no transform transition. The transition was making
             // wheel zoom feel laggy and was creating diagonal-looking
