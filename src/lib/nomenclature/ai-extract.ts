@@ -105,6 +105,12 @@ export type AiExtractResult = {
   // image", "page didn't list pitch — assumed 0.8"). Shown verbatim
   // beneath the result.
   notes: string | null;
+  // V126 — when the product introduces a TYPE / MATERIAU / etc. that
+  // wasn't in the standard yet, Claude proposes additional lines to
+  // append to the relevant section so future extractions have the
+  // new abbreviation. Empty when no extension was needed. Each entry
+  // is rendered as "{section}\n{line}" and merged into spec_text.
+  specExtensions: Array<{ section: string; lines: string[] }>;
   rawModelOutput: string;
 };
 
@@ -166,7 +172,9 @@ export async function suggestTemplateFromUrl(args: {
   const res = await client.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: 1200,
-    temperature: 0.2,
+    // V126 — temperature is deprecated on Opus 4.7+; passing it
+    // returns a 400 invalid_request_error. The new models default
+    // to a low temperature internally which is fine for our use.
     system,
     messages: [{ role: "user", content: user }],
   });
@@ -210,7 +218,8 @@ export async function extractHardwareFromUrl(args: {
 
   const system = [
     "You are extracting a hardware nomenclature code from a product page.",
-    "Follow the family's nomenclature standard EXACTLY — use only the abbreviations listed.",
+    "Follow the family's nomenclature standard. Prefer the abbreviations already listed in the standard.",
+    "If the product has a TYPE / HEAD / DRIVE / MATERIAL / etc. that is NOT in the standard, INVENT a sensible short uppercase abbreviation following the convention of the existing entries (typically 2-4 letters) AND list the new line in specExtensions so we can append it to the standard for future use.",
     "Substitute / with _ and . with , in dimensions (matching the standard's convention).",
     "Return ONLY a JSON object. No markdown fences. No prose outside the JSON.",
   ].join(" ");
@@ -233,14 +242,20 @@ export async function extractHardwareFromUrl(args: {
     "Return JSON shaped:",
     `{"nomenclature": "<the assembled code, NO leading class prefix, NO unique id>",`,
     ` "name": "<human-readable product name from the page, or null>",`,
-    ` "notes": "<short caveats if anything had to be guessed, or null>"}`,
+    ` "notes": "<short caveats if anything had to be guessed, or null>",`,
+    ` "specExtensions": [`,
+    `   {"section": "<header name from the standard, e.g. TYPE or MATERIAUX>",`,
+    `    "lines": ["<readable label> : <ABBR>"] }`,
+    ` ]}`,
+    "",
+    "Leave specExtensions as [] when every abbreviation you used already appears in the standard.",
   ].join("\n");
 
   const client = claudeClient();
   const res = await client.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: 800,
-    temperature: 0,
+    max_tokens: 1200,
+    // V126 — temperature is deprecated on Opus 4.7+.
     system,
     messages: [{ role: "user", content: user }],
   });
@@ -258,6 +273,7 @@ export async function extractHardwareFromUrl(args: {
     nomenclature?: string;
     name?: string | null;
     notes?: string | null;
+    specExtensions?: Array<{ section?: string; lines?: string[] }>;
   };
   let parsed: Parsed;
   try {
@@ -272,10 +288,26 @@ export async function extractHardwareFromUrl(args: {
       `Claude returned no "nomenclature" field. Got: ${text.slice(0, 200)}`,
     );
   }
+  const specExtensions: AiExtractResult["specExtensions"] = [];
+  if (Array.isArray(parsed.specExtensions)) {
+    for (const ext of parsed.specExtensions) {
+      const section = typeof ext.section === "string" ? ext.section.trim() : "";
+      const lines = Array.isArray(ext.lines)
+        ? ext.lines
+            .filter((l): l is string => typeof l === "string")
+            .map((l) => l.trim())
+            .filter(Boolean)
+        : [];
+      if (section && lines.length > 0) {
+        specExtensions.push({ section, lines });
+      }
+    }
+  }
   return {
     nomenclature: parsed.nomenclature.trim(),
     name: parsed.name?.trim() ?? null,
     notes: parsed.notes?.trim() ?? null,
+    specExtensions,
     rawModelOutput: text,
   };
 }

@@ -928,6 +928,12 @@ export async function extractHardwareFromUrlAction(input: {
   nomenclature: string;
   name: string | null;
   notes: string | null;
+  // V126 — when Claude needed new TYPE/MATERIAU/etc. abbreviations
+  // not in the standard, the proposed section additions are merged
+  // into spec_text and the fresh text is returned so the UI can show
+  // it immediately.
+  updatedSpecText: string | null;
+  appendedExtensions: Array<{ section: string; lines: string[] }>;
 }> {
   const profile = await getOrCreateProfile();
   if (!profile) throw new Error("Sign in required");
@@ -948,10 +954,150 @@ export async function extractHardwareFromUrlAction(input: {
     specText: std.specText,
     familyName: std.name,
   });
+
+  // Apply spec extensions, if any.
+  let updatedSpecText: string | null = null;
+  const appendedExtensions: Array<{ section: string; lines: string[] }> = [];
+  if (result.specExtensions.length > 0) {
+    let next = std.specText;
+    for (const ext of result.specExtensions) {
+      const { changed, text, addedLines } = appendSectionLines(
+        next,
+        ext.section,
+        ext.lines,
+      );
+      if (changed) {
+        next = text;
+        if (addedLines.length > 0) {
+          appendedExtensions.push({ section: ext.section, lines: addedLines });
+        }
+      }
+    }
+    if (next !== std.specText) {
+      await db
+        .update(nomenclatureStandards)
+        .set({ specText: next, updatedAt: new Date() })
+        .where(eq(nomenclatureStandards.id, std.id));
+      updatedSpecText = next;
+    }
+  }
+
   return {
     nomenclature: result.nomenclature,
     name: result.name,
     notes: result.notes,
+    updatedSpecText,
+    appendedExtensions,
+  };
+}
+
+// V126 — append one or more lines under a named section header in a
+// spec_text. The section is matched case-insensitively. New section
+// is created at the bottom if missing. Returns the new text + the
+// subset of lines that were actually appended (skipping any that
+// already existed in the section, case-insensitively).
+function appendSectionLines(
+  spec: string,
+  section: string,
+  lines: string[],
+): { changed: boolean; text: string; addedLines: string[] } {
+  const sectionUpper = section.trim().toUpperCase();
+  if (!sectionUpper || lines.length === 0) {
+    return { changed: false, text: spec, addedLines: [] };
+  }
+  const specLines = spec.split(/\r?\n/);
+  // Find the section header line. Tolerate trailing colon.
+  let headerIdx = -1;
+  for (let i = 0; i < specLines.length; i++) {
+    if (
+      new RegExp(
+        `^\\s*${sectionUpper.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*:?\\s*$`,
+        "i",
+      ).test(specLines[i])
+    ) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) {
+    // Append section at the bottom.
+    const cleanLines = lines.map((l) => l.trim()).filter(Boolean);
+    if (cleanLines.length === 0) {
+      return { changed: false, text: spec, addedLines: [] };
+    }
+    const trimmedEnd = spec.replace(/\s+$/, "");
+    const fresh = `${trimmedEnd}\n\n${sectionUpper}:\n${cleanLines.join("\n")}\n`;
+    return { changed: true, text: fresh, addedLines: cleanLines };
+  }
+  // Section exists — find the end of it (next blank line OR EOF).
+  let endIdx = specLines.length;
+  for (let i = headerIdx + 1; i < specLines.length; i++) {
+    if (specLines[i].trim() === "" && i > headerIdx + 1) {
+      endIdx = i;
+      break;
+    }
+  }
+  const within = specLines.slice(headerIdx + 1, endIdx);
+  const existingLower = new Set(
+    within.map((l) => l.trim().toLowerCase()).filter(Boolean),
+  );
+  const additions: string[] = [];
+  for (const raw of lines) {
+    const candidate = raw.trim();
+    if (!candidate) continue;
+    if (existingLower.has(candidate.toLowerCase())) continue;
+    additions.push(candidate);
+    existingLower.add(candidate.toLowerCase());
+  }
+  if (additions.length === 0) {
+    return { changed: false, text: spec, addedLines: [] };
+  }
+  const head = specLines.slice(0, endIdx);
+  const tail = specLines.slice(endIdx);
+  return {
+    changed: true,
+    text: [...head, ...additions, ...tail].join("\n"),
+    addedLines: additions,
+  };
+}
+
+// V126 — return a single standard's spec_text as plain text so the
+// UI can save it to a .txt file. Matches the OneDrive folder
+// convention: NOMENCLATURE_<slug>.txt with the spec body inside.
+export async function getStandardForExportAction(input: {
+  standardId: number;
+}): Promise<{
+  filename: string;
+  text: string;
+}> {
+  const profile = await getOrCreateProfile();
+  if (!profile) throw new Error("Sign in required");
+  await ensureNomenclatureSchema();
+  const [std] = await db
+    .select({
+      slug: nomenclatureStandards.slug,
+      template: nomenclatureStandards.template,
+      specText: nomenclatureStandards.specText,
+    })
+    .from(nomenclatureStandards)
+    .where(eq(nomenclatureStandards.id, input.standardId))
+    .limit(1);
+  if (!std) throw new Error("Standard not found");
+  // The OneDrive convention is: first line = template, then a blank
+  // line, then the body. The body in spec_text typically already
+  // includes the template, but for older imports we play it safe and
+  // re-prepend it if the body doesn't start with the template.
+  const body = std.specText.trim();
+  const startsWithTemplate = body
+    .split(/\r?\n/)[0]
+    ?.trim()
+    .toUpperCase()
+    .startsWith(std.template.trim().toUpperCase());
+  const text = startsWithTemplate ? body : `${std.template.trim()}\n\n${body}`;
+  const slug = std.slug.replace(/[^a-z0-9-]/gi, "_").toUpperCase();
+  return {
+    filename: `NOMENCLATURE_${slug}.txt`,
+    text: text + (text.endsWith("\n") ? "" : "\n"),
   };
 }
 

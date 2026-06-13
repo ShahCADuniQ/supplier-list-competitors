@@ -25,6 +25,7 @@ import {
   addUserStandard,
   backfillPartCodesAction,
   deletePart,
+  getStandardForExportAction,
   removeProductOptionAction,
   extractHardwareFromUrlAction,
   getAssemblyTree,
@@ -642,7 +643,28 @@ function HardwareForm({
         });
         setNomenclature(r.nomenclature.toUpperCase());
         if (r.name && !name) setName(r.name);
-        setAiNotes(r.notes ?? null);
+        // V126 — bubble the extension summary into the notes panel
+        // so the user knows new abbreviations were added to the
+        // standard. Format: "Notes. Added to standard: TYPE: HEX,
+        // MATERIAUX: TI".
+        const extSummary = r.appendedExtensions
+          .map(
+            (ext) => `${ext.section}: ${ext.lines.join(" + ")}`,
+          )
+          .join(" · ");
+        if (extSummary) {
+          setAiNotes(
+            (r.notes ? r.notes + "\n\n" : "") +
+              `Added to standard → ${extSummary}`,
+          );
+        } else {
+          setAiNotes(r.notes ?? null);
+        }
+        // Push the freshly extended spec_text back to the top so the
+        // Show-standard disclosure reflects it instantly.
+        if (r.updatedSpecText && onStandardUpdated) {
+          onStandardUpdated(standard.id, r.updatedSpecText);
+        }
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Extraction failed");
       }
@@ -720,9 +742,51 @@ function HardwareForm({
             fontSize: 12,
             fontWeight: 700,
             color: "var(--lb-text-2)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            listStyle: "none",
           }}
         >
-          Show the {standard.name} standard
+          <span>Show the {standard.name} standard</span>
+          <button
+            type="button"
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              try {
+                const r = await getStandardForExportAction({
+                  standardId: standard.id,
+                });
+                const blob = new Blob([r.text], { type: "text/plain;charset=utf-8" });
+                const a = document.createElement("a");
+                const objectUrl = URL.createObjectURL(blob);
+                a.href = objectUrl;
+                a.download = r.filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(objectUrl);
+              } catch (err) {
+                alert(err instanceof Error ? err.message : "Export failed");
+              }
+            }}
+            style={{
+              padding: "3px 10px",
+              borderRadius: 999,
+              border: "1px solid var(--lb-border)",
+              background: "var(--lb-bg-elev)",
+              color: "var(--lb-text-2)",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+            title="Download this standard as a .txt file (mirrors the OneDrive NOMENCLATURE_<slug>.txt format)"
+          >
+            ⬇ Download .txt
+          </button>
         </summary>
         <pre
           style={{
