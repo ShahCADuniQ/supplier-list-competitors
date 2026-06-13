@@ -641,7 +641,12 @@ function HardwareForm({
           standardId: standard.id,
           url,
         });
-        setNomenclature(r.nomenclature.toUpperCase());
+        // V127 — guard against the new "empty nomenclature" soft-fail
+        // path. We still surface the AI notes so the user knows what
+        // went wrong; only overwrite the input when we got something.
+        if (r.nomenclature) {
+          setNomenclature(r.nomenclature.toUpperCase());
+        }
         if (r.name && !name) setName(r.name);
         // V126 — bubble the extension summary into the notes panel
         // so the user knows new abbreviations were added to the

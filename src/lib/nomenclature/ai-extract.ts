@@ -10,6 +10,7 @@
 // to the model.
 
 import { claudeClient, CLAUDE_MODEL } from "@/lib/ai/claude";
+import { hasPerplexityKey, perplexityChat } from "@/lib/ai/perplexity";
 
 const URL_FETCH_TIMEOUT_MS = 15_000;
 const MAX_BODY_CHARS = 60_000;
@@ -208,20 +209,163 @@ export async function suggestTemplateFromUrl(args: {
   };
 }
 
+// V127 — heuristic: does the directly-fetched page text actually contain
+// product specifications, or is it just chrome / navigation? Used to
+// decide whether to escalate to Perplexity research. Picks up the typical
+// vocabulary in McMaster, Fastenal, DigiKey, Mouser, Amazon, etc. — and
+// catches the McMaster-SPA case where the page is almost entirely nav.
+function looksLikeProductPage(text: string, familyName: string): boolean {
+  const cleaned = (text ?? "").trim();
+  if (cleaned.length < 1500) return false;
+  const lower = cleaned.toLowerCase();
+  // Negative signal: McMaster-Carr's SPA shell with no product data.
+  if (
+    lower.includes("mcmaster-carr") &&
+    lower.length < 6000 &&
+    !lower.includes("specification")
+  ) {
+    return false;
+  }
+  // Positive signal: at least three product-spec markers anywhere in
+  // the body. Tuned for hardware vocabularies.
+  const markers = [
+    "specification",
+    "material",
+    "thread",
+    "diameter",
+    "length",
+    "psi",
+    "n/m",
+    "grade",
+    "pitch",
+    "torque",
+    "hex",
+    "drive",
+    "head",
+    "tensile",
+    "stainless",
+    "carbon steel",
+    "metric",
+    "imperial",
+    "wood screw",
+    "machine screw",
+    "phillips",
+    "torx",
+    familyName.toLowerCase(),
+  ];
+  let hits = 0;
+  for (const m of markers) {
+    if (m && lower.includes(m)) hits++;
+    if (hits >= 3) return true;
+  }
+  return false;
+}
+
+// V127 — when the direct page fetch returns navigation chrome, hand the
+// URL off to Perplexity. Sonar has web access + can index McMaster /
+// Fastenal / DigiKey product pages even when our server-side fetch
+// cannot. We ask for raw spec text (no formatting) so the downstream
+// Claude extractor can apply the same template logic.
+async function researchProductViaPerplexity(args: {
+  url: string;
+  familyName: string;
+  template: string;
+}): Promise<{ text: string; citations: string[] }> {
+  const system = [
+    "You are a hardware-catalogue research assistant.",
+    "Look up the product URL and return the full set of mechanical / electrical specifications a buyer would need.",
+    "Be exhaustive on dimensions, thread spec, head type, drive style, material, finish, length, diameter, pitch, grade — every attribute that would normally appear in a hardware nomenclature.",
+    "Plain text only — no markdown, no lists, just a dense block of facts.",
+  ].join(" ");
+  const user = [
+    `Hardware family: ${args.familyName}`,
+    `Target template the buyer follows: ${args.template}`,
+    `Product URL: ${args.url}`,
+    "",
+    "Return every spec you can verify from this page (or its closely linked spec sheet).",
+    "Include the manufacturer / vendor product code if visible.",
+    "If the product is a multipack or assortment, list all SKUs in the pack.",
+  ].join("\n");
+  const r = await perplexityChat<string>({
+    systemPrompt: system,
+    userPrompt: user,
+    maxTokens: 1200,
+  });
+  return {
+    text: typeof r.content === "string" ? r.content : String(r.content),
+    citations: r.citations,
+  };
+}
+
 export async function extractHardwareFromUrl(args: {
   url: string;
   template: string;
   specText: string;
   familyName: string;
 }): Promise<AiExtractResult> {
-  const pageText = await fetchPlainText(args.url);
+  // V127 — tiered extraction. Cost order: free direct fetch → paid
+  // Perplexity ONLY when needed → single Claude call to synthesise.
+  // The user gave a clear "never fail" mandate, so we always end up
+  // calling Claude even when we have to work from sparse data.
+  let directPageText = "";
+  let directFetchError: string | null = null;
+  try {
+    directPageText = await fetchPlainText(args.url);
+  } catch (e) {
+    directFetchError = e instanceof Error ? e.message : String(e);
+  }
+
+  let perplexityText = "";
+  let perplexityCitations: string[] = [];
+  const directIsUseful = looksLikeProductPage(directPageText, args.familyName);
+  if (!directIsUseful) {
+    if (hasPerplexityKey()) {
+      try {
+        const r = await researchProductViaPerplexity({
+          url: args.url,
+          familyName: args.familyName,
+          template: args.template,
+        });
+        perplexityText = r.text;
+        perplexityCitations = r.citations;
+      } catch (e) {
+        console.warn("[nomenclature] Perplexity research failed:", e);
+      }
+    }
+  }
+
+  if (!directPageText.trim() && !perplexityText.trim()) {
+    throw new Error(
+      `Could not retrieve any product data for ${args.url}. ` +
+        (directFetchError
+          ? `Direct fetch error: ${directFetchError}. `
+          : "") +
+        "Add PERPLEXITY_API_KEY to .env, or paste the nomenclature manually.",
+    );
+  }
+
+  const contextBlocks: string[] = [];
+  if (directPageText.trim()) {
+    contextBlocks.push(`=== DIRECT PAGE FETCH (truncated) ===\n${directPageText}`);
+  }
+  if (perplexityText.trim()) {
+    contextBlocks.push(`=== PERPLEXITY WEB RESEARCH ===\n${perplexityText}`);
+  }
+  if (perplexityCitations.length > 0) {
+    contextBlocks.push(
+      `Sources from research: ${perplexityCitations.slice(0, 6).join(" · ")}`,
+    );
+  }
+  const combinedContext = contextBlocks.join("\n\n");
 
   const system = [
-    "You are extracting a hardware nomenclature code from a product page.",
+    "You are extracting a hardware nomenclature code from one or more research sources.",
     "Follow the family's nomenclature standard. Prefer the abbreviations already listed in the standard.",
     "If the product has a TYPE / HEAD / DRIVE / MATERIAL / etc. that is NOT in the standard, INVENT a sensible short uppercase abbreviation following the convention of the existing entries (typically 2-4 letters) AND list the new line in specExtensions so we can append it to the standard for future use.",
     "Substitute / with _ and . with , in dimensions (matching the standard's convention).",
+    "When the direct page fetch returned chrome only, rely on the Perplexity research block.",
     "Return ONLY a JSON object. No markdown fences. No prose outside the JSON.",
+    "If the sources are truly inadequate, still return your best guess and explain the gaps in notes — do not refuse.",
   ].join(" ");
 
   const user = [
@@ -236,8 +380,8 @@ export async function extractHardwareFromUrl(args: {
     "PRODUCT URL:",
     args.url,
     "",
-    "PAGE TEXT (truncated):",
-    pageText,
+    "RESEARCH SOURCES:",
+    combinedContext,
     "",
     "Return JSON shaped:",
     `{"nomenclature": "<the assembled code, NO leading class prefix, NO unique id>",`,
@@ -279,14 +423,34 @@ export async function extractHardwareFromUrl(args: {
   try {
     parsed = JSON.parse(cleaned) as Parsed;
   } catch {
-    throw new Error(
-      `Claude returned non-JSON output. First 200 chars: ${text.slice(0, 200)}`,
-    );
+    // V127 — instead of throwing, return a best-effort empty result
+    // so the user can still see the model's notes (the model's
+    // refusal message often tells them WHY) and fill the
+    // nomenclature in manually. Matches the "never fail" mandate.
+    return {
+      nomenclature: "",
+      name: null,
+      notes:
+        "AI returned non-JSON. " +
+        text.slice(0, 400) +
+        " — please fill the nomenclature manually.",
+      specExtensions: [],
+      rawModelOutput: text,
+    };
   }
   if (!parsed.nomenclature || typeof parsed.nomenclature !== "string") {
-    throw new Error(
-      `Claude returned no "nomenclature" field. Got: ${text.slice(0, 200)}`,
-    );
+    // V127 — same softening: we already have a model response; return
+    // whatever name + notes it gave and let the user fill in the
+    // code rather than blocking them with an error.
+    return {
+      nomenclature: "",
+      name: parsed.name?.trim() ?? null,
+      notes:
+        (parsed.notes?.trim() ?? "") ||
+        "AI couldn't determine a nomenclature from this page. Fill it in manually.",
+      specExtensions: [],
+      rawModelOutput: text,
+    };
   }
   const specExtensions: AiExtractResult["specExtensions"] = [];
   if (Array.isArray(parsed.specExtensions)) {
