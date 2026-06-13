@@ -20,6 +20,7 @@ import {
   type ProductTreeNode,
 } from "@/app/design-engineering/nomenclature/actions";
 import InventoryDrawer from "@/app/design-engineering/nomenclature/InventoryDrawer";
+import PanZoomViewport from "@/app/design-engineering/nomenclature/PanZoomViewport";
 
 // V106 — five catalogue classes that drive the Inventory tab pills.
 // Plus a Tree pseudo-tab that appears only when a specific product
@@ -707,24 +708,26 @@ function ProductTreeView({
             they&apos;ll show up here.
           </Empty>
         ) : (
-          <div
-            style={{
-              overflowX: "auto",
-              padding: "8px 4px 12px",
-            }}
-          >
-            <div className="lb-inv-roots" style={{ minWidth: "fit-content" }}>
-              {tree.map((root) => (
-                <div key={root.inventoryItemId} className="lb-inv-tree">
-                  <ProductTreeNodeCard
-                    node={root}
-                    root
-                    onOpenItem={onOpenItem}
-                  />
-                </div>
-              ))}
+          <PanZoomViewport label={`${product} tree`}>
+            <div
+              style={{
+                padding: "12px 16px 16px",
+                display: "inline-block",
+              }}
+            >
+              <div className="lb-inv-roots" style={{ minWidth: "fit-content" }}>
+                {tree.map((root) => (
+                  <div key={root.inventoryItemId} className="lb-inv-tree">
+                    <ProductTreeNodeCard
+                      node={root}
+                      root
+                      onOpenItem={onOpenItem}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          </PanZoomViewport>
         )}
       </div>
     </section>

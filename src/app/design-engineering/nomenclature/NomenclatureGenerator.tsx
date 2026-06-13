@@ -19,6 +19,7 @@ import {
   useTransition,
 } from "react";
 import InventoryDrawer from "./InventoryDrawer";
+import PanZoomViewport from "./PanZoomViewport";
 import {
   addAssemblyChildAction,
   addProductOptionAction,
@@ -2443,18 +2444,20 @@ function DatabaseTreeRoot({
       </div>
       {err && <ErrorBox message={err} />}
       {tree && rootPart.inventoryItemId != null && (
-        <AssemblyTree
-          rootTree={tree}
-          rootInventoryItemId={rootPart.inventoryItemId}
-          openDrawer={openDrawer}
-          onMutated={() => {
-            if (rootPart.inventoryItemId == null) return;
-            getAssemblyTree({
-              inventoryItemId: rootPart.inventoryItemId,
-            }).then((t) => setTree(t));
-          }}
-          onAddChild={onAdd}
-        />
+        <PanZoomViewport label={rootPart.fullCode}>
+          <AssemblyTree
+            rootTree={tree}
+            rootInventoryItemId={rootPart.inventoryItemId}
+            openDrawer={openDrawer}
+            onMutated={() => {
+              if (rootPart.inventoryItemId == null) return;
+              getAssemblyTree({
+                inventoryItemId: rootPart.inventoryItemId,
+              }).then((t) => setTree(t));
+            }}
+            onAddChild={onAdd}
+          />
+        </PanZoomViewport>
       )}
       {!tree && !err && (
         <div style={{ fontSize: 12, color: "var(--lb-text-3)" }}>
